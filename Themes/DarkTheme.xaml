@@ -6,7 +6,7 @@
     <SolidColorBrush x:Key="ForegroundBrush" Color="#8C8F94"/>
     <SolidColorBrush x:Key="PrimaryTextBrush" Color="#FFFFFF"/>
     <SolidColorBrush x:Key="SecondaryBrush" Color="#2C3338"/>
-    <SolidColorBrush x:Key="TertiaryBrush" Color="#646970"/>
+    <SolidColorBrush x:Key="TertiaryBrush" Color="#A7AAAD"/>
     <SolidColorBrush x:Key="AccentBrush" Color="#84A4F0"/>
     <SolidColorBrush x:Key="SecondaryAccentBrush" Color="#50575E"/>
     <SolidColorBrush x:Key="HighlightBrush" Color="#663361CC"/>

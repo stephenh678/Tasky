@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using TodoApp.Models;
 
 namespace TodoApp.Services;
@@ -9,6 +11,7 @@ namespace TodoApp.Services;
 public class TodoStore
 {
     private const int MaxBackups = 10;
+    private readonly SemaphoreSlim _saveLock = new(1, 1);
 
     public static string GetDefaultDataFilePath()
     {
@@ -46,17 +49,47 @@ public class TodoStore
         return state;
     }
 
-    public void Save(AppState state, string path)
+    // Kept for the handful of callers that need the write to have landed before they continue
+    // (e.g. the one-time migration inside Load, or the dialog-gated New/Save As commands) - blocks
+    // on the async path below rather than duplicating the logic. Critically, this runs SaveAsync
+    // via Task.Run rather than awaiting it directly: called from the UI thread, a bare
+    // `SaveAsync(...).GetAwaiter().GetResult()` deadlocks - SaveAsync's internal awaits (real async
+    // file IO) capture the UI thread's DispatcherSynchronizationContext to resume on, but that
+    // thread is the one blocked here waiting for them, so the continuation can never run. Task.Run
+    // moves the whole async chain onto a thread-pool thread first, where there's no captured UI
+    // context to deadlock against.
+    public void Save(AppState state, string path) => Task.Run(() => SaveAsync(state, path)).GetAwaiter().GetResult();
+
+    // Writes to a temp file and atomically swaps it into place (File.Replace/Move) instead of
+    // overwriting the live file directly, so a crash or an OneDrive-sync file lock mid-write can't
+    // leave a half-written data file behind. Runs off the UI thread and serializes concurrent
+    // callers (nearly every task edit triggers a save) so two saves can't race over the same temp
+    // file.
+    public async Task SaveAsync(AppState state, string path)
     {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+        await _saveLock.WaitAsync();
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
 
-        if (File.Exists(path))
-            BackupExistingFile(path);
+            if (File.Exists(path))
+                await Task.Run(() => BackupExistingFile(path));
 
-        var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(path, json);
+            var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+            var tempPath = path + ".tmp";
+            await File.WriteAllTextAsync(tempPath, json);
+
+            if (File.Exists(path))
+                File.Replace(tempPath, path, null);
+            else
+                File.Move(tempPath, path);
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
     }
 
     // Lists the rolling backups for a data file, newest first, with a task count read from

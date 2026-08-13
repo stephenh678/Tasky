@@ -52,7 +52,20 @@ public static class ThemeService
 
     private static void SetImmersiveDarkMode(Window window)
     {
-        var hwnd = new WindowInteropHelper(window).Handle;
+        IntPtr hwnd;
+        try
+        {
+            // WindowInteropHelper.Handle calls EnsureHandle() internally, which throws
+            // InvalidOperationException if the window is already in the middle of closing by the
+            // time this runs (e.g. a deferred SourceInitialized callback firing just as a
+            // short-lived window like Quick Add is closing again almost immediately).
+            hwnd = new WindowInteropHelper(window).Handle;
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+
         if (hwnd == IntPtr.Zero) return;
         var value = IsDark ? 1 : 0;
         try { DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref value, sizeof(int)); }

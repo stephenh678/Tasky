@@ -8,6 +8,8 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
+using TodoApp.Behaviors;
 using TodoApp.Models;
 using TodoApp.Services;
 using TodoApp.ViewModels;
@@ -30,6 +32,8 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private RichTextBox? _activeEditor;
     private HwndSource? _hwndSource;
+    private bool _readyToClose;
+    private bool _flushInProgress;
 
     public MainWindow()
     {
@@ -72,6 +76,30 @@ public partial class MainWindow : Window
                 ThemeService.ApplyTitleBar(this);
         };
 
+        // The formatting toolbar only does anything while a text block's RichTextBox has focus -
+        // switching tasks entirely (not just losing focus within the same task) is a backstop
+        // reset in case the old RichTextBox left the visual tree without firing LostFocus.
+        _viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(MainViewModel.SelectedTaskDetail)) return;
+            _activeEditor = null;
+            FormattingGroup.IsEnabled = false;
+        };
+
+        // BlockItemsControl is a single, stable element in MainWindow's own template (only its
+        // DataContext changes as the selected task changes) - wire it up once here. The move
+        // callback reads SelectedTaskDetail fresh each time it actually fires, so it always
+        // targets whichever task is open at that moment.
+        new ReorderDragDropHelper(BlockItemsControl, (oldIndex, newIndex) =>
+        {
+            if (_viewModel.SelectedTaskDetail is not { } detail) return;
+            detail.Task.Body.Move(oldIndex, newIndex);
+            // Body_CollectionChanged only re-attaches property handlers on Add, it never saves by
+            // itself (every other mutation calls this explicitly right after changing the
+            // collection) - a Move needs the same nudge or the reorder would never hit disk.
+            detail.NotifyChanged();
+        });
+
         _viewModel.Tray.NewTaskRequested += () => Dispatcher.Invoke(ShowQuickAdd);
         _viewModel.Tray.ShowRequested += () => Dispatcher.Invoke(() =>
         {
@@ -81,12 +109,46 @@ public partial class MainWindow : Window
         });
         _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(Close);
 
-        Closing += (_, _) =>
+        // Autosave now writes off the UI thread (see MainViewModel.Save), so a plain synchronous
+        // flush here could let the process exit before the last edit actually lands on disk.
+        // Cancel the close and do the async work first - but crash logs from live testing showed
+        // that calling THIS SAME window's Close() again afterward still throws
+        // InvalidOperationException ("...while a Window is closing"), even on a single, non-
+        // reentrant close request: apparently Window.Close() -> a canceled Closing -> Close()
+        // again on the identical Window instance isn't reliably safe in this runtime - WPF still
+        // considers it "closing" from the first attempt. Hiding the window and calling
+        // Application.Current.Shutdown() instead sidesteps that entirely: Shutdown() closes each
+        // open window itself as part of tearing down, so MainWindow's Closing fires once more from
+        // a fresh, non-canceled request - _readyToClose just lets that final one through instead
+        // of calling Close() a second time ourselves.
+        Closing += async (_, e) =>
         {
-            _viewModel.FlushPendingSave();
-            var bounds = WindowState == WindowState.Maximized ? RestoreBounds : new Rect(Left, Top, Width, Height);
-            _viewModel.SaveWindowState(bounds.Left, bounds.Top, bounds.Width, bounds.Height, WindowState == WindowState.Maximized);
+            if (_readyToClose) return;
+            e.Cancel = true;
+            if (_flushInProgress) return;
+            _flushInProgress = true;
+
+            var wasMaximized = WindowState == WindowState.Maximized;
+            var bounds = wasMaximized ? RestoreBounds : new Rect(Left, Top, Width, Height);
+            Hide();
+
+            // If the flush itself throws (e.g. a locked file mid-shutdown), everything below MUST
+            // still run - otherwise _readyToClose never gets set, the window is already hidden,
+            // and every future close attempt just re-cancels forever: an invisible, unkillable
+            // process. Closing with a possibly-unsaved last edit beats that outcome.
+            try
+            {
+                await _viewModel.FlushPendingSaveAsync();
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex);
+            }
+
+            _viewModel.SaveWindowState(bounds.Left, bounds.Top, bounds.Width, bounds.Height, wasMaximized);
             _viewModel.Shutdown();
+            _readyToClose = true;
+            Application.Current.Shutdown();
         };
     }
 
@@ -149,6 +211,8 @@ public partial class MainWindow : Window
 
     private void Body_Drop(object sender, DragEventArgs e)
     {
+        DropOverlay.Visibility = Visibility.Collapsed;
+
         if (_viewModel.SelectedTaskDetail is not { } detail) return;
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths) return;
@@ -159,6 +223,28 @@ public partial class MainWindow : Window
 
         if (images.Count > 0) detail.AddPhotosFromPaths(images);
         if (files.Count > 0) detail.AddFilesFromPaths(files);
+    }
+
+    private void Body_DragEnter(object sender, DragEventArgs e)
+    {
+        DropOverlay.Visibility = e.Data.GetDataPresent(DataFormats.FileDrop) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void Body_DragLeave(object sender, DragEventArgs e) => DropOverlay.Visibility = Visibility.Collapsed;
+
+    // The checklist item list lives inside ChecklistBlockTemplate, so unlike BlockItemsControl
+    // there's a fresh ItemsControl instance per checklist block, not one stable named element -
+    // wire each one up as it loads. Tag doubles as an "already wired" marker so Loaded firing more
+    // than once for the same instance (e.g. if it's ever removed and re-added to the visual tree)
+    // can't attach the drag handlers twice.
+    private void ChecklistItemsControl_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ItemsControl { Tag: null } ic) return;
+        ic.Tag = new ReorderDragDropHelper(ic, (oldIndex, newIndex) =>
+        {
+            if (ic.DataContext is not NoteBlock block) return;
+            block.ChecklistItems.Move(oldIndex, newIndex);
+        });
     }
 
     private void TaskListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -243,10 +329,53 @@ public partial class MainWindow : Window
         new PhotoViewerWindow(block.PhotoPath) { Owner = this }.Show();
     }
 
+    // Same spell-suggestion-merge approach as RichTextBox_ContextMenuOpening below, adapted for
+    // plain TextBox's character-index-based API instead of RichTextBox's TextPointer-based one.
+    private void TextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+        var index = tb.GetCharacterIndexFromPoint(e.GetPosition(tb), true);
+        if (index >= 0) tb.CaretIndex = index;
+    }
+
+    private void TextBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not TextBox tb || tb.ContextMenu is not { } menu) return;
+
+        for (var i = menu.Items.Count - 1; i >= 0; i--)
+        {
+            if (menu.Items[i] is FrameworkElement { Tag: "SpellSuggestion" })
+                menu.Items.RemoveAt(i);
+        }
+
+        var error = tb.GetSpellingError(tb.CaretIndex);
+        if (error is null) return;
+
+        var index = 0;
+        foreach (var suggestion in error.Suggestions)
+        {
+            menu.Items.Insert(index++, new MenuItem
+            {
+                Header = suggestion,
+                FontWeight = FontWeights.Bold,
+                Tag = "SpellSuggestion",
+                Command = EditingCommands.CorrectSpellingError,
+                CommandParameter = suggestion,
+                CommandTarget = tb
+            });
+        }
+
+        if (index == 0)
+            menu.Items.Insert(index++, new MenuItem { Header = "No spelling suggestions", IsEnabled = false, Tag = "SpellSuggestion" });
+
+        menu.Items.Insert(index, new Separator { Tag = "SpellSuggestion" });
+    }
+
     private void RichTextBox_GotFocus(object sender, RoutedEventArgs e)
     {
         if (sender is not RichTextBox rtb) return;
         _activeEditor = rtb;
+        FormattingGroup.IsEnabled = true;
         UpdateFormatButtonStates();
     }
 
@@ -255,6 +384,63 @@ public partial class MainWindow : Window
         if (sender is not RichTextBox rtb) return;
         _activeEditor = rtb;
         UpdateFormatButtonStates();
+    }
+
+    // Fires when focus leaves this RichTextBox for ANY reason, including moving to another
+    // RichTextBox - defer the check a tick so the new focus target has actually been set before
+    // deciding whether to disable the group.
+    private void RichTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (Keyboard.FocusedElement is RichTextBox) return;
+            _activeEditor = null;
+            FormattingGroup.IsEnabled = false;
+        }), DispatcherPriority.Background);
+    }
+
+    private void RichTextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not RichTextBox rtb) return;
+        var position = rtb.GetPositionFromPoint(e.GetPosition(rtb), true);
+        if (position is not null) rtb.CaretPosition = position;
+    }
+
+    // The formatting ContextMenu (Bold/Italic/Font Size/.../Numbered List) replaces WPF's
+    // automatic spelling-suggestions menu entirely - setting any custom ContextMenu suppresses the
+    // built-in one. Merge suggestions back in manually whenever the right-click lands on a
+    // misspelled word (PreviewMouseRightButtonDown above moves the caret there first).
+    private void RichTextBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not RichTextBox rtb || rtb.ContextMenu is not { } menu) return;
+
+        for (var i = menu.Items.Count - 1; i >= 0; i--)
+        {
+            if (menu.Items[i] is FrameworkElement { Tag: "SpellSuggestion" })
+                menu.Items.RemoveAt(i);
+        }
+
+        var error = rtb.GetSpellingError(rtb.CaretPosition);
+        if (error is null) return;
+
+        var index = 0;
+        foreach (var suggestion in error.Suggestions)
+        {
+            menu.Items.Insert(index++, new MenuItem
+            {
+                Header = suggestion,
+                FontWeight = FontWeights.Bold,
+                Tag = "SpellSuggestion",
+                Command = EditingCommands.CorrectSpellingError,
+                CommandParameter = suggestion,
+                CommandTarget = rtb
+            });
+        }
+
+        if (index == 0)
+            menu.Items.Insert(index++, new MenuItem { Header = "No spelling suggestions", IsEnabled = false, Tag = "SpellSuggestion" });
+
+        menu.Items.Insert(index, new Separator { Tag = "SpellSuggestion" });
     }
 
     private void UpdateFormatButtonStates()

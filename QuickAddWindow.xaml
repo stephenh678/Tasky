@@ -16,7 +16,22 @@
                  Foreground="{DynamicResource PrimaryTextBrush}"
                  Background="{DynamicResource BackgroundBrush}"
                  BorderBrush="{DynamicResource SecondaryBrush}"
-                 KeyDown="TitleBox_KeyDown"/>
+                 SpellCheck.IsEnabled="True"
+                 KeyDown="TitleBox_KeyDown"
+                 PreviewMouseRightButtonDown="TitleBox_PreviewMouseRightButtonDown"
+                 ContextMenuOpening="TitleBox_ContextMenuOpening">
+            <!-- No custom ContextMenu here would fall back to WPF's own auto-generated
+                 Cut/Copy/Paste(/spelling) menu, which - like every other native WPF chrome piece
+                 in this app - doesn't pick up the dark theme and renders as an unthemed white box.
+                 Spelling suggestions are merged in via ContextMenuOpening below. -->
+            <TextBox.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Cu_t" Command="Cut"/>
+                    <MenuItem Header="_Copy" Command="Copy"/>
+                    <MenuItem Header="_Paste" Command="Paste"/>
+                </ContextMenu>
+            </TextBox.ContextMenu>
+        </TextBox>
         <TextBlock Grid.Row="1" Text="Enter to save · Esc to cancel" FontSize="10.5"
                    Foreground="{DynamicResource TertiaryBrush}" Margin="0,6,0,0"/>
     </Grid>

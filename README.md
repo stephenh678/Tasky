@@ -82,7 +82,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 The result lands in `publish\`. Despite `PublishSingleFile`, WPF's native rendering libraries
 (`D3DCompiler_47_cor3.dll`, `wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `PenImc_cor3.dll`,
-`vcruntime140_cor3.dll`) can't be embedded and are published alongside `TodoApp.exe` as separate
+`vcruntime140_cor3.dll`) can't be embedded and are published alongside `Tasky.exe` as separate
 files — **the whole `publish\` folder is the deliverable, not the exe by itself.** Zip the folder
 if you're distributing it; the exe won't launch on its own without those DLLs next to it.
 
@@ -104,3 +104,8 @@ folder; attachments live in an `Attachments` folder the same way.
 | `Ctrl+Shift+S` | Save data file as |
 | `F11` | Toggle Focus Mode |
 | `Ctrl+Alt+T` | Global quick-add (works even when Tasky isn't focused) |
+| `Ctrl+Shift+T` | Add text block to the selected task |
+| `Ctrl+Shift+P` | Add photo block to the selected task |
+| `Ctrl+Shift+L` | Add link block to the selected task |
+| `Ctrl+Shift+F` | Add file block to the selected task |
+| `Ctrl+Shift+C` | Add checklist block to the selected task |

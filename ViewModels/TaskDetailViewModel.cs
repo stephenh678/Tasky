@@ -380,7 +380,10 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
     private void Body_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
+        // Reordering (drag-and-drop) raises this as a Move, not an Add - NewItems is still
+        // populated with the (already-attached) moved item, so this must only re-attach on a
+        // genuine Add or it'd double-subscribe the same block's PropertyChanged handler.
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
             foreach (NoteBlock block in e.NewItems)
                 AttachBlock(block);
 
@@ -403,7 +406,8 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
         block.ChecklistItems.CollectionChanged += (_, e) =>
         {
-            if (e.NewItems is not null)
+            // Same reasoning as Body_CollectionChanged above - only re-attach on a genuine Add.
+            if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
                 foreach (ChecklistItem item in e.NewItems)
                     AttachChecklistItem(item);
             _onChanged();

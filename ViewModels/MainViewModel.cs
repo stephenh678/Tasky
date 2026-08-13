@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Threading;
@@ -46,6 +47,9 @@ public class MainViewModel : INotifyPropertyChanged
     private SortOption _currentSort = SortOption.ModifiedNewest;
     private QuickFilter _currentQuickFilter = QuickFilter.None;
     private bool _isFilterPopupOpen;
+    private string _saveStatusText = string.Empty;
+    private Task _pendingSaveTask = Task.CompletedTask;
+    private int _saveGeneration;
 
     public ObservableCollection<TaskItem> AllTasks { get; } = new();
     public ObservableCollection<SidebarFilterItem> SidebarItems { get; } = new();
@@ -86,6 +90,7 @@ public class MainViewModel : INotifyPropertyChanged
             SelectedTask = null;
             UpdateSelectedTasks(Enumerable.Empty<TaskItem>());
             FilteredTasksView.Refresh();
+            OnPropertyChanged(nameof(EmptyStateMessage));
         }
     }
 
@@ -94,8 +99,9 @@ public class MainViewModel : INotifyPropertyChanged
         get => _searchText;
         set
         {
-            if (SetField(ref _searchText, value))
-                FilteredTasksView.Refresh();
+            if (!SetField(ref _searchText, value)) return;
+            FilteredTasksView.Refresh();
+            OnPropertyChanged(nameof(EmptyStateMessage));
         }
     }
 
@@ -104,8 +110,9 @@ public class MainViewModel : INotifyPropertyChanged
         get => _currentQuickFilter;
         set
         {
-            if (SetField(ref _currentQuickFilter, value))
-                FilteredTasksView.Refresh();
+            if (!SetField(ref _currentQuickFilter, value)) return;
+            FilteredTasksView.Refresh();
+            OnPropertyChanged(nameof(EmptyStateMessage));
         }
     }
 
@@ -114,6 +121,19 @@ public class MainViewModel : INotifyPropertyChanged
         get => _isFilterPopupOpen;
         set => SetField(ref _isFilterPopupOpen, value);
     }
+
+    public string SaveStatusText
+    {
+        get => _saveStatusText;
+        private set => SetField(ref _saveStatusText, value);
+    }
+
+    // A plain computed string rather than a converter, since the message needs to distinguish
+    // "nothing here" from "nothing matches your search/filter" - two different situations that
+    // both boil down to an empty FilteredTasksView.
+    public string EmptyStateMessage => !string.IsNullOrWhiteSpace(SearchText) || CurrentQuickFilter != QuickFilter.None
+        ? "No tasks match your search or filter."
+        : "No tasks here yet.";
 
     public TaskItem? SelectedTask
     {
@@ -411,9 +431,12 @@ public class MainViewModel : INotifyPropertyChanged
             _settingsStore.Save(_settings);
         });
 
-        RestoreBackupCommand = new RelayCommand(_ =>
+        RestoreBackupCommand = new RelayCommand(async _ =>
         {
-            FlushPendingSave();
+            // Unlike the other FlushPendingSave() call sites, this one genuinely needs the disk
+            // write to have landed before RestoreBackup overwrites the file out from under it -
+            // await the real completion instead of just firing it off.
+            await FlushPendingSaveAsync();
             var backups = _store.ListBackups(_currentFilePath);
             if (backups.Count == 0)
             {
@@ -713,6 +736,7 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void RequestDebouncedSave()
     {
+        SaveStatusText = "Saving…";
         _saveDebounceTimer.Stop();
         _saveDebounceTimer.Start();
     }
@@ -724,11 +748,23 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     // Call before anything that would otherwise lose the last few seconds of debounced typing:
-    // switching tasks, switching files, or closing the app.
+    // switching tasks, switching files, or closing the app. This only guarantees the pending edit
+    // has been HANDED OFF to a save (in-memory state is already current the instant CommitSave
+    // runs) - it does not wait for that save to land on disk. That's fine for callers that only
+    // care about in-memory state (e.g. switching the selected task); callers that need the disk
+    // write itself to have finished (restoring a backup, closing the app) should use
+    // FlushPendingSaveAsync instead.
     public void FlushPendingSave()
     {
         if (_saveDebounceTimer.IsEnabled)
             CommitSave();
+    }
+
+    public async Task FlushPendingSaveAsync()
+    {
+        if (_saveDebounceTimer.IsEnabled)
+            CommitSave();
+        await _pendingSaveTask;
     }
 
     public void OnTaskChanged()
@@ -753,7 +789,37 @@ public class MainViewModel : INotifyPropertyChanged
     private IEnumerable<string> GetAllTagNames()
         => AllTasks.SelectMany(t => t.Tags).Distinct(StringComparer.OrdinalIgnoreCase);
 
-    private void Save() => _store.Save(_state, _currentFilePath);
+    // The hot path: nearly every task edit (typing, checking a box, trashing, tagging...) routes
+    // through here via OnTaskChanged. Runs off the UI thread instead of blocking on disk IO -
+    // _pendingSaveTask is tracked so FlushPendingSaveAsync (restoring a backup, closing the app)
+    // can still wait for a real completion when it actually matters.
+    private void Save()
+    {
+        SaveStatusText = "Saving…";
+        var generation = ++_saveGeneration;
+        _pendingSaveTask = SaveAndReportAsync(generation);
+    }
+
+    // generation guards against two problems that come from Save() firing from multiple
+    // overlapping call sites (the debounce timer AND every immediate property change): an older,
+    // slower save finishing after a newer one started must not stamp "Saved" over a still-pending
+    // edit's "Saving…" - and a failure must actually surface instead of leaving the status stuck
+    // on "Saving…" forever with the edit silently unwritten.
+    private async Task SaveAndReportAsync(int generation)
+    {
+        try
+        {
+            await _store.SaveAsync(_state, _currentFilePath);
+            if (generation == _saveGeneration)
+                SaveStatusText = "Saved";
+        }
+        catch (Exception ex)
+        {
+            App.LogException(ex);
+            if (generation == _saveGeneration)
+                SaveStatusText = "Save failed - will retry on next edit";
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

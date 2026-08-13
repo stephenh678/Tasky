@@ -21,6 +21,11 @@
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenFileCommand}"/>
         <KeyBinding Key="S" Modifiers="Control+Shift" Command="{Binding SaveFileAsCommand}"/>
         <KeyBinding Key="Z" Modifiers="Control" Command="{Binding UndoCommand}"/>
+        <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddTextBlockCommand}"/>
+        <KeyBinding Key="P" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddPhotoBlockCommand}"/>
+        <KeyBinding Key="L" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddLinkBlockCommand}"/>
+        <KeyBinding Key="F" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddFileBlockCommand}"/>
+        <KeyBinding Key="C" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddChecklistBlockCommand}"/>
     </Window.InputBindings>
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -42,6 +47,20 @@
         <conv:EmptyStringToVisibilityConverter x:Key="EmptyStringToVis"/>
         <conv:MarkCompletedVisibilityConverter x:Key="MarkCompletedVis"/>
         <conv:InverseBooleanConverter x:Key="InverseBool"/>
+
+        <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
+             auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
+             native WPF chrome in this app, doesn't pick up the app's dark theme on its own and
+             renders as an unthemed white box. Giving each one this explicit menu instead routes
+             it through the same themed MenuItem/ContextMenu styles as everywhere else; spelling
+             suggestions are merged in via TextBox_ContextMenuOpening, same approach as the note
+             editor's RichTextBox. Shared across every plain TextBox in this window (safe - only
+             one can be open at a time), separate from the RichTextBox's own formatting menu. -->
+        <ContextMenu x:Key="TextEditContextMenu">
+            <MenuItem Header="Cu_t" Command="Cut"/>
+            <MenuItem Header="_Copy" Command="Copy"/>
+            <MenuItem Header="_Paste" Command="Paste"/>
+        </ContextMenu>
 
         <DataTemplate x:Key="SidebarItemTemplate">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Background="Transparent"
@@ -95,6 +114,14 @@
         <DataTemplate x:Key="TextBlockTemplate">
             <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="11" Opacity="0.3" Cursor="SizeAll"
+                           VerticalAlignment="Top" Margin="0,10,4,0" ToolTip="Drag to reorder"
+                           Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                <Grid Grid.Column="1">
+                <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
@@ -105,7 +132,11 @@
                                      Foreground="{DynamicResource PrimaryTextBrush}" FontSize="13.5" MinHeight="24"
                                      AcceptsReturn="True" AcceptsTab="True"
                                      GotFocus="RichTextBox_GotFocus"
+                                     LostFocus="RichTextBox_LostFocus"
                                      SelectionChanged="RichTextBox_SelectionChanged"
+                                     PreviewMouseRightButtonDown="RichTextBox_PreviewMouseRightButtonDown"
+                                     ContextMenuOpening="RichTextBox_ContextMenuOpening"
+                                     SpellCheck.IsEnabled="True"
                                      beh:RichTextBoxBehavior.Enable="True">
                             <RichTextBox.ContextMenu>
                                 <ContextMenu>
@@ -178,11 +209,20 @@
                         ToolTip="Remove this text block"
                         Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                         CommandParameter="{Binding}"/>
+                </Grid>
             </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="PhotoBlockTemplate">
-            <Grid Margin="0,4,0,10" HorizontalAlignment="Left">
+            <Grid Margin="0,4,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="11" Opacity="0.3" Cursor="SizeAll"
+                           VerticalAlignment="Top" Margin="0,10,4,0" ToolTip="Drag to reorder"
+                           Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                <Grid Grid.Column="1">
                 <Border Background="{DynamicResource SecondaryHighlightBrush}" CornerRadius="3"
                         MaxWidth="320" MaxHeight="320" ClipToBounds="True">
                     <Image Source="{Binding PhotoPath, Converter={StaticResource PathToImage}}" Stretch="Uniform" Cursor="Hand"
@@ -194,12 +234,21 @@
                         Background="#DD333333" Foreground="White" BorderThickness="0"
                         Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                         CommandParameter="{Binding}"/>
+                </Grid>
             </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="LinkBlockTemplate">
-            <Border Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                    BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,10">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="11" Opacity="0.3" Cursor="SizeAll"
+                           VerticalAlignment="Top" Margin="0,10,4,0" ToolTip="Drag to reorder"
+                           Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                <Border Grid.Column="1" Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                    BorderThickness="1" CornerRadius="3" Padding="8">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -215,7 +264,10 @@
                              Text="{Binding LinkLabel, UpdateSourceTrigger=PropertyChanged}"
                              FontSize="12.5" FontWeight="SemiBold" BorderThickness="0"
                              Foreground="{DynamicResource PrimaryTextBrush}"
-                             Background="Transparent" Margin="0,0,0,2"/>
+                             Background="Transparent" Margin="0,0,0,2"
+                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                             ContextMenuOpening="TextBox_ContextMenuOpening"/>
 
                     <TextBox Grid.Row="1" Grid.Column="0"
                              Text="{Binding Url, UpdateSourceTrigger=PropertyChanged}"
@@ -232,12 +284,21 @@
                             Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
                 </Grid>
-            </Border>
+                </Border>
+            </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="FileBlockTemplate">
-            <Border Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                    BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,10">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="11" Opacity="0.3" Cursor="SizeAll"
+                           VerticalAlignment="Top" Margin="0,10,4,0" ToolTip="Drag to reorder"
+                           Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                <Border Grid.Column="1" Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                    BorderThickness="1" CornerRadius="3" Padding="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -262,12 +323,21 @@
                             Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
                 </Grid>
-            </Border>
+                </Border>
+            </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="ChecklistBlockTemplate">
-            <Border Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                    BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,10">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="11" Opacity="0.3" Cursor="SizeAll"
+                           VerticalAlignment="Top" Margin="0,10,4,0" ToolTip="Drag to reorder"
+                           Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                <Border Grid.Column="1" Background="{DynamicResource SecondaryHighlightBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                    BorderThickness="1" CornerRadius="3" Padding="8">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -283,21 +353,29 @@
                                 CommandParameter="{Binding}"/>
                     </Grid>
 
-                    <ItemsControl ItemsSource="{Binding ChecklistItems}" Margin="0,6,0,0">
+                    <ItemsControl x:Name="ChecklistItemsControl" ItemsSource="{Binding ChecklistItems}" Margin="0,6,0,0"
+                                  Loaded="ChecklistItemsControl_Loaded">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0,2">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <CheckBox Grid.Column="0" VerticalAlignment="Center" IsChecked="{Binding IsChecked}"/>
-                                    <Grid Grid.Column="1" Margin="6,0">
+                                    <TextBlock Grid.Column="0" Text="&#x22EE;&#x22EE;" FontSize="10" Opacity="0.3" Cursor="SizeAll"
+                                               VerticalAlignment="Center" Margin="0,0,4,0" ToolTip="Drag to reorder"
+                                               Foreground="{DynamicResource TertiaryBrush}" beh:DragHandleBehavior.IsHandle="True"/>
+                                    <CheckBox Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding IsChecked}"/>
+                                    <Grid Grid.Column="2" Margin="6,0">
                                         <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
                                                  BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SecondaryBrush}"
                                                  Background="Transparent" FontSize="12.5" Padding="2,3"
-                                                 Foreground="{DynamicResource PrimaryTextBrush}">
+                                                 Foreground="{DynamicResource PrimaryTextBrush}"
+                                                 SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                                                 PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                                                 ContextMenuOpening="TextBox_ContextMenuOpening">
                                             <TextBox.Style>
                                                 <Style TargetType="TextBox">
                                                     <Style.Triggers>
@@ -313,7 +391,7 @@
                                                    Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
                                                    Visibility="{Binding Text, Converter={StaticResource EmptyStringToVis}}"/>
                                     </Grid>
-                                    <Button Grid.Column="2" Content="&#x2715;" ToolTip="Remove item"
+                                    <Button Grid.Column="3" Content="&#x2715;" ToolTip="Remove item"
                                             Width="18" Height="18" FontSize="9" Opacity="0.4"
                                             Style="{StaticResource IconButton}"
                                             Command="{Binding DataContext.RemoveChecklistItemCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
@@ -329,7 +407,8 @@
                             Command="{Binding DataContext.AddChecklistItemCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
                 </StackPanel>
-            </Border>
+                </Border>
+            </Grid>
         </DataTemplate>
 
         <sel:NoteBlockTemplateSelector x:Key="BlockTemplateSelector"
@@ -408,62 +487,92 @@
                 <TextBlock Text="&#x26F6; Focus"/>
             </Button>
             <Separator/>
-            <ComboBox x:Name="FontFamilyCombo" Width="115" SelectedIndex="0"
-                      SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
-                <ComboBoxItem>Segoe UI</ComboBoxItem>
-                <ComboBoxItem>Calibri</ComboBoxItem>
-                <ComboBoxItem>Arial</ComboBoxItem>
-                <ComboBoxItem>Georgia</ComboBoxItem>
-                <ComboBoxItem>Times New Roman</ComboBoxItem>
-                <ComboBoxItem>Consolas</ComboBoxItem>
-            </ComboBox>
-            <ComboBox Width="55" Margin="4,0,0,0" SelectedIndex="2" SelectionChanged="FontSizeCombo_SelectionChanged" ToolTip="Font size">
-                <ComboBoxItem>10</ComboBoxItem>
-                <ComboBoxItem>12</ComboBoxItem>
-                <ComboBoxItem>13.5</ComboBoxItem>
-                <ComboBoxItem>16</ComboBoxItem>
-                <ComboBoxItem>18</ComboBoxItem>
-                <ComboBoxItem>24</ComboBoxItem>
-                <ComboBoxItem>32</ComboBoxItem>
-            </ComboBox>
-            <Separator/>
-            <Button x:Name="BoldButton" Click="Bold_Click" ToolTip="Bold (applies to the last text block you clicked into)" Padding="7,3">
-                <TextBlock Text="B" FontWeight="Bold" FontSize="13"/>
-            </Button>
-            <Button x:Name="ItalicButton" Click="Italic_Click" ToolTip="Italic" Padding="7,3">
-                <TextBlock Text="I" FontStyle="Italic" FontSize="13"/>
-            </Button>
-            <Button x:Name="UnderlineButton" Click="Underline_Click" ToolTip="Underline" Padding="7,3">
-                <TextBlock Text="U" TextDecorations="Underline" FontSize="13"/>
-            </Button>
-            <Separator/>
-            <TextBlock Text="A" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="2,0,3,0"
-                       Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Text color"/>
-            <ComboBox Width="46" SelectedIndex="0" SelectionChanged="TextColorCombo_SelectionChanged" ToolTip="Text color">
-                <ComboBoxItem Tag="#2C3338"><Border Background="#2C3338" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#D63638"><Border Background="#D63638" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#E68A00"><Border Background="#E68A00" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#00A32A"><Border Background="#00A32A" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#3361CC"><Border Background="#3361CC" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#8C4FE0"><Border Background="#8C4FE0" Width="16" Height="16"/></ComboBoxItem>
-            </ComboBox>
-            <TextBlock Text="&#x1F58D;" FontFamily="{StaticResource IconFont}" FontSize="13" VerticalAlignment="Center" Margin="8,0,3,0"
-                       Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Highlight"/>
-            <ComboBox Width="50" SelectedIndex="0" SelectionChanged="HighlightCombo_SelectionChanged" ToolTip="Highlight">
-                <ComboBoxItem Tag="Transparent"><TextBlock Text="None" FontSize="10"/></ComboBoxItem>
-                <ComboBoxItem Tag="#FFF3B0"><Border Background="#FFF3B0" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#C8F0C8"><Border Background="#C8F0C8" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#CEE0FA"><Border Background="#CEE0FA" Width="16" Height="16"/></ComboBoxItem>
-                <ComboBoxItem Tag="#FAD1E0"><Border Background="#FAD1E0" Width="16" Height="16"/></ComboBoxItem>
-            </ComboBox>
-            <Separator/>
-            <TextBlock Text="&#x2261;" FontSize="15" VerticalAlignment="Center" Margin="2,0,3,0"
-                       Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="List style"/>
-            <ComboBox Width="80" SelectedIndex="-1" SelectionChanged="ListStyleCombo_SelectionChanged" ToolTip="List style">
-                <ComboBoxItem Tag="Bullets"><TextBlock Text="&#x2022; Bullets" FontSize="11"/></ComboBoxItem>
-                <ComboBoxItem Tag="Numbering"><TextBlock Text="1. Numbered" FontSize="11"/></ComboBoxItem>
-            </ComboBox>
+            <!-- Only meaningful while a text block's RichTextBox has focus - starts disabled and
+                 is toggled from code-behind (RichTextBox_GotFocus/LostFocus, and reset whenever
+                 the selected task changes) since _activeEditor is code-behind state, not a bound
+                 view-model property.
+
+                 ToolBar normally auto-applies its flat ToolBar.*StyleKey styles to its DIRECT
+                 Items automatically (see ControlStyles.xaml) - but that only walks ToolBar.Items
+                 itself, not descendants nested inside a child panel. Now that this StackPanel is
+                 the direct item instead of these controls, each one needs that style applied
+                 explicitly or it'd silently fall back to the app-wide bordered Button/ComboBox
+                 style instead of the flat toolbar look. -->
+            <StackPanel x:Name="FormattingGroup" Orientation="Horizontal" IsEnabled="False">
+                <ComboBox x:Name="FontFamilyCombo" Width="115" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
+                    <ComboBoxItem>Segoe UI</ComboBoxItem>
+                    <ComboBoxItem>Calibri</ComboBoxItem>
+                    <ComboBoxItem>Arial</ComboBoxItem>
+                    <ComboBoxItem>Georgia</ComboBoxItem>
+                    <ComboBoxItem>Times New Roman</ComboBoxItem>
+                    <ComboBoxItem>Consolas</ComboBoxItem>
+                </ComboBox>
+                <ComboBox Width="55" Margin="4,0,0,0" SelectedIndex="2"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="FontSizeCombo_SelectionChanged" ToolTip="Font size">
+                    <ComboBoxItem>10</ComboBoxItem>
+                    <ComboBoxItem>12</ComboBoxItem>
+                    <ComboBoxItem>13.5</ComboBoxItem>
+                    <ComboBoxItem>16</ComboBoxItem>
+                    <ComboBoxItem>18</ComboBoxItem>
+                    <ComboBoxItem>24</ComboBoxItem>
+                    <ComboBoxItem>32</ComboBoxItem>
+                </ComboBox>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <Button x:Name="BoldButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Bold_Click" ToolTip="Bold (applies to the last text block you clicked into)" Padding="7,3">
+                    <TextBlock Text="B" FontWeight="Bold" FontSize="13"/>
+                </Button>
+                <Button x:Name="ItalicButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Italic_Click" ToolTip="Italic" Padding="7,3">
+                    <TextBlock Text="I" FontStyle="Italic" FontSize="13"/>
+                </Button>
+                <Button x:Name="UnderlineButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Underline_Click" ToolTip="Underline" Padding="7,3">
+                    <TextBlock Text="U" TextDecorations="Underline" FontSize="13"/>
+                </Button>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <TextBlock Text="A" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="2,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Text color"/>
+                <ComboBox Width="46" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="TextColorCombo_SelectionChanged" ToolTip="Text color">
+                    <ComboBoxItem Tag="#2C3338"><Border Background="#2C3338" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#D63638"><Border Background="#D63638" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#E68A00"><Border Background="#E68A00" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#00A32A"><Border Background="#00A32A" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#3361CC"><Border Background="#3361CC" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#8C4FE0"><Border Background="#8C4FE0" Width="16" Height="16"/></ComboBoxItem>
+                </ComboBox>
+                <TextBlock Text="&#x1F58D;" FontFamily="{StaticResource IconFont}" FontSize="13" VerticalAlignment="Center" Margin="8,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Highlight"/>
+                <ComboBox Width="50" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="HighlightCombo_SelectionChanged" ToolTip="Highlight">
+                    <ComboBoxItem Tag="Transparent"><TextBlock Text="None" FontSize="10"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#FFF3B0"><Border Background="#FFF3B0" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#C8F0C8"><Border Background="#C8F0C8" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#CEE0FA"><Border Background="#CEE0FA" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#FAD1E0"><Border Background="#FAD1E0" Width="16" Height="16"/></ComboBoxItem>
+                </ComboBox>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <TextBlock Text="&#x2261;" FontSize="15" VerticalAlignment="Center" Margin="2,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="List style"/>
+                <ComboBox Width="80" SelectedIndex="-1"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="ListStyleCombo_SelectionChanged" ToolTip="List style">
+                    <ComboBoxItem Tag="Bullets"><TextBlock Text="&#x2022; Bullets" FontSize="11"/></ComboBoxItem>
+                    <ComboBoxItem Tag="Numbering"><TextBlock Text="1. Numbered" FontSize="11"/></ComboBoxItem>
+                </ComboBox>
+            </StackPanel>
         </ToolBar>
+
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SidebarBackgroundBrush}"
+                BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,1,0,0" Padding="10,3">
+            <TextBlock Text="{Binding SaveStatusText}" FontSize="11" Foreground="{DynamicResource TertiaryBrush}"/>
+        </Border>
 
     <Grid Background="{DynamicResource BackgroundBrush}">
         <Grid.ColumnDefinitions>
@@ -683,6 +792,12 @@
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
+
+            <TextBlock Grid.Row="1" Text="{Binding EmptyStateMessage}"
+                       Visibility="{Binding FilteredTasksView.IsEmpty, Converter={StaticResource BoolToVis}}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                       FontSize="13" Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
+                       MaxWidth="180" IsHitTestVisible="False"/>
         </Grid>
 
         <GridSplitter Grid.Column="2" Width="5" HorizontalAlignment="Stretch" Background="{DynamicResource SecondaryBrush}"/>
@@ -704,14 +819,18 @@
             <Grid Visibility="{Binding SelectedTaskDetail, Converter={StaticResource NullToVis}}">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,20"
                           DataContext="{Binding SelectedTaskDetail}"
-                          AllowDrop="True" Drop="Body_Drop">
+                          AllowDrop="True" Drop="Body_Drop" DragEnter="Body_DragEnter" DragLeave="Body_DragLeave"
+                          DragOver="Body_DragEnter">
                 <StackPanel>
                     <TextBox x:Name="TitleTextBox"
                              Text="{Binding Task.Text, UpdateSourceTrigger=PropertyChanged}"
                              IsReadOnly="{Binding IsReadOnly}"
                              FontSize="18" FontWeight="SemiBold" Padding="6"
                              Foreground="{DynamicResource PrimaryTextBrush}"
-                             BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SecondaryBrush}" Background="Transparent"/>
+                             BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SecondaryBrush}" Background="Transparent"
+                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                             ContextMenuOpening="TextBox_ContextMenuOpening"/>
 
                     <!-- Icon toolbar -->
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -742,19 +861,19 @@
                         <Separator Width="8" Background="Transparent"/>
 
                         <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddTextBlockCommand}" ToolTip="Add text">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddTextBlockCommand}" ToolTip="Add text (Ctrl+Shift+T)">
                                 <TextBlock Text="&#x1F4DD;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddPhotoBlockCommand}" ToolTip="Add photo">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddPhotoBlockCommand}" ToolTip="Add photo (Ctrl+Shift+P)">
                                 <TextBlock Text="&#x1F5BC;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddLinkBlockCommand}" ToolTip="Add link">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddLinkBlockCommand}" ToolTip="Add link (Ctrl+Shift+L)">
                                 <TextBlock Text="&#x1F517;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddFileBlockCommand}" ToolTip="Add file">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddFileBlockCommand}" ToolTip="Add file (Ctrl+Shift+F)">
                                 <TextBlock Text="&#x1F4CE;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddChecklistBlockCommand}" ToolTip="Add checklist">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddChecklistBlockCommand}" ToolTip="Add checklist (Ctrl+Shift+C)">
                                 <TextBlock Text="&#x2611;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button x:Name="TagIconButton" Style="{StaticResource IconButton}"
@@ -767,7 +886,10 @@
                                         BorderThickness="1" CornerRadius="3" Padding="8">
                                     <StackPanel Width="200">
                                         <TextBox Text="{Binding NewTagText, UpdateSourceTrigger=PropertyChanged}"
-                                                 Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Type a tag and press Enter">
+                                                 Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Type a tag and press Enter"
+                                                 SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                                                 PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                                                 ContextMenuOpening="TextBox_ContextMenuOpening">
                                             <TextBox.InputBindings>
                                                 <KeyBinding Key="Return" Command="{Binding AddTagCommand}"/>
                                             </TextBox.InputBindings>
@@ -882,7 +1004,7 @@
                         </ItemsControl>
 
                         <!-- Unified note body: text, photo, and link blocks in one continuous stream -->
-                        <ItemsControl ItemsSource="{Binding Task.Body}" ItemTemplateSelector="{StaticResource BlockTemplateSelector}"
+                        <ItemsControl x:Name="BlockItemsControl" ItemsSource="{Binding Task.Body}" ItemTemplateSelector="{StaticResource BlockTemplateSelector}"
                                       Margin="0,10,0,0"/>
 
                         <TextBlock Text="Drag photos here, paste with Ctrl+V, or use the icons above to add text, photos, and links."
@@ -890,6 +1012,8 @@
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
+            <Border x:Name="DropOverlay" Background="#333361CC" BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="2" CornerRadius="4" Margin="6" IsHitTestVisible="False" Visibility="Collapsed"/>
             </Grid>
         </Grid>
     </Grid>

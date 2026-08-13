@@ -1,9 +1,9 @@
-using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using TodoApp.Models;
 
 namespace TodoApp.Services;
 
 public class AppState
 {
-    public List<TaskItem> Tasks { get; set; } = new();
+    public ObservableCollection<TaskItem> Tasks { get; set; } = new();
 }

@@ -23,7 +23,10 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly TrayIconService _tray = new();
     private readonly AttachmentService _attachments;
     private readonly Settings _settings;
-    private AppState _state = new();
+    // Never reassigned after construction (see LoadFile) - AllTasks below is a passthrough to
+    // _state.Tasks, and FilteredTasksView wraps that same collection instance once in the
+    // constructor, so both only keep working if _state.Tasks's own identity never changes.
+    private readonly AppState _state = new();
     private string _currentFilePath = null!;
 
     private readonly SidebarFilterItem _allItem = new(SidebarFilterKind.All, "All Tasks");
@@ -50,8 +53,13 @@ public class MainViewModel : INotifyPropertyChanged
     private string _saveStatusText = string.Empty;
     private Task _pendingSaveTask = Task.CompletedTask;
     private int _saveGeneration;
+    private bool _isRestoringBackup;
 
-    public ObservableCollection<TaskItem> AllTasks { get; } = new();
+    // A passthrough, not an independent collection - _state.Tasks is now the single source of
+    // truth for both "what's saved" and "what's shown", instead of the two being manually kept in
+    // sync at every add/remove call site (the previous shape of this: a separately-maintained
+    // AllTasks alongside AppState.Tasks, with no guarantee a future call site wouldn't forget one).
+    public ObservableCollection<TaskItem> AllTasks => _state.Tasks;
     public ObservableCollection<SidebarFilterItem> SidebarItems { get; } = new();
     public ObservableCollection<SidebarFilterItem> TagItems { get; } = new();
     public ListCollectionView FilteredTasksView { get; }
@@ -129,11 +137,20 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     // A plain computed string rather than a converter, since the message needs to distinguish
-    // "nothing here" from "nothing matches your search/filter" - two different situations that
-    // both boil down to an empty FilteredTasksView.
-    public string EmptyStateMessage => !string.IsNullOrWhiteSpace(SearchText) || CurrentQuickFilter != QuickFilter.None
-        ? "No tasks match your search or filter."
-        : "No tasks here yet.";
+    // "nothing here" from "nothing matches your search/filter" from "everything with this tag is
+    // in Trash" - situations that all boil down to an empty FilteredTasksView but need different
+    // explanations, since a Tag view (unlike every other filter) never shows trashed tasks.
+    public string EmptyStateMessage
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(SearchText) || CurrentQuickFilter != QuickFilter.None)
+                return "No tasks match your search or filter.";
+            if (SelectedSidebarItem.Kind == SidebarFilterKind.Tag)
+                return "No open or completed tasks have this tag. Check Trash?";
+            return "No tasks here yet.";
+        }
+    }
 
     public TaskItem? SelectedTask
     {
@@ -142,6 +159,12 @@ public class MainViewModel : INotifyPropertyChanged
         {
             if (!SetField(ref _selectedTask, value)) return;
             FlushPendingSave();
+
+            // Without this, reselecting the same task later creates ANOTHER TaskDetailViewModel
+            // subscribed to the same long-lived TaskItem/NoteBlocks - Task and its blocks outlive
+            // the selection (they stay in AllTasks/Task.Body regardless), so those subscriptions
+            // would just keep piling up for the life of the session instead of being replaced.
+            SelectedTaskDetail?.Detach();
             SelectedTaskDetail = value is null
                 ? null
                 : new TaskDetailViewModel(value, _attachments, OnTaskChanged, GetAllTagNames, RequestDebouncedSave, PushUndo);
@@ -159,10 +182,17 @@ public class MainViewModel : INotifyPropertyChanged
         get => _isDarkTheme;
         set
         {
-            if (!SetField(ref _isDarkTheme, value)) return;
+            // Deliberately not SetField here: SetField raises PropertyChanged before this method
+            // returns, and MainWindow reacts to that event by repainting the OS title bar based on
+            // ThemeService.IsDark - if that event fires before ThemeService.Apply below updates
+            // IsDark, the title bar reads the OLD value and ends up one step behind (dark mode
+            // shows a light title bar and vice versa). ThemeService.Apply must run first.
+            if (_isDarkTheme == value) return;
+            _isDarkTheme = value;
             ThemeService.Apply(value ? "Dark" : "Light");
             _settings.Theme = value ? "Dark" : "Light";
             _settingsStore.Save(_settings);
+            OnPropertyChanged();
         }
     }
 
@@ -214,30 +244,34 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public RelayCommand AddTaskCommand { get; }
-    public RelayCommand ToggleCloseSelectedCommand { get; }
-    public RelayCommand DeleteSelectedCommand { get; }
-    public RelayCommand ShowAllCommand { get; }
-    public RelayCommand ShowClosedCommand { get; }
-    public RelayCommand ShowTrashCommand { get; }
-    public RelayCommand TrashAllClosedCommand { get; }
-    public RelayCommand TogglePinCommand { get; }
-    public RelayCommand ToggleFocusModeCommand { get; }
-    public RelayCommand ToggleSidebarCommand { get; }
-    public RelayCommand SetSortCommand { get; }
-    public RelayCommand EmptyTrashCommand { get; }
-    public RelayCommand SetQuickFilterCommand { get; }
-    public RelayCommand ToggleFilterPopupCommand { get; }
-    public RelayCommand NewFileCommand { get; }
-    public RelayCommand OpenFileCommand { get; }
-    public RelayCommand SaveFileAsCommand { get; }
-    public RelayCommand UndoCommand { get; }
-    public RelayCommand BulkMarkDoneCommand { get; }
-    public RelayCommand BulkTrashCommand { get; }
-    public RelayCommand BulkRestoreCommand { get; }
-    public RelayCommand BulkDeleteCommand { get; }
-    public RelayCommand BulkTogglePinCommand { get; }
-    public RelayCommand RestoreBackupCommand { get; }
+    // private set (not the plain get-only these were before) so the constructor can delegate
+    // assignment to the InitializeXCommands() groupings below instead of one 290-line body -
+    // a get-only auto-property's backing field can only be assigned directly in the constructor
+    // itself, not from a method the constructor calls. Still fully read-only from outside the class.
+    public RelayCommand AddTaskCommand { get; private set; } = null!;
+    public RelayCommand ToggleCloseSelectedCommand { get; private set; } = null!;
+    public RelayCommand DeleteSelectedCommand { get; private set; } = null!;
+    public RelayCommand ShowAllCommand { get; private set; } = null!;
+    public RelayCommand ShowClosedCommand { get; private set; } = null!;
+    public RelayCommand ShowTrashCommand { get; private set; } = null!;
+    public RelayCommand TrashAllClosedCommand { get; private set; } = null!;
+    public RelayCommand TogglePinCommand { get; private set; } = null!;
+    public RelayCommand ToggleFocusModeCommand { get; private set; } = null!;
+    public RelayCommand ToggleSidebarCommand { get; private set; } = null!;
+    public RelayCommand SetSortCommand { get; private set; } = null!;
+    public RelayCommand EmptyTrashCommand { get; private set; } = null!;
+    public RelayCommand SetQuickFilterCommand { get; private set; } = null!;
+    public RelayCommand ToggleFilterPopupCommand { get; private set; } = null!;
+    public RelayCommand NewFileCommand { get; private set; } = null!;
+    public RelayCommand OpenFileCommand { get; private set; } = null!;
+    public RelayCommand SaveFileAsCommand { get; private set; } = null!;
+    public RelayCommand UndoCommand { get; private set; } = null!;
+    public RelayCommand BulkMarkDoneCommand { get; private set; } = null!;
+    public RelayCommand BulkTrashCommand { get; private set; } = null!;
+    public RelayCommand BulkRestoreCommand { get; private set; } = null!;
+    public RelayCommand BulkDeleteCommand { get; private set; } = null!;
+    public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
+    public RelayCommand RestoreBackupCommand { get; private set; } = null!;
 
     public event Action? FocusTitleRequested;
 
@@ -266,10 +300,22 @@ public class MainViewModel : INotifyPropertyChanged
         _reminderTimer.Tick += (_, _) => CheckReminders();
         _reminderTimer.Start();
 
+        InitializeTaskCommands();
+        InitializeViewCommands();
+        InitializeFileCommands();
+        InitializeBulkCommands();
+
+        LoadFile(initialPath, restoreSelection: true);
+        CheckReminders();
+    }
+
+    // Everything that acts on the single SelectedTask (or the ambient single/multi TargetTasks()
+    // selection), as opposed to the multi-select-only Bulk* commands in InitializeBulkCommands.
+    private void InitializeTaskCommands()
+    {
         AddTaskCommand = new RelayCommand(_ =>
         {
             var task = new TaskItem { Text = "New Task" };
-            _state.Tasks.Add(task);
             AllTasks.Add(task);
             AttachTask(task);
             OnTaskChanged();
@@ -301,7 +347,6 @@ public class MainViewModel : INotifyPropertyChanged
             foreach (var task in targets)
             {
                 DetachTask(task);
-                _state.Tasks.Remove(task);
                 AllTasks.Remove(task);
             }
             SelectedTask = null;
@@ -311,17 +356,12 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 foreach (var task in targets)
                 {
-                    _state.Tasks.Add(task);
                     AllTasks.Add(task);
                     AttachTask(task);
                 }
                 OnTaskChanged();
             });
         }, _ => SelectedTask is not null || SelectedTasks.Count > 0);
-
-        ShowAllCommand = new RelayCommand(_ => SelectedSidebarItem = _allItem);
-        ShowClosedCommand = new RelayCommand(_ => SelectedSidebarItem = _doneItem);
-        ShowTrashCommand = new RelayCommand(_ => SelectedSidebarItem = _trashItem);
 
         TrashAllClosedCommand = new RelayCommand(_ =>
         {
@@ -349,14 +389,6 @@ public class MainViewModel : INotifyPropertyChanged
             if (p is TaskItem task) task.IsPinned = !task.IsPinned;
         });
 
-        ToggleFocusModeCommand = new RelayCommand(_ => IsFocusMode = !IsFocusMode);
-        ToggleSidebarCommand = new RelayCommand(_ => IsSidebarCollapsed = !IsSidebarCollapsed);
-
-        SetSortCommand = new RelayCommand(p =>
-        {
-            if (p is SortOption option) CurrentSort = option;
-        });
-
         EmptyTrashCommand = new RelayCommand(_ =>
         {
             var trashed = AllTasks.Where(t => t.IsClosed).ToList();
@@ -369,13 +401,29 @@ public class MainViewModel : INotifyPropertyChanged
             foreach (var task in trashed)
             {
                 DetachTask(task);
-                _state.Tasks.Remove(task);
                 AllTasks.Remove(task);
                 foreach (var block in task.Body.Where(b => b.Type == NoteBlockType.Photo || b.Type == NoteBlockType.File))
                     _attachments.DeleteFile(block.PhotoPath);
                 if (SelectedTask == task) SelectedTask = null;
             }
             OnTaskChanged();
+        });
+    }
+
+    // Sidebar scope switching, sort, quick filter, and layout toggles - commands that change
+    // what's visible or how it's arranged, rather than mutating any task.
+    private void InitializeViewCommands()
+    {
+        ShowAllCommand = new RelayCommand(_ => SelectedSidebarItem = _allItem);
+        ShowClosedCommand = new RelayCommand(_ => SelectedSidebarItem = _doneItem);
+        ShowTrashCommand = new RelayCommand(_ => SelectedSidebarItem = _trashItem);
+
+        ToggleFocusModeCommand = new RelayCommand(_ => IsFocusMode = !IsFocusMode);
+        ToggleSidebarCommand = new RelayCommand(_ => IsSidebarCollapsed = !IsSidebarCollapsed);
+
+        SetSortCommand = new RelayCommand(p =>
+        {
+            if (p is SortOption option) CurrentSort = option;
         });
 
         SetQuickFilterCommand = new RelayCommand(p =>
@@ -385,7 +433,12 @@ public class MainViewModel : INotifyPropertyChanged
         });
 
         ToggleFilterPopupCommand = new RelayCommand(_ => IsFilterPopupOpen = !IsFilterPopupOpen);
+    }
 
+    // New/Open/Save As/Restore Backup - commands that swap out which .tasky file is open or
+    // touch the file on disk directly, rather than mutating in-memory task state.
+    private void InitializeFileCommands()
+    {
         NewFileCommand = new RelayCommand(_ =>
         {
             var dialog = new SaveFileDialog
@@ -433,31 +486,47 @@ public class MainViewModel : INotifyPropertyChanged
 
         RestoreBackupCommand = new RelayCommand(async _ =>
         {
-            // Unlike the other FlushPendingSave() call sites, this one genuinely needs the disk
-            // write to have landed before RestoreBackup overwrites the file out from under it -
-            // await the real completion instead of just firing it off.
-            await FlushPendingSaveAsync();
-            var backups = _store.ListBackups(_currentFilePath);
-            if (backups.Count == 0)
+            // Wrapping an async lambda in RelayCommand's Action<object?> makes this effectively
+            // async void - CanExecute below is what actually stops a second invocation from
+            // re-entering RestoreBackup/LoadFile while the first is still awaiting.
+            _isRestoringBackup = true;
+            try
             {
-                ThemedMessageBox.Show("No backups found for this file yet.", "Restore from Backup",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
+                // Unlike the other FlushPendingSave() call sites, this one genuinely needs the disk
+                // write to have landed before RestoreBackup overwrites the file out from under it -
+                // await the real completion instead of just firing it off.
+                await FlushPendingSaveAsync();
+                var backups = _store.ListBackups(_currentFilePath);
+                if (backups.Count == 0)
+                {
+                    ThemedMessageBox.Show("No backups found for this file yet.", "Restore from Backup",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var picker = new RestoreBackupWindow(backups) { Owner = Application.Current.MainWindow };
+                if (picker.ShowDialog() != true || picker.SelectedBackup is null) return;
+
+                var confirm = ThemedMessageBox.Show(
+                    $"Restore the backup from {picker.SelectedBackup.Timestamp:MMM d, yyyy 'at' h:mm:ss tt}?\n\n" +
+                    "Your current file will be backed up first, so this can be undone by restoring again.",
+                    "Restore from Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes) return;
+
+                _store.RestoreBackup(picker.SelectedBackup.FilePath, _currentFilePath);
+                LoadFile(_currentFilePath);
             }
+            finally
+            {
+                _isRestoringBackup = false;
+            }
+        }, _ => !_isRestoringBackup);
+    }
 
-            var picker = new RestoreBackupWindow(backups) { Owner = Application.Current.MainWindow };
-            if (picker.ShowDialog() != true || picker.SelectedBackup is null) return;
-
-            var confirm = ThemedMessageBox.Show(
-                $"Restore the backup from {picker.SelectedBackup.Timestamp:MMM d, yyyy 'at' h:mm:ss tt}?\n\n" +
-                "Your current file will be backed up first, so this can be undone by restoring again.",
-                "Restore from Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.Yes) return;
-
-            _store.RestoreBackup(picker.SelectedBackup.FilePath, _currentFilePath);
-            LoadFile(_currentFilePath);
-        });
-
+    // Undo, and every Bulk* command driven by the task list's multi-selection (SelectedTasks)
+    // rather than the single SelectedTask.
+    private void InitializeBulkCommands()
+    {
         UndoCommand = new RelayCommand(_ =>
         {
             if (_undoStack.Count == 0) return;
@@ -506,7 +575,6 @@ public class MainViewModel : INotifyPropertyChanged
             foreach (var task in targets)
             {
                 DetachTask(task);
-                _state.Tasks.Remove(task);
                 AllTasks.Remove(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
@@ -516,7 +584,6 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 foreach (var task in targets)
                 {
-                    _state.Tasks.Add(task);
                     AllTasks.Add(task);
                     AttachTask(task);
                 }
@@ -528,15 +595,11 @@ public class MainViewModel : INotifyPropertyChanged
         {
             foreach (var t in SelectedTasks) t.IsPinned = !t.IsPinned;
         }, _ => SelectedTasks.Count > 0);
-
-        LoadFile(initialPath, restoreSelection: true);
-        CheckReminders();
     }
 
     public void AddQuickTask(string title)
     {
         var task = new TaskItem { Text = title };
-        _state.Tasks.Add(task);
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
@@ -613,7 +676,6 @@ public class MainViewModel : INotifyPropertyChanged
             Recurrence = completed.Recurrence,
             Tags = new ObservableCollection<string>(completed.Tags)
         };
-        _state.Tasks.Add(next);
         AllTasks.Add(next);
         AttachTask(next);
     }
@@ -645,9 +707,14 @@ public class MainViewModel : INotifyPropertyChanged
 
         _currentFilePath = path;
         _attachments.SetDataFilePath(path);
-        _state = _store.Load(path);
 
-        foreach (var task in _state.Tasks)
+        // _state is never reassigned (see its declaration) - AllTasks and FilteredTasksView both
+        // wrap _state.Tasks by reference, so opening a different file means repopulating that
+        // same collection in place from a freshly-loaded AppState, not swapping _state itself out
+        // for a new one (which would leave FilteredTasksView pointed at the old, now-orphaned
+        // collection).
+        var loaded = _store.Load(path);
+        foreach (var task in loaded.Tasks)
         {
             AllTasks.Add(task);
             AttachTask(task);
@@ -679,7 +746,10 @@ public class MainViewModel : INotifyPropertyChanged
             SidebarFilterKind.Trash => t.IsClosed,
             SidebarFilterKind.Done => !t.IsClosed && t.IsDone,
             SidebarFilterKind.Recurring => !t.IsClosed && !t.IsDone && t.Recurrence != RecurrenceRule.None,
-            SidebarFilterKind.Tag => !t.IsClosed && !t.IsDone && t.Tags.Any(tag => tag.Equals(scope.TagName, StringComparison.OrdinalIgnoreCase)),
+            // Unlike "All Tasks", a tag view includes completed tasks (just not trashed ones) -
+            // otherwise a tag whose only remaining task happened to be completed looked
+            // completely empty, with nothing telling you the task still exists under Completed.
+            SidebarFilterKind.Tag => !t.IsClosed && t.Tags.Any(tag => tag.Equals(scope.TagName, StringComparison.OrdinalIgnoreCase)),
             _ => !t.IsClosed && !t.IsDone
         };
         if (!matchesScope) return false;
@@ -723,8 +793,18 @@ public class MainViewModel : INotifyPropertyChanged
         if (sender is not TaskItem task) return;
         task.ModifiedAt = DateTime.Now;
 
-        if (e.PropertyName == nameof(TaskItem.IsDone) && task.IsDone && task.Recurrence != RecurrenceRule.None)
-            SpawnNextOccurrence(task);
+        if (e.PropertyName == nameof(TaskItem.IsDone))
+        {
+            // Every other mutating action in the app (delete, trash, tag removal, bulk actions)
+            // is on the undo stack - the complete checkbox wasn't, despite sitting right next to
+            // the pin toggle in the list and instantly dropping the task out of the current view.
+            var isDone = task.IsDone;
+            PushUndo(isDone ? $"Mark \"{task.Text}\" complete" : $"Mark \"{task.Text}\" incomplete",
+                () => task.IsDone = !isDone);
+
+            if (isDone && task.Recurrence != RecurrenceRule.None)
+                SpawnNextOccurrence(task);
+        }
 
         // Typing the title fires on every keystroke; debounce it like body text instead of
         // writing the file (and re-sorting/re-filtering the list) on every character.
@@ -774,16 +854,38 @@ public class MainViewModel : INotifyPropertyChanged
         FilteredTasksView.Refresh();
     }
 
+    // Diffs TagItems in place instead of Clear()-then-rebuild. Clear() raises a Reset
+    // notification, which the bound Tags ListBox treats as "the whole collection is gone" and
+    // drops its current selection outright - even when the selected tag is still in the rebuilt
+    // list, just as a new instance. Since RefreshTags runs on nearly every task edit anywhere in
+    // the app (via OnTaskChanged), that silently snapped any active tag filter back to "All
+    // Tasks" on almost every keystroke. Only actually-added/removed tags now touch the
+    // collection, so an unrelated edit leaves the current selection's item identity untouched.
     private void RefreshTags()
     {
-        var desired = AllTasks.SelectMany(t => t.Tags)
+        // Trashed tasks don't keep a tag alive in the sidebar - otherwise trashing the last task
+        // with a given tag left that tag sitting in the list pointing at a Tag view that (by
+        // design, matching Trash being a separate bucket from every other filter) would always
+        // show zero results, with nothing to explain why.
+        var desired = AllTasks.Where(t => !t.IsClosed).SelectMany(t => t.Tags)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        TagItems.Clear();
+        for (var i = TagItems.Count - 1; i >= 0; i--)
+            if (!desired.Contains(TagItems[i].TagName, StringComparer.OrdinalIgnoreCase))
+                TagItems.RemoveAt(i);
+
         foreach (var tag in desired)
-            TagItems.Add(new SidebarFilterItem(tag));
+            if (!TagItems.Any(item => item.TagName!.Equals(tag, StringComparison.OrdinalIgnoreCase)))
+                TagItems.Add(new SidebarFilterItem(tag));
+
+        var ordered = TagItems.OrderBy(t => t.TagName, StringComparer.OrdinalIgnoreCase).ToList();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var currentIndex = TagItems.IndexOf(ordered[i]);
+            if (currentIndex != i) TagItems.Move(currentIndex, i);
+        }
     }
 
     private IEnumerable<string> GetAllTagNames()

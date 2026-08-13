@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using TodoApp.Services;
 
 namespace TodoApp;
@@ -48,6 +49,28 @@ public partial class ThemedMessageBoxWindow : Window
                 OkButton.Visibility = Visibility.Visible;
                 break;
         }
+
+        // None of these buttons set IsDefault/IsCancel in XAML - they're shared across every
+        // button combination above with only one of {Yes, Ok} and one of {No, Cancel} ever
+        // visible at once (except YesNoCancel, where Escape should mean Cancel specifically, not
+        // No), so picking the "current" default/cancel action here based on what's actually
+        // visible is simpler than juggling conflicting IsDefault/IsCancel flags in XAML.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape)
+            {
+                if (CancelButton.Visibility == Visibility.Visible) Cancel_Click(this, new RoutedEventArgs());
+                else if (NoButton.Visibility == Visibility.Visible) No_Click(this, new RoutedEventArgs());
+                else if (OkButton.Visibility == Visibility.Visible) Ok_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter)
+            {
+                if (YesButton.Visibility == Visibility.Visible) Yes_Click(this, new RoutedEventArgs());
+                else if (OkButton.Visibility == Visibility.Visible) Ok_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+        };
     }
 
     private void Yes_Click(object sender, RoutedEventArgs e)

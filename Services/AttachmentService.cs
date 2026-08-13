@@ -48,10 +48,23 @@ public class AttachmentService
         {
             if (File.Exists(path)) File.Delete(path);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Ignore: file may be in use or already gone.
+            // Ignore: file may be in use, already gone, or access is denied - the caller's own
+            // in-memory removal (e.g. dropping a block from Task.Body) should still go through.
         }
+    }
+
+    // A link/file block's path is loaded straight from the .tasky JSON - before ever handing one
+    // to the shell (Process.Start with UseShellExecute), confirm it actually lives inside this
+    // file's own Attachments folder (the only place CopyFile/SaveBytes ever write to). Refuses
+    // anything else, so a hand-edited or restored-from-an-untrusted-backup file can't point this
+    // at an arbitrary local executable.
+    public bool IsUnderAttachmentsRoot(string path)
+    {
+        var root = Path.GetFullPath(_rootFolder) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(path);
+        return full.StartsWith(root, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string UniquePath(string folder, string fileName)

@@ -18,22 +18,27 @@ let the app take care of not losing your work.
   restore, delete permanently
 
 ### Rich task notes
-Each task's body is a free-form stream of blocks, added in any order and any combination:
+Each task's body is a free-form stream of blocks, added in any order, reordered by drag handle,
+and mixed freely:
 - **Text** — rich text with bold/italic/underline, font family/size, text color, and highlight
 - **Photos** — paste from clipboard or drag-and-drop; click to view full-size
 - **Links** — paste a bare URL and it's auto-converted into a link block
 - **Files** — attach any file type, open it with its default app from inside Tasky
-- **Checklists** — add/check off sub-items within a task
+- **Checklists** — add/check off sub-items within a task, independently reorderable too
+
+Spell check runs on every text field, with themed right-click suggestions.
 
 Tasks also carry tags (picked from existing ones or typed fresh — always lowercased), a due
 date, and an optional recurrence rule (daily/weekly/monthly). Completing a recurring task
 automatically spawns the next occurrence with the due date advanced.
 
 ### Data safety
-- Auto-save (debounced, so it doesn't hammer the disk while you type)
+- Auto-save (debounced, so it doesn't hammer the disk while you type), with a small status
+  indicator ("Saving…" / "Saved") and a clear failure message if a write doesn't go through
 - Rolling backups taken before every save, with a **Restore from Backup** dialog to roll back to
   any recent snapshot
-- Ctrl+Z undo for deletes, trashing, tag removal, and block removal
+- Ctrl+Z undo for deletes, trashing, restoring, tag removal, block removal, and marking a task
+  complete/incomplete
 - Completed and trashed tasks lock from editing — you can still restore/reopen them, but their
   content can't be changed by accident
 
@@ -52,6 +57,10 @@ automatically spawns the next occurrence with the due date advanced.
 - Collapsible sidebar and a distraction-free Focus Mode (F11)
 - Always-on-top toggle
 - Window size, position, and last-open task are remembered between launches
+
+### Accessibility
+- Confirmation dialogs respond to Enter/Esc, not just mouse clicks
+- Icon-only buttons carry screen-reader labels, not just tooltips
 
 ## Requirements
 

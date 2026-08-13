@@ -38,7 +38,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        _viewModel = new MainViewModel();
+
+        try
+        {
+            _viewModel = new MainViewModel();
+        }
+        catch (IOException ex)
+        {
+            // The data file is still locked/inaccessible after TodoStore's own retries (e.g. a
+            // permissions issue, not just a transient OneDrive sync lock) - refuse to continue
+            // into a window backed by a blank in-memory state, since an autosave from there would
+            // overwrite the real file with nothing the moment the user makes any edit.
+            App.LogException(ex);
+            ThemedMessageBox.Show(
+                $"Tasky couldn't open your data file - it may be locked by another program (such as OneDrive syncing) or you may not have permission to access it.\n\n{ex.Message}",
+                "Couldn't Open Data File", MessageBoxButton.OK, MessageBoxImage.Error);
+            Environment.Exit(1);
+            return;
+        }
+
         DataContext = _viewModel;
         ApplySavedWindowState();
         ThemeService.ApplyTitleBar(this);
@@ -84,6 +102,8 @@ public partial class MainWindow : Window
             if (e.PropertyName != nameof(MainViewModel.SelectedTaskDetail)) return;
             _activeEditor = null;
             FormattingGroup.IsEnabled = false;
+            FormattingGroup.Visibility = Visibility.Collapsed;
+            FormattingGroupSeparator.Visibility = Visibility.Collapsed;
         };
 
         // BlockItemsControl is a single, stable element in MainWindow's own template (only its
@@ -145,8 +165,19 @@ public partial class MainWindow : Window
                 App.LogException(ex);
             }
 
-            _viewModel.SaveWindowState(bounds.Left, bounds.Top, bounds.Width, bounds.Height, wasMaximized);
-            _viewModel.Shutdown();
+            // SaveWindowState/Shutdown get the same "must not prevent shutdown" treatment as the
+            // flush above - SettingsStore.Save already swallows its own write failures, but
+            // wrapping this too means the guarantee holds even if something in here changes later.
+            try
+            {
+                _viewModel.SaveWindowState(bounds.Left, bounds.Top, bounds.Width, bounds.Height, wasMaximized);
+                _viewModel.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex);
+            }
+
             _readyToClose = true;
             Application.Current.Shutdown();
         };
@@ -311,12 +342,7 @@ public partial class MainWindow : Window
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void About_Click(object sender, RoutedEventArgs e)
-    {
-        ThemedMessageBox.Show(
-            "Tasky\nA simple task manager with notes, links, photos, due dates, and tags.",
-            "About Tasky", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
+    private void About_Click(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
 
     private void AlwaysOnTop_Checked(object sender, RoutedEventArgs e) => Topmost = true;
 
@@ -329,46 +355,14 @@ public partial class MainWindow : Window
         new PhotoViewerWindow(block.PhotoPath) { Owner = this }.Show();
     }
 
-    // Same spell-suggestion-merge approach as RichTextBox_ContextMenuOpening below, adapted for
-    // plain TextBox's character-index-based API instead of RichTextBox's TextPointer-based one.
     private void TextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not TextBox tb) return;
-        var index = tb.GetCharacterIndexFromPoint(e.GetPosition(tb), true);
-        if (index >= 0) tb.CaretIndex = index;
+        if (sender is TextBox tb) SpellCheckContextMenu.RepositionCaret(tb, e);
     }
 
     private void TextBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (sender is not TextBox tb || tb.ContextMenu is not { } menu) return;
-
-        for (var i = menu.Items.Count - 1; i >= 0; i--)
-        {
-            if (menu.Items[i] is FrameworkElement { Tag: "SpellSuggestion" })
-                menu.Items.RemoveAt(i);
-        }
-
-        var error = tb.GetSpellingError(tb.CaretIndex);
-        if (error is null) return;
-
-        var index = 0;
-        foreach (var suggestion in error.Suggestions)
-        {
-            menu.Items.Insert(index++, new MenuItem
-            {
-                Header = suggestion,
-                FontWeight = FontWeights.Bold,
-                Tag = "SpellSuggestion",
-                Command = EditingCommands.CorrectSpellingError,
-                CommandParameter = suggestion,
-                CommandTarget = tb
-            });
-        }
-
-        if (index == 0)
-            menu.Items.Insert(index++, new MenuItem { Header = "No spelling suggestions", IsEnabled = false, Tag = "SpellSuggestion" });
-
-        menu.Items.Insert(index, new Separator { Tag = "SpellSuggestion" });
+        if (sender is TextBox tb) SpellCheckContextMenu.MergeSuggestions(tb);
     }
 
     private void RichTextBox_GotFocus(object sender, RoutedEventArgs e)
@@ -376,6 +370,8 @@ public partial class MainWindow : Window
         if (sender is not RichTextBox rtb) return;
         _activeEditor = rtb;
         FormattingGroup.IsEnabled = true;
+        FormattingGroup.Visibility = Visibility.Visible;
+        FormattingGroupSeparator.Visibility = Visibility.Visible;
         UpdateFormatButtonStates();
     }
 
@@ -396,14 +392,14 @@ public partial class MainWindow : Window
             if (Keyboard.FocusedElement is RichTextBox) return;
             _activeEditor = null;
             FormattingGroup.IsEnabled = false;
+            FormattingGroup.Visibility = Visibility.Collapsed;
+            FormattingGroupSeparator.Visibility = Visibility.Collapsed;
         }), DispatcherPriority.Background);
     }
 
     private void RichTextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not RichTextBox rtb) return;
-        var position = rtb.GetPositionFromPoint(e.GetPosition(rtb), true);
-        if (position is not null) rtb.CaretPosition = position;
+        if (sender is RichTextBox rtb) SpellCheckContextMenu.RepositionCaret(rtb, e);
     }
 
     // The formatting ContextMenu (Bold/Italic/Font Size/.../Numbered List) replaces WPF's
@@ -412,35 +408,7 @@ public partial class MainWindow : Window
     // misspelled word (PreviewMouseRightButtonDown above moves the caret there first).
     private void RichTextBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (sender is not RichTextBox rtb || rtb.ContextMenu is not { } menu) return;
-
-        for (var i = menu.Items.Count - 1; i >= 0; i--)
-        {
-            if (menu.Items[i] is FrameworkElement { Tag: "SpellSuggestion" })
-                menu.Items.RemoveAt(i);
-        }
-
-        var error = rtb.GetSpellingError(rtb.CaretPosition);
-        if (error is null) return;
-
-        var index = 0;
-        foreach (var suggestion in error.Suggestions)
-        {
-            menu.Items.Insert(index++, new MenuItem
-            {
-                Header = suggestion,
-                FontWeight = FontWeights.Bold,
-                Tag = "SpellSuggestion",
-                Command = EditingCommands.CorrectSpellingError,
-                CommandParameter = suggestion,
-                CommandTarget = rtb
-            });
-        }
-
-        if (index == 0)
-            menu.Items.Insert(index++, new MenuItem { Header = "No spelling suggestions", IsEnabled = false, Tag = "SpellSuggestion" });
-
-        menu.Items.Insert(index, new Separator { Tag = "SpellSuggestion" });
+        if (sender is RichTextBox rtb) SpellCheckContextMenu.MergeSuggestions(rtb);
     }
 
     private void UpdateFormatButtonStates()

@@ -21,23 +21,7 @@ public class TodoStore
 
     public AppState Load(string path)
     {
-        AppState state;
-        if (!File.Exists(path))
-        {
-            state = new AppState();
-        }
-        else
-        {
-            try
-            {
-                var json = File.ReadAllText(path);
-                state = JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
-            }
-            catch (JsonException)
-            {
-                state = new AppState();
-            }
-        }
+        var state = File.Exists(path) ? ReadFromDisk(path) : new AppState();
 
         var migrated = false;
         foreach (var task in state.Tasks)
@@ -47,6 +31,40 @@ public class TodoStore
             Save(state, path);
 
         return state;
+    }
+
+    // A locked/inaccessible file (most commonly OneDrive transiently locking the data file
+    // mid-sync, since the default path lives inside a synced Documents folder) is retried a few
+    // times rather than immediately falling back to a blank AppState the way a corrupt-JSON file
+    // does - unlike bad JSON, a transient lock is likely to clear on its own, and silently
+    // starting blank risks a later autosave overwriting the real, still-intact file with
+    // nothing. If it's still inaccessible after retries, the IOException/UnauthorizedAccessException
+    // is left to propagate - callers decide what "couldn't open the file at all" means for them.
+    private static AppState ReadFromDisk(string path)
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                var json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
+            }
+            catch (JsonException)
+            {
+                return new AppState();
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(300);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(300);
+            }
+        }
+
+        throw new InvalidOperationException("unreachable");
     }
 
     // Kept for the handful of callers that need the write to have landed before they continue
@@ -149,16 +167,22 @@ public class TodoStore
             var backupPath = Path.Combine(backupsDir, $"{name}_{DateTime.Now:yyyyMMdd_HHmmss_fff}{ext}");
             File.Copy(path, backupPath, overwrite: false);
 
+            // Ordinal, not the default current-culture comparer: these are machine-generated
+            // timestamp names, not linguistic text, and a destructive operation (deciding which
+            // backups to delete) shouldn't depend on the OS's collation rules.
             var stale = Directory.GetFiles(backupsDir, $"{name}_*{ext}")
-                .OrderByDescending(f => f)
+                .OrderByDescending(f => f, StringComparer.Ordinal)
                 .Skip(MaxBackups);
             foreach (var old in stale)
             {
-                try { File.Delete(old); } catch (IOException) { }
+                try { File.Delete(old); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Truly best-effort, per the comment above: a backup that can't be written or
+            // pruned (locked Backups folder, a path over the length limit, permissions) must
+            // never block the actual save that's about to happen right after this returns.
         }
     }
 

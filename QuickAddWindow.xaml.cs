@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using TodoApp.Behaviors;
 using TodoApp.Services;
 
 namespace TodoApp;
@@ -33,47 +34,23 @@ public partial class QuickAddWindow : Window
         }
     }
 
-    private void Window_Deactivated(object sender, EventArgs e) => SetResult(false);
+    // Losing focus (alt-tab, a notification stealing activation, clicking another monitor) used
+    // to always discard the window - fine when it's still empty, but silently throwing away
+    // something the user actually typed (with zero recovery) was the actual bug. An empty box
+    // still auto-dismisses so the always-on-top capture window doesn't linger unnecessarily.
+    private void Window_Deactivated(object sender, EventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(TitleBox.Text)) SetResult(false);
+    }
 
-    // Same spell-suggestion-merge approach as MainWindow's text fields.
     private void TitleBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not TextBox tb) return;
-        var index = tb.GetCharacterIndexFromPoint(e.GetPosition(tb), true);
-        if (index >= 0) tb.CaretIndex = index;
+        if (sender is TextBox tb) SpellCheckContextMenu.RepositionCaret(tb, e);
     }
 
     private void TitleBox_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (sender is not TextBox tb || tb.ContextMenu is not { } menu) return;
-
-        for (var i = menu.Items.Count - 1; i >= 0; i--)
-        {
-            if (menu.Items[i] is FrameworkElement { Tag: "SpellSuggestion" })
-                menu.Items.RemoveAt(i);
-        }
-
-        var error = tb.GetSpellingError(tb.CaretIndex);
-        if (error is null) return;
-
-        var index = 0;
-        foreach (var suggestion in error.Suggestions)
-        {
-            menu.Items.Insert(index++, new MenuItem
-            {
-                Header = suggestion,
-                FontWeight = FontWeights.Bold,
-                Tag = "SpellSuggestion",
-                Command = EditingCommands.CorrectSpellingError,
-                CommandParameter = suggestion,
-                CommandTarget = tb
-            });
-        }
-
-        if (index == 0)
-            menu.Items.Insert(index++, new MenuItem { Header = "No spelling suggestions", IsEnabled = false, Tag = "SpellSuggestion" });
-
-        menu.Items.Insert(index, new Separator { Tag = "SpellSuggestion" });
+        if (sender is TextBox tb) SpellCheckContextMenu.MergeSuggestions(tb);
     }
 
     private void SetResult(bool result)

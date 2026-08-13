@@ -140,21 +140,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         _onTypingChanged = onTypingChanged;
         _pushUndo = pushUndo;
 
-        Task.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(TaskItem.ModifiedAt))
-                OnPropertyChanged(nameof(ModifiedDisplay));
-            if (e.PropertyName is nameof(TaskItem.DueDate) or nameof(TaskItem.Recurrence))
-                OnPropertyChanged(nameof(RecurrenceSummary));
-            if (e.PropertyName is nameof(TaskItem.IsDone) or nameof(TaskItem.IsClosed))
-            {
-                OnPropertyChanged(nameof(IsEditable));
-                OnPropertyChanged(nameof(IsReadOnly));
-            }
-            if (e.PropertyName == nameof(TaskItem.IsClosed))
-                OnPropertyChanged(nameof(CanToggleComplete));
-        };
-
+        Task.PropertyChanged += Task_PropertyChanged;
         Task.Body.CollectionChanged += Body_CollectionChanged;
         foreach (var block in Task.Body)
             AttachBlock(block);
@@ -275,6 +261,13 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         OpenBlockFileCommand = new RelayCommand(p =>
         {
             if (p is not NoteBlock block || !File.Exists(block.PhotoPath)) return;
+
+            // PhotoPath is loaded straight from the .tasky JSON. Refusing anything outside this
+            // file's own Attachments folder (the only place CopyFile/SaveBytes ever write to)
+            // means a hand-edited or restored-from-an-untrusted-backup file can't point this at
+            // an arbitrary local file and have it opened with no warning.
+            if (!_attachments.IsUnderAttachmentsRoot(block.PhotoPath)) return;
+
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(block.PhotoPath) { UseShellExecute = true });
@@ -320,9 +313,16 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         {
             if (p is not NoteBlock block || string.IsNullOrWhiteSpace(block.Url)) return;
             var url = block.Url.Contains("://") ? block.Url : "https://" + block.Url;
+
+            // Url is loaded straight from the .tasky JSON - restricting to http(s) means a link
+            // block whose Url was ever hand-edited or restored from an untrusted backup (e.g. a
+            // file:// URI pointing at a local executable) can't get handed to ShellExecute and
+            // launched with no warning.
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) return;
+
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
             }
             catch (System.ComponentModel.Win32Exception)
             {
@@ -336,22 +336,41 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
     public void AddPhotosFromPaths(IEnumerable<string> paths)
     {
+        var added = false;
         foreach (var path in paths.Where(p => ImageExtensions.Contains(Path.GetExtension(p).ToLowerInvariant())))
         {
-            var copy = _attachments.CopyFile(Task.Id, path);
-            Task.Body.Add(new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = copy });
+            // One bad file in a multi-file drop (source removed mid-drag, disk full, a name
+            // collision) used to abort the loop with _onChanged() never called - losing every
+            // file that had already copied successfully, not just the one that failed.
+            try
+            {
+                var copy = _attachments.CopyFile(Task.Id, path);
+                Task.Body.Add(new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = copy });
+                added = true;
+            }
+            catch (IOException)
+            {
+            }
         }
-        _onChanged();
+        if (added) _onChanged();
     }
 
     public void AddFilesFromPaths(IEnumerable<string> paths)
     {
+        var added = false;
         foreach (var path in paths)
         {
-            var copy = _attachments.CopyFile(Task.Id, path);
-            Task.Body.Add(new NoteBlock { Type = NoteBlockType.File, PhotoPath = copy });
+            try
+            {
+                var copy = _attachments.CopyFile(Task.Id, path);
+                Task.Body.Add(new NoteBlock { Type = NoteBlockType.File, PhotoPath = copy });
+                added = true;
+            }
+            catch (IOException)
+            {
+            }
         }
-        _onChanged();
+        if (added) _onChanged();
     }
 
     public void AddPhotoFromClipboardImage(BitmapSource image)
@@ -378,6 +397,33 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ? uri.Host : url;
     }
 
+    // Called when the user selects a different task (or none) - see MainViewModel.SelectedTask.
+    // Without this, Task/its blocks (which stay in AllTasks/Task.Body regardless of selection)
+    // would accumulate one more set of live subscriptions from a fresh TaskDetailViewModel every
+    // time the same task gets reselected over a session.
+    public void Detach()
+    {
+        Task.PropertyChanged -= Task_PropertyChanged;
+        Task.Body.CollectionChanged -= Body_CollectionChanged;
+        foreach (var block in Task.Body)
+            DetachBlock(block);
+    }
+
+    private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TaskItem.ModifiedAt))
+            OnPropertyChanged(nameof(ModifiedDisplay));
+        if (e.PropertyName is nameof(TaskItem.DueDate) or nameof(TaskItem.Recurrence))
+            OnPropertyChanged(nameof(RecurrenceSummary));
+        if (e.PropertyName is nameof(TaskItem.IsDone) or nameof(TaskItem.IsClosed))
+        {
+            OnPropertyChanged(nameof(IsEditable));
+            OnPropertyChanged(nameof(IsReadOnly));
+        }
+        if (e.PropertyName == nameof(TaskItem.IsClosed))
+            OnPropertyChanged(nameof(CanToggleComplete));
+    }
+
     private void Body_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         // Reordering (drag-and-drop) raises this as a Move, not an Add - NewItems is still
@@ -387,42 +433,70 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             foreach (NoteBlock block in e.NewItems)
                 AttachBlock(block);
 
+        // A block removed via RemoveBlockCommand can come back through its own undo entry
+        // (Task.Body.Insert) - detaching here, not just in Detach(), stops that round-trip from
+        // double-subscribing the same block.
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+            foreach (NoteBlock block in e.OldItems)
+                DetachBlock(block);
+
         OnPropertyChanged(nameof(WordCount));
     }
 
     private void AttachBlock(NoteBlock block)
     {
-        block.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(NoteBlock.Text))
-                OnPropertyChanged(nameof(WordCount));
-            _onTypingChanged();
-        };
+        block.PropertyChanged += Block_PropertyChanged;
 
         if (block.Type != NoteBlockType.Checklist) return;
 
         foreach (var item in block.ChecklistItems)
             AttachChecklistItem(item);
 
-        block.ChecklistItems.CollectionChanged += (_, e) =>
-        {
-            // Same reasoning as Body_CollectionChanged above - only re-attach on a genuine Add.
-            if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
-                foreach (ChecklistItem item in e.NewItems)
-                    AttachChecklistItem(item);
-            _onChanged();
-        };
+        block.ChecklistItems.CollectionChanged += ChecklistItems_CollectionChanged;
     }
 
-    private void AttachChecklistItem(ChecklistItem item)
+    private void DetachBlock(NoteBlock block)
     {
-        item.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(ChecklistItem.IsChecked))
-                _onChanged();
-            else
-                _onTypingChanged();
-        };
+        block.PropertyChanged -= Block_PropertyChanged;
+
+        if (block.Type != NoteBlockType.Checklist) return;
+
+        foreach (var item in block.ChecklistItems)
+            DetachChecklistItem(item);
+
+        block.ChecklistItems.CollectionChanged -= ChecklistItems_CollectionChanged;
+    }
+
+    private void Block_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(NoteBlock.Text))
+            OnPropertyChanged(nameof(WordCount));
+        _onTypingChanged();
+    }
+
+    private void ChecklistItems_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // Same reasoning as Body_CollectionChanged above - only re-attach on a genuine Add, and
+        // detach on Remove so a checklist item can't get double-subscribed either.
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
+            foreach (ChecklistItem item in e.NewItems)
+                AttachChecklistItem(item);
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+            foreach (ChecklistItem item in e.OldItems)
+                DetachChecklistItem(item);
+        _onChanged();
+    }
+
+    private void AttachChecklistItem(ChecklistItem item) => item.PropertyChanged += ChecklistItem_PropertyChanged;
+
+    private void DetachChecklistItem(ChecklistItem item) => item.PropertyChanged -= ChecklistItem_PropertyChanged;
+
+    private void ChecklistItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChecklistItem.IsChecked))
+            _onChanged();
+        else
+            _onTypingChanged();
     }
 
     public void NotifyChanged() => _onChanged();

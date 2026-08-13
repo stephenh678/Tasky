@@ -206,7 +206,7 @@
                 </Border>
                 <Button Grid.Column="1" Content="&#x2715;" Style="{StaticResource IconButton}"
                         Width="18" Height="18" FontSize="9" Opacity="0.4" VerticalAlignment="Top"
-                        ToolTip="Remove this text block"
+                        ToolTip="Remove this text block" AutomationProperties.Name="Remove this text block"
                         Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                         CommandParameter="{Binding}"/>
                 </Grid>
@@ -228,7 +228,8 @@
                     <Image Source="{Binding PhotoPath, Converter={StaticResource PathToImage}}" Stretch="Uniform" Cursor="Hand"
                            MouseLeftButtonUp="Photo_Click"/>
                 </Border>
-                <Button Content="&#x2715;" ToolTip="Remove photo" Width="22" Height="22" Padding="0" FontSize="10"
+                <Button Content="&#x2715;" ToolTip="Remove photo" AutomationProperties.Name="Remove photo"
+                        Width="22" Height="22" Padding="0" FontSize="10"
                         FontFamily="{StaticResource IconFont}"
                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,4,0"
                         Background="#DD333333" Foreground="White" BorderThickness="0"
@@ -275,11 +276,13 @@
                              Background="Transparent"/>
 
                     <Button Grid.Row="1" Grid.Column="1" Content="&#x1F517;" ToolTip="Open link"
+                            AutomationProperties.Name="Open link"
                             Style="{StaticResource IconButton}"
                             Command="{Binding DataContext.OpenBlockLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
 
                     <Button Grid.Row="1" Grid.Column="2" Content="&#x2715;" ToolTip="Remove link"
+                            AutomationProperties.Name="Remove link"
                             Style="{StaticResource IconButton}"
                             Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
@@ -319,6 +322,7 @@
                             CommandParameter="{Binding}"/>
 
                     <Button Grid.Column="3" Content="&#x2715;" ToolTip="Remove file"
+                            AutomationProperties.Name="Remove file"
                             Style="{StaticResource IconButton}" Margin="4,0,0,0"
                             Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                             CommandParameter="{Binding}"/>
@@ -347,6 +351,7 @@
                         <TextBlock Grid.Column="0" Text="CHECKLIST" FontSize="10.5" FontWeight="Bold"
                                    Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
                         <Button Grid.Column="1" Content="&#x2715;" ToolTip="Remove checklist"
+                                AutomationProperties.Name="Remove checklist"
                                 Width="18" Height="18" FontSize="9" Opacity="0.4"
                                 Style="{StaticResource IconButton}"
                                 Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -392,6 +397,7 @@
                                                    Visibility="{Binding Text, Converter={StaticResource EmptyStringToVis}}"/>
                                     </Grid>
                                     <Button Grid.Column="3" Content="&#x2715;" ToolTip="Remove item"
+                                            AutomationProperties.Name="Remove item"
                                             Width="18" Height="18" FontSize="9" Opacity="0.4"
                                             Style="{StaticResource IconButton}"
                                             Command="{Binding DataContext.RemoveChecklistItemCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
@@ -486,7 +492,7 @@
             <Button ToolTip="Focus mode (F11)" Command="{Binding ToggleFocusModeCommand}" Padding="6,3">
                 <TextBlock Text="&#x26F6; Focus"/>
             </Button>
-            <Separator/>
+            <Separator x:Name="FormattingGroupSeparator" Visibility="Collapsed"/>
             <!-- Only meaningful while a text block's RichTextBox has focus - starts disabled and
                  is toggled from code-behind (RichTextBox_GotFocus/LostFocus, and reset whenever
                  the selected task changes) since _activeEditor is code-behind state, not a bound
@@ -498,7 +504,7 @@
                  the direct item instead of these controls, each one needs that style applied
                  explicitly or it'd silently fall back to the app-wide bordered Button/ComboBox
                  style instead of the flat toolbar look. -->
-            <StackPanel x:Name="FormattingGroup" Orientation="Horizontal" IsEnabled="False">
+            <StackPanel x:Name="FormattingGroup" Orientation="Horizontal" IsEnabled="False" Visibility="Collapsed">
                 <ComboBox x:Name="FontFamilyCombo" Width="115" SelectedIndex="0"
                           Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
                           SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
@@ -601,7 +607,7 @@
                            Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
                            Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
                 <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Collapse/expand sidebar">
+                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar">
                     <TextBlock Text="&#x2630;" Style="{StaticResource IconGlyph}"/>
                 </Button>
             </Grid>
@@ -640,6 +646,7 @@
                 </Grid.ColumnDefinitions>
 
                 <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
+                        AutomationProperties.Name="New task"
                         Command="{Binding AddTaskCommand}">
                     <TextBlock Text="&#x2795;" Style="{StaticResource IconGlyph}"/>
                 </Button>
@@ -654,6 +661,7 @@
                 </Grid>
 
                 <Button x:Name="FilterButton" Grid.Column="2" Style="{StaticResource IconButton}" ToolTip="Quick filter"
+                        AutomationProperties.Name="Quick filter"
                         Command="{Binding ToggleFilterPopupCommand}">
                     <TextBlock Text="&#x2699;" Style="{StaticResource IconGlyph}"/>
                 </Button>
@@ -718,6 +726,7 @@
 
                             <CheckBox Grid.Column="0" Style="{StaticResource CircleCheckBox}"
                                       VerticalAlignment="Top" Margin="0,2,6,0" ToolTip="Mark completed"
+                                      AutomationProperties.Name="Mark completed"
                                       IsChecked="{Binding IsDone}"
                                       IsEnabled="{Binding IsClosed, Converter={StaticResource InverseBool}}"/>
 
@@ -835,10 +844,12 @@
                     <!-- Icon toolbar -->
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <CheckBox Style="{StaticResource CircleCheckBox}" VerticalAlignment="Center" Margin="0,0,10,0"
-                                  ToolTip="Mark completed" IsChecked="{Binding Task.IsDone}"
+                                  ToolTip="Mark completed" AutomationProperties.Name="Mark completed"
+                                  IsChecked="{Binding Task.IsDone}"
                                   IsEnabled="{Binding CanToggleComplete}"/>
 
                         <Button Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="{Binding Task.IsPinned, Converter={StaticResource PinLabel}}"
                                 Command="{Binding DataContext.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding Task}">
                             <Button.ToolTip>
@@ -861,23 +872,28 @@
                         <Separator Width="8" Background="Transparent"/>
 
                         <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddTextBlockCommand}" ToolTip="Add text (Ctrl+Shift+T)">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddTextBlockCommand}" ToolTip="Add text (Ctrl+Shift+T)"
+                                    AutomationProperties.Name="Add text block">
                                 <TextBlock Text="&#x1F4DD;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddPhotoBlockCommand}" ToolTip="Add photo (Ctrl+Shift+P)">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddPhotoBlockCommand}" ToolTip="Add photo (Ctrl+Shift+P)"
+                                    AutomationProperties.Name="Add photo">
                                 <TextBlock Text="&#x1F5BC;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddLinkBlockCommand}" ToolTip="Add link (Ctrl+Shift+L)">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddLinkBlockCommand}" ToolTip="Add link (Ctrl+Shift+L)"
+                                    AutomationProperties.Name="Add link">
                                 <TextBlock Text="&#x1F517;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddFileBlockCommand}" ToolTip="Add file (Ctrl+Shift+F)">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddFileBlockCommand}" ToolTip="Add file (Ctrl+Shift+F)"
+                                    AutomationProperties.Name="Add file">
                                 <TextBlock Text="&#x1F4CE;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Command="{Binding AddChecklistBlockCommand}" ToolTip="Add checklist (Ctrl+Shift+C)">
+                            <Button Style="{StaticResource IconButton}" Command="{Binding AddChecklistBlockCommand}" ToolTip="Add checklist (Ctrl+Shift+C)"
+                                    AutomationProperties.Name="Add checklist">
                                 <TextBlock Text="&#x2611;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button x:Name="TagIconButton" Style="{StaticResource IconButton}"
-                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Add tag">
+                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Add tag" AutomationProperties.Name="Add tag">
                                 <TextBlock Text="&#x1F3F7;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Popup PlacementTarget="{Binding ElementName=TagIconButton}" Placement="Bottom"
@@ -922,6 +938,7 @@
                         <Separator Width="8" Background="Transparent"/>
 
                         <Button Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="{Binding Task.IsClosed, Converter={StaticResource CloseReopenLabel}}"
                                 Command="{Binding DataContext.ToggleCloseSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
                             <Button.ToolTip>
                                 <Binding Path="Task.IsClosed" Converter="{StaticResource CloseReopenLabel}"/>
@@ -934,11 +951,13 @@
                         </Button>
 
                         <Button Style="{StaticResource IconButton}" ToolTip="Delete permanently"
+                                AutomationProperties.Name="Delete permanently"
                                 Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
                             <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}" Foreground="{DynamicResource DangerBrush}"/>
                         </Button>
 
-                        <Button Style="{StaticResource IconButton}" ToolTip="Info" Command="{Binding ToggleInfoPanelCommand}">
+                        <Button Style="{StaticResource IconButton}" ToolTip="Info" AutomationProperties.Name="Info"
+                                Command="{Binding ToggleInfoPanelCommand}">
                             <TextBlock Text="&#x24D8;" Style="{StaticResource IconGlyph}"/>
                         </Button>
                     </StackPanel>

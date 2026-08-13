@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyTitle>Tasky</AssemblyTitle>
+    <Product>Tasky</Product>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\icon.ico"/>
+    <!-- UseWindowsForms (needed for NotifyIcon, used for reminder notifications) auto-adds a
+         GLOBAL implicit using for System.Windows.Forms project-wide, which collides with WPF's
+         System.Windows/.Controls/.Input/.Media everywhere (Application, Brush, RichTextBox, etc.
+         all exist in both). Strip just that one global using; NotificationService.cs still gets
+         it via its own explicit "using System.Windows.Forms;". -->
+    <Using Remove="System.Windows.Forms"/>
+    <Using Remove="System.Drawing"/>
+  </ItemGroup>
+
+</Project>

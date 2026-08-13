@@ -1,0 +1,28 @@
+<Window x:Class="TodoApp.ThemedMessageBoxWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Tasky" Height="180" Width="420" MinHeight="150" MinWidth="340"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Icon="Assets/icon.ico"
+        Background="{DynamicResource BackgroundBrush}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+            <TextBlock x:Name="IconText" FontSize="26" Margin="0,0,16,0" VerticalAlignment="Top"/>
+            <TextBlock x:Name="MessageText" TextWrapping="Wrap" FontSize="13.5" MaxWidth="320"
+                       Foreground="{DynamicResource PrimaryTextBrush}" VerticalAlignment="Top"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="YesButton" Content="Yes" Padding="16,7" Margin="0,0,8,0" Click="Yes_Click"/>
+            <Button x:Name="NoButton" Content="No" Padding="16,7" Margin="0,0,8,0" Click="No_Click"/>
+            <Button x:Name="OkButton" Content="OK" Padding="16,7" Margin="0,0,8,0" Click="Ok_Click"/>
+            <Button x:Name="CancelButton" Content="Cancel" Padding="16,7" Click="Cancel_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

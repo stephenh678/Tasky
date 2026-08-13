@@ -72,16 +72,19 @@ dotnet run
 dotnet build
 ```
 
-## Produce a standalone .exe
+## Produce a standalone build
 
-To get a single, double-click-able executable that doesn't require the .NET SDK on the target
-machine:
+To get a build that doesn't require the .NET SDK on the target machine:
 
 ```bash
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
 ```
 
-The result lands in `publish\TodoApp.exe`.
+The result lands in `publish\`. Despite `PublishSingleFile`, WPF's native rendering libraries
+(`D3DCompiler_47_cor3.dll`, `wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `PenImc_cor3.dll`,
+`vcruntime140_cor3.dll`) can't be embedded and are published alongside `TodoApp.exe` as separate
+files — **the whole `publish\` folder is the deliverable, not the exe by itself.** Zip the folder
+if you're distributing it; the exe won't launch on its own without those DLLs next to it.
 
 ## Data storage
 

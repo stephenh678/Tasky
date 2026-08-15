@@ -122,7 +122,7 @@
     </Style>
 
     <ControlTemplate x:Key="MenuItemLeafTemplate" TargetType="MenuItem">
-        <Border x:Name="Bd" Background="{TemplateBinding Background}" Padding="8,5">
+        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="8,6" Margin="2,1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="20"/>
@@ -159,7 +159,10 @@
                 <Popup x:Name="PART_Popup" Placement="Bottom" IsOpen="{TemplateBinding IsSubmenuOpen}"
                        AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
                     <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                            BorderThickness="1" Padding="2">
+                            BorderThickness="1" CornerRadius="6" Padding="3" Margin="0,2,0,0">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.35" Color="#000000"/>
+                        </Border.Effect>
                         <ItemsPresenter/>
                     </Border>
                 </Popup>
@@ -173,7 +176,7 @@
     </ControlTemplate>
 
     <ControlTemplate x:Key="MenuItemSubmenuHeaderTemplate" TargetType="MenuItem">
-        <Border x:Name="Bd" Background="{TemplateBinding Background}" Padding="8,5">
+        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="8,6" Margin="2,1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="20"/>
@@ -186,7 +189,10 @@
                 <Popup x:Name="PART_Popup" Placement="Right" IsOpen="{TemplateBinding IsSubmenuOpen}"
                        AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
                     <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                            BorderThickness="1" Padding="2">
+                            BorderThickness="1" CornerRadius="6" Padding="3">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.35" Color="#000000"/>
+                        </Border.Effect>
                         <ItemsPresenter/>
                     </Border>
                 </Popup>
@@ -244,7 +250,10 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
                     <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                            BorderThickness="1" Padding="2">
+                            BorderThickness="1" CornerRadius="6" Padding="3">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.35" Color="#000000"/>
+                        </Border.Effect>
                         <ItemsPresenter/>
                     </Border>
                 </ControlTemplate>
@@ -261,10 +270,17 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Separator">
-                    <Border Background="{TemplateBinding Background}" Height="1"/>
+                    <Border Background="{TemplateBinding Background}" Height="1" Margin="{TemplateBinding Margin}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- WPF MenuItem popups apply MenuItem.SeparatorStyleKey to separators inside dropdown menus,
+         which defaults to Aero2's 3/4 white line. Overriding it here matches the app theme. -->
+    <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator" BasedOn="{StaticResource {x:Type Separator}}">
+        <Setter Property="Background" Value="{DynamicResource SecondaryBrush}"/>
+        <Setter Property="Margin" Value="4,4"/>
     </Style>
 
     <Style TargetType="ToolBar">

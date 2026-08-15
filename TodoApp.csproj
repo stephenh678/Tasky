@@ -15,15 +15,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\icon.ico"/>
+    <Resource Include="Assets\icon.ico" />
     <!-- UseWindowsForms (needed for NotifyIcon, used for the tray icon and reminder
          notifications) auto-adds a GLOBAL implicit using for System.Windows.Forms
          project-wide, which collides with WPF's System.Windows/.Controls/.Input/.Media
          everywhere (Application, Brush, RichTextBox, etc. all exist in both). Strip just
          that one global using; TrayIconService.cs still gets it via its own explicit
          "using System.Windows.Forms;". -->
-    <Using Remove="System.Windows.Forms"/>
-    <Using Remove="System.Drawing"/>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Apis.Drive.v3" Version="1.75.0.4218" />
   </ItemGroup>
 
 </Project>

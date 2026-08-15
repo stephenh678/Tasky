@@ -13,4 +13,11 @@ public class Settings
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
     public bool IsVerboseLogging { get; set; } = false;
+    public bool IsGoogleDriveEnabled { get; set; } = false;
+    public string? GoogleDriveFileId { get; set; }
+    public string? GoogleDriveAccountEmail { get; set; }
+    public string? GoogleDriveClientId { get; set; }
+    public string? GoogleDriveClientSecret { get; set; }
+    public DateTime? LastGoogleDriveSyncTime { get; set; }
+    public List<string> LastSyncedMediaFiles { get; set; } = new();
 }

@@ -114,10 +114,17 @@ Tasky stores its data as a `.tasky` file (plain JSON under the hood) at
 with a different file or location. Rolling backups live alongside the data file in a `Backups`
 folder; attachments live in an `Attachments` folder the same way.
 
+### Cloud Sync & Backup
+- **Google Drive Integration** — optional 1-click Google sign-in to sync your task files and attachments across computers
+- **Automatic Background Live Sync** — debounced auto-sync uploads task edits and media 10 seconds after you finish typing
+- **Folder & Attachment Syncing** — stores files safely in a dedicated `Tasky` folder and `Tasky/Attachments/` subfolder on Google Drive
+- **Shutdown Protection & Conflict Detection** — forces sync on application close and alerts you if a newer remote file exists
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 |---|---|
+| `F1` or `Ctrl+?` | Show keyboard shortcuts cheat sheet |
 | `Ctrl+N` | New task |
 | `Delete` | Delete selected task(s) |
 | `Ctrl+Z` | Undo |

@@ -136,18 +136,17 @@ public partial class MainWindow : Window
         {
             if (_readyToClose) return;
             e.Cancel = true;
+
             if (_flushInProgress) return;
             _flushInProgress = true;
 
             var wasMaximized = WindowState == WindowState.Maximized;
             var isMinimized = WindowState == WindowState.Minimized;
             var bounds = (wasMaximized || isMinimized) ? RestoreBounds : new Rect(Left, Top, Width, Height);
+
             Hide();
 
-            // If the flush itself throws (e.g. a locked file mid-shutdown), everything below MUST
-            // still run - otherwise _readyToClose never gets set, the window is already hidden,
-            // and every future close attempt just re-cancels forever: an invisible, unkillable
-            // process. Closing with a possibly-unsaved last edit beats that outcome.
+            // 1. Flush any pending local changes to disk
             try
             {
                 await _viewModel.FlushPendingSaveAsync();
@@ -157,9 +156,21 @@ public partial class MainWindow : Window
                 App.LogException(ex);
             }
 
-            // SaveWindowState/Shutdown get the same "must not prevent shutdown" treatment as the
-            // flush above - SettingsStore.Save already swallows its own write failures, but
-            // wrapping this too means the guarantee holds even if something in here changes later.
+            // 2. Force Google Drive sync on app exit if connected
+            try
+            {
+                if (_viewModel.IsGoogleDriveConnected)
+                {
+                    AppLogger.Info("MainWindow", "Forcing Google Drive sync on application shutdown...");
+                    await _viewModel.PerformGoogleDriveSyncAsync(isSilentOnExit: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("MainWindow", "Shutdown Google Drive sync error", ex);
+            }
+
+            // 3. Save window state and clean up tray resources
             try
             {
                 if (bounds.Width > 100 && bounds.Height > 100 && !double.IsNaN(bounds.Left) && !double.IsNaN(bounds.Top) && bounds.Left > -10000 && bounds.Top > -10000)
@@ -174,7 +185,7 @@ public partial class MainWindow : Window
             }
 
             _readyToClose = true;
-            Application.Current.Shutdown();
+            Dispatcher.Invoke(Close);
         };
     }
 
@@ -462,8 +473,17 @@ public partial class MainWindow : Window
         TaskListBox.SelectedItem = task;
     }
 
+    private void ShowShortcuts_Click(object sender, RoutedEventArgs e) => new ShortcutsWindow { Owner = this }.ShowDialog();
+
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.F1 || (e.Key == Key.OemQuestion && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
+        {
+            ShowShortcuts_Click(sender, e);
+            e.Handled = true;
+            return;
+        }
+
         if (_viewModel.SelectedTaskDetail is null) return;
 
         // Shortcuts:

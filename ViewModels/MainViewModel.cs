@@ -22,6 +22,7 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly SettingsStore _settingsStore = new();
     private readonly TrayIconService _tray = new();
     private readonly AttachmentService _attachments;
+    private readonly GoogleDriveService _googleDrive = new();
     private readonly Settings _settings;
     // Never reassigned after construction (see LoadFile) - AllTasks below is a passthrough to
     // _state.Tasks, and FilteredTasksView wraps that same collection instance once in the
@@ -56,6 +57,7 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isRestoringBackup;
     private bool _isExecutingUndo;
     private bool _reminderCheckInProgress;
+    private readonly DispatcherTimer _autoSyncTimer;
 
     // A passthrough, not an independent collection - _state.Tasks is now the single source of
     // truth for both "what's saved" and "what's shown", instead of the two being manually kept in
@@ -289,6 +291,14 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand RestoreBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
+    public RelayCommand GoogleDriveCommand { get; private set; } = null!;
+    public RelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
+
+    public bool IsGoogleDriveConnected => _googleDrive.IsAuthenticated;
+
+    public string GoogleDriveStatusTooltip => _googleDrive.IsAuthenticated
+        ? $"Google Drive: Connected ({_settings.GoogleDriveAccountEmail ?? "Authorized"})\nLast synced: {(_settings.LastGoogleDriveSyncTime.HasValue ? _settings.LastGoogleDriveSyncTime.Value.ToString("g") : "Never")}"
+        : "Google Drive: Disconnected (Click to configure)";
 
     public event Action? FocusTitleRequested;
 
@@ -318,6 +328,17 @@ public class MainViewModel : INotifyPropertyChanged
         _reminderTimer.Tick += (_, _) => CheckReminders();
         _reminderTimer.Start();
 
+        _autoSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        _autoSyncTimer.Tick += async (_, _) =>
+        {
+            _autoSyncTimer.Stop();
+            if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated)
+            {
+                AppLogger.Info("MainViewModel", "Triggering debounced background auto-sync to Google Drive...");
+                await PerformGoogleDriveSyncAsync(isSilentOnExit: true);
+            }
+        };
+
         InitializeTaskCommands();
         InitializeViewCommands();
         InitializeFileCommands();
@@ -325,6 +346,22 @@ public class MainViewModel : INotifyPropertyChanged
 
         LoadFile(initialPath, restoreSelection: true);
         CheckReminders();
+
+        if (_settings.IsGoogleDriveEnabled)
+        {
+            Task.Run(async () =>
+            {
+                var authed = await _googleDrive.TrySilentAuthenticateAsync(_settings.GoogleDriveClientId, _settings.GoogleDriveClientSecret);
+                if (authed)
+                {
+                    Application.Current?.Dispatcher.Invoke(() =>
+                    {
+                        OnPropertyChanged(nameof(IsGoogleDriveConnected));
+                        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+                    });
+                }
+            });
+        }
     }
 
     // Everything that acts on the single SelectedTask (or the ambient single/multi TargetTasks()
@@ -540,6 +577,139 @@ public class MainViewModel : INotifyPropertyChanged
             AppLogger.ClearLogFile();
             ThemedMessageBox.Show("Debug log file has been cleared.", "Debug Log", MessageBoxButton.OK, MessageBoxImage.Information);
         });
+
+        GoogleDriveCommand = new RelayCommand(_ => OpenGoogleDriveWindow());
+
+        SyncGoogleDriveNowCommand = new RelayCommand(async _ => await PerformGoogleDriveSyncAsync());
+    }
+
+    private void OpenGoogleDriveWindow()
+    {
+        var window = new GoogleDriveWindow(_googleDrive, _settings, _settingsStore, () => PerformGoogleDriveSyncAsync())
+        {
+            Owner = Application.Current?.MainWindow
+        };
+        window.ShowDialog();
+        OnPropertyChanged(nameof(IsGoogleDriveConnected));
+        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+    }
+
+    public async Task PerformGoogleDriveSyncAsync(bool isSilentOnExit = false)
+    {
+        if (!_googleDrive.IsAuthenticated)
+        {
+            if (!isSilentOnExit) OpenGoogleDriveWindow();
+            return;
+        }
+
+        try
+        {
+            SaveStatusText = "Syncing with Google Drive...";
+            await FlushPendingSaveAsync();
+
+            var remoteId = _settings.GoogleDriveFileId;
+
+            // Check remote modified timestamp if remoteId exists
+            if (!string.IsNullOrEmpty(remoteId))
+            {
+                var remoteModified = await _googleDrive.GetRemoteModifiedTimeAsync(remoteId);
+                var localInfo = new FileInfo(_currentFilePath);
+
+                if (remoteModified.HasValue && localInfo.Exists && remoteModified.Value > localInfo.LastWriteTime.AddSeconds(2))
+                {
+                    // Check if local file was NOT modified since the last sync (clean remote update from another device)
+                    bool localUnmodifiedSinceSync = _settings.LastGoogleDriveSyncTime.HasValue &&
+                                                    localInfo.LastWriteTime <= _settings.LastGoogleDriveSyncTime.Value.AddSeconds(5);
+
+                    if (localUnmodifiedSinceSync)
+                    {
+                        // Clean remote update: download newer file from Google Drive safely
+                        AppLogger.Info("MainViewModel", $"Remote Google Drive file is newer ({remoteModified.Value:g}). Downloading automatically.");
+                        await _googleDrive.DownloadFileAsync(remoteId, _currentFilePath);
+                        LoadFile(_currentFilePath);
+                        _settings.LastGoogleDriveSyncTime = DateTime.Now;
+                        _settingsStore.Save(_settings);
+                        SaveStatusText = "Downloaded latest tasks from Google Drive.";
+                        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+                        OnPropertyChanged(nameof(IsGoogleDriveConnected));
+                        return;
+                    }
+                    else
+                    {
+                        // Conflict: Both local and remote have edits!
+                        if (!isSilentOnExit)
+                        {
+                            var choice = ThemedMessageBox.Show(
+                                $"A newer version of your tasks was found on Google Drive (modified {remoteModified.Value:g}).\n\n" +
+                                "Do you want to download the remote version from Google Drive?\n" +
+                                "Click 'Yes' to download remote version, or 'No' to overwrite Google Drive with your local version.",
+                                "Google Drive Sync Conflict",
+                                MessageBoxButton.YesNoCancel,
+                                MessageBoxImage.Question);
+
+                            if (choice == MessageBoxResult.Cancel)
+                            {
+                                SaveStatusText = "Google Drive sync cancelled.";
+                                return;
+                            }
+
+                            if (choice == MessageBoxResult.Yes)
+                            {
+                                await _googleDrive.DownloadFileAsync(remoteId, _currentFilePath);
+                                LoadFile(_currentFilePath);
+                                _settings.LastGoogleDriveSyncTime = DateTime.Now;
+                                _settingsStore.Save(_settings);
+                                SaveStatusText = "Downloaded latest tasks from Google Drive.";
+                                OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+                                OnPropertyChanged(nameof(IsGoogleDriveConnected));
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // In silent background mode, do not overwrite a newer remote file!
+                            AppLogger.Warn("MainViewModel", $"Background auto-sync paused: Remote file on Google Drive is newer ({remoteModified.Value:g}).");
+                            SaveStatusText = "Google Drive sync paused: Remote file is newer. Click ☁️ to resolve.";
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Upload local file to Google Drive
+            var newRemoteId = await _googleDrive.UploadFileAsync(_currentFilePath, remoteId, _settings, _settingsStore);
+            _settings.GoogleDriveFileId = newRemoteId;
+            _settings.LastGoogleDriveSyncTime = DateTime.Now;
+            _settingsStore.Save(_settings);
+
+            SaveStatusText = "Successfully synced to Google Drive.";
+            OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+            OnPropertyChanged(nameof(IsGoogleDriveConnected));
+        }
+        catch (Google.GoogleApiException gEx) when (gEx.Message.Contains("disabled") || gEx.Message.Contains("has not been used"))
+        {
+            SaveStatusText = "Google Drive API is disabled in your Google Cloud Console.";
+            AppLogger.Error("MainViewModel", "Google Drive API disabled", gEx);
+            if (!isSilentOnExit)
+            {
+                ThemedMessageBox.Show(
+                    "Google Drive API is disabled in your Google Cloud Console project.\n\n" +
+                    "Please click below to open Google Cloud Console and click 'ENABLE' on the Google Drive API page:\n" +
+                    "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=395690152006",
+                    "Google Drive API Disabled",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            SaveStatusText = $"Google Drive sync failed: {ex.Message}";
+            AppLogger.Error("MainViewModel", "Google Drive sync error", ex);
+            if (!isSilentOnExit)
+            {
+                ThemedMessageBox.Show($"Google Drive sync failed:\n{ex.Message}", "Google Drive Sync Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
     }
 
     // Undo, and every Bulk* command driven by the task list's multi-selection (SelectedTasks)
@@ -607,28 +777,106 @@ public class MainViewModel : INotifyPropertyChanged
         }, _ => SelectedTasks.Count > 0);
     }
 
-    private void CleanupTaskAttachments(TaskItem task)
+    private void CleanupTaskAttachments(TaskItem deletedTask)
+    {
+        CleanupTaskAttachments(new[] { deletedTask });
+    }
+
+    private void CleanupTaskAttachments(IEnumerable<TaskItem> deletedTasks)
     {
         try
         {
-            _attachments.DeleteTaskFolder(task.Id);
+            var deletedTaskList = deletedTasks.ToList();
+            if (deletedTaskList.Count == 0) return;
 
-            var taskDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky", "Attachments", task.Id.ToString());
-            if (Directory.Exists(taskDir))
+            // 1. Extract referenced media filenames from deleted tasks
+            var deletedMediaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var task in deletedTaskList)
             {
-                Directory.Delete(taskDir, recursive: true);
-                AppLogger.Info("MainViewModel", $"Deleted task attachment folder: '{taskDir}'");
+                ExtractTaskMediaFilenames(task, deletedMediaFiles);
             }
 
-            foreach (var block in task.Body)
+            if (deletedMediaFiles.Count == 0) return;
+
+            // 2. Extract referenced media filenames from all remaining tasks
+            var remainingTasks = AllTasks.Except(deletedTaskList);
+            var remainingMediaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var task in remainingTasks)
             {
-                if (!string.IsNullOrWhiteSpace(block.PhotoPath))
-                    _attachments.DeleteFile(block.PhotoPath);
+                ExtractTaskMediaFilenames(task, remainingMediaFiles);
+            }
+
+            // 3. Delete orphaned local attachment and inline image files
+            var baseDocDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
+            var attachmentsDir = Path.Combine(baseDocDir, "Attachments");
+            var inlineImagesDir = Path.Combine(baseDocDir, "InlineImages");
+
+            foreach (var fileName in deletedMediaFiles)
+            {
+                if (!remainingMediaFiles.Contains(fileName))
+                {
+                    // Check Attachments folder
+                    var attPath = Path.Combine(attachmentsDir, fileName);
+                    if (File.Exists(attPath))
+                    {
+                        try
+                        {
+                            File.Delete(attPath);
+                            AppLogger.Info("MainViewModel", $"Deleted orphaned local attachment file: '{attPath}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Warn("MainViewModel", $"Failed to delete local attachment '{attPath}': {ex.Message}");
+                        }
+                    }
+
+                    // Check InlineImages folder
+                    var imgPath = Path.Combine(inlineImagesDir, fileName);
+                    if (File.Exists(imgPath))
+                    {
+                        try
+                        {
+                            File.Delete(imgPath);
+                            AppLogger.Info("MainViewModel", $"Deleted orphaned local inline image file: '{imgPath}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Warn("MainViewModel", $"Failed to delete local inline image '{imgPath}': {ex.Message}");
+                        }
+                    }
+                }
             }
         }
         catch (Exception ex)
         {
-            AppLogger.Error("MainViewModel", $"Failed to cleanup attachments for task {task.Id}", ex);
+            AppLogger.Error("MainViewModel", "Failed to cleanup task attachments", ex);
+        }
+    }
+
+    private static void ExtractTaskMediaFilenames(TaskItem task, HashSet<string> set)
+    {
+        if (task.Body is null) return;
+        foreach (var block in task.Body)
+        {
+            if (!string.IsNullOrEmpty(block.PhotoPath))
+            {
+                var pName = Path.GetFileName(block.PhotoPath);
+                if (!string.IsNullOrEmpty(pName)) set.Add(pName);
+            }
+            if (!string.IsNullOrEmpty(block.Rtf))
+            {
+                foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(block.Rtf, @"[a-zA-Z0-9_\-]{3,}\.(png|jpg|jpeg|gif|bmp|pdf|docx|xlsx|zip|txt)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    set.Add(match.Value);
+                }
+            }
+            if (!string.IsNullOrEmpty(block.Text))
+            {
+                foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(block.Text, @"[a-zA-Z0-9_\-]{3,}\.(png|jpg|jpeg|gif|bmp|pdf|docx|xlsx|zip|txt)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    set.Add(match.Value);
+                }
+            }
         }
     }
 
@@ -994,12 +1242,26 @@ public class MainViewModel : INotifyPropertyChanged
             await _store.SaveAsync(_state, _currentFilePath);
             if (generation == _saveGeneration)
                 SaveStatusText = "Saved";
+
+            ScheduleGoogleDriveAutoSync();
         }
         catch (Exception ex)
         {
             App.LogException(ex);
             if (generation == _saveGeneration)
                 SaveStatusText = "Save failed - will retry on next edit";
+        }
+    }
+
+    private void ScheduleGoogleDriveAutoSync()
+    {
+        if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated)
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                _autoSyncTimer.Stop();
+                _autoSyncTimer.Start();
+            });
         }
     }
 

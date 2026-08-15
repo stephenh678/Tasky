@@ -47,6 +47,7 @@
         <conv:EmptyStringToVisibilityConverter x:Key="EmptyStringToVis"/>
         <conv:MarkCompletedVisibilityConverter x:Key="MarkCompletedVis"/>
         <conv:InverseBooleanConverter x:Key="InverseBool"/>
+        <conv:BoolToStatusBrushConverter x:Key="BoolToStatusBrush"/>
 
         <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
              auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
@@ -184,48 +185,84 @@
     </Window.Resources>
 
     <DockPanel>
-        <Menu DockPanel.Dock="Top" Background="{DynamicResource SidebarBackgroundBrush}"
-              BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,0,0,1">
-            <MenuItem Header="_File" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
-                <MenuItem Header="_New Task" InputGestureText="Ctrl+N" Command="{Binding AddTaskCommand}"/>
-                <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
-                <Separator/>
-                <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
-                <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
-                <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
-                <MenuItem Header="Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
-                <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
-                <Separator/>
-                <MenuItem Header="E_xit" Click="Exit_Click"/>
-            </MenuItem>
-            <MenuItem Header="_Edit" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
-                <MenuItem Header="{Binding UndoMenuLabel}" InputGestureText="Ctrl+Z" Command="{Binding UndoCommand}"/>
-                <Separator/>
-                <MenuItem Header="Cu_t" Command="Cut"/>
-                <MenuItem Header="_Copy" Command="Copy"/>
-                <MenuItem Header="_Paste" Command="Paste"/>
-            </MenuItem>
-            <MenuItem Header="_View" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
-                <MenuItem Header="_All Tasks" Command="{Binding ShowAllCommand}"/>
-                <MenuItem Header="_Completed" Command="{Binding ShowClosedCommand}"/>
-                <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
-                <Separator/>
-                <MenuItem Header="_Dark Theme" IsCheckable="True" IsChecked="{Binding IsDarkTheme}"/>
-                <MenuItem Header="F_ocus Mode" InputGestureText="F11" IsCheckable="True" IsChecked="{Binding IsFocusMode}"/>
-                <MenuItem Header="_Reminders" IsCheckable="True" IsChecked="{Binding RemindersEnabled}"/>
-            </MenuItem>
-            <MenuItem Header="_Window" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
-                <MenuItem Header="Always on _Top" IsCheckable="True" Checked="AlwaysOnTop_Checked" Unchecked="AlwaysOnTop_Unchecked"/>
-            </MenuItem>
-            <MenuItem Header="_Help" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
-                <MenuItem Header="Open _Debug Log File..." Click="OpenDebugLog_Click"/>
-                <MenuItem Header="_Clear Debug Log File..." Command="{Binding ClearDebugLogCommand}"/>
-                <Separator/>
-                <MenuItem Header="_Verbose Logging" IsCheckable="True" IsChecked="{Binding IsVerboseLogging}"/>
-                <Separator/>
-                <MenuItem Header="_About Tasky" Click="About_Click"/>
-            </MenuItem>
-        </Menu>
+        <Grid DockPanel.Dock="Top" Background="{DynamicResource SidebarBackgroundBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Menu Grid.Column="0" Background="{DynamicResource SidebarBackgroundBrush}"
+                  BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,0,0,1">
+                <MenuItem Header="_File" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_New Task" InputGestureText="Ctrl+N" Command="{Binding AddTaskCommand}"/>
+                    <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
+                    <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
+                    <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
+                    <MenuItem Header="Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
+                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="_Sync Google Drive Now" Command="{Binding SyncGoogleDriveNowCommand}"/>
+                    <MenuItem Header="Google Drive _Settings..." Command="{Binding GoogleDriveCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="E_xit" Click="Exit_Click"/>
+                </MenuItem>
+                <MenuItem Header="_Edit" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="{Binding UndoMenuLabel}" InputGestureText="Ctrl+Z" Command="{Binding UndoCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Cu_t" Command="Cut"/>
+                    <MenuItem Header="_Copy" Command="Copy"/>
+                    <MenuItem Header="_Paste" Command="Paste"/>
+                </MenuItem>
+                <MenuItem Header="_View" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_All Tasks" Command="{Binding ShowAllCommand}"/>
+                    <MenuItem Header="_Completed" Command="{Binding ShowClosedCommand}"/>
+                    <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="_Dark Theme" IsCheckable="True" IsChecked="{Binding IsDarkTheme}"/>
+                    <MenuItem Header="F_ocus Mode" InputGestureText="F11" IsCheckable="True" IsChecked="{Binding IsFocusMode}"/>
+                    <MenuItem Header="_Reminders" IsCheckable="True" IsChecked="{Binding RemindersEnabled}"/>
+                </MenuItem>
+                <MenuItem Header="_Window" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="Always on _Top" IsCheckable="True" Checked="AlwaysOnTop_Checked" Unchecked="AlwaysOnTop_Unchecked"/>
+                </MenuItem>
+                <MenuItem Header="_Help" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_Keyboard Shortcuts..." InputGestureText="F1" Click="ShowShortcuts_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Open _Debug Log File..." Click="OpenDebugLog_Click"/>
+                    <MenuItem Header="_Clear Debug Log File..." Command="{Binding ClearDebugLogCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="_Verbose Logging" IsCheckable="True" IsChecked="{Binding IsVerboseLogging}"/>
+                    <Separator/>
+                    <MenuItem Header="_About Tasky" Click="About_Click"/>
+                </MenuItem>
+            </Menu>
+
+            <!-- Prominent Google Drive Status Icon Button -->
+            <Button Grid.Column="1" Command="{Binding SyncGoogleDriveNowCommand}"
+                    ToolTip="{Binding GoogleDriveStatusTooltip}"
+                    Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
+                    Background="Transparent" BorderThickness="0" Cursor="Hand">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Sync Google Drive Now" Command="{Binding SyncGoogleDriveNowCommand}"/>
+                        <MenuItem Header="Google Drive Settings..." Command="{Binding GoogleDriveCommand}"/>
+                    </ContextMenu>
+                </Button.ContextMenu>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                        <Canvas Width="87.3" Height="78">
+                            <Path Fill="#FFD04B" Data="M 6,52 L 21.5,78 L 81.3,78 L 65.8,52 Z"/>
+                            <Path Fill="#0F9D58" Data="M 65.8,52 L 81.3,78 L 51.7,26 L 36.2,0 Z"/>
+                            <Path Fill="#4285F4" Data="M 36.2,0 L 6,52 L 21.5,78 L 51.7,26 Z"/>
+                        </Canvas>
+                    </Viewbox>
+                    <Ellipse Width="8" Height="8" Margin="6,0,0,0" VerticalAlignment="Center"
+                             Fill="{Binding IsGoogleDriveConnected, Converter={StaticResource BoolToStatusBrush}}"/>
+                </StackPanel>
+            </Button>
+        </Grid>
 
         <ToolBar DockPanel.Dock="Top" ToolBarTray.IsLocked="True"
                  Background="{DynamicResource SidebarBackgroundBrush}">
@@ -601,9 +638,10 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,20"
                           DataContext="{Binding SelectedTaskDetail}">
                 <StackPanel>
-                    <!-- Icon toolbar - sits above the title, like a ribbon above the document itself. -->
-                    <StackPanel Orientation="Horizontal">
-                        <CheckBox Style="{StaticResource CircleCheckBox}" VerticalAlignment="Center" Margin="0,0,10,0"
+                    <!-- Icon toolbar - grouped logically into functional clusters with subtle vertical dividers -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Group 1: Task State & Metadata -->
+                        <CheckBox Style="{StaticResource CircleCheckBox}" VerticalAlignment="Center" Margin="0,0,6,0"
                                   ToolTip="Mark completed" AutomationProperties.Name="Mark completed"
                                   IsChecked="{Binding Task.IsDone}"
                                   IsEnabled="{Binding CanToggleComplete}"/>
@@ -629,8 +667,52 @@
                             </TextBlock>
                         </Button>
 
-                        <Separator Width="8" Background="Transparent"/>
+                        <Button x:Name="TagIconButton" Style="{StaticResource IconButton}" IsEnabled="{Binding IsEditable}"
+                                Command="{Binding ToggleTagPopupCommand}" ToolTip="Manage tags" AutomationProperties.Name="Manage tags">
+                            <TextBlock Text="&#x1F3F7;" Style="{StaticResource IconGlyph}"/>
+                        </Button>
+                        <Popup PlacementTarget="{Binding ElementName=TagIconButton}" Placement="Bottom"
+                               IsOpen="{Binding IsTagPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
+                            <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                                    BorderThickness="1" CornerRadius="3" Padding="8">
+                                <StackPanel Width="200">
+                                    <TextBox Text="{Binding NewTagText, UpdateSourceTrigger=PropertyChanged}"
+                                             Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Type a tag and press Enter"
+                                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                                             ContextMenuOpening="TextBox_ContextMenuOpening">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Return" Command="{Binding AddTagCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <TextBlock Text="{Binding TagHint}" FontSize="10.5" Margin="2,4,2,0"
+                                               Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                                    <ItemsControl ItemsSource="{Binding FilteredAvailableTags}" Margin="0,6,0,0"
+                                                  MaxHeight="180">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button HorizontalContentAlignment="Left" Padding="6,4" Margin="0,0,0,1"
+                                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                        Command="{Binding DataContext.SelectExistingTagCommand, RelativeSource={RelativeSource AncestorType=Popup}}"
+                                                        CommandParameter="{Binding}">
+                                                    <TextBlock Text="{Binding}" FontSize="12.5"/>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
 
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
+
+                        <!-- Group 2: Note Content Insertion Tools -->
                         <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
                             <Button Style="{StaticResource IconButton}" Click="AddPhoto_Click" ToolTip="Add photo inline (Ctrl+Shift+P)"
                                     AutomationProperties.Name="Add photo">
@@ -652,55 +734,25 @@
                                     AutomationProperties.Name="Add file">
                                 <TextBlock Text="&#x1F4CE;" Style="{StaticResource IconGlyph}"/>
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Click="ExportNote_Click" ToolTip="Export / Print Note (Ctrl+E)"
-                                    AutomationProperties.Name="Export note">
-                                <TextBlock Text="&#x1F4E4;" Style="{StaticResource IconGlyph}"/>
-                            </Button>
-                            <Button x:Name="TagIconButton" Style="{StaticResource IconButton}"
-                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Add tag" AutomationProperties.Name="Add tag">
-                                <TextBlock Text="&#x1F3F7;" Style="{StaticResource IconGlyph}"/>
-                            </Button>
-                            <Popup PlacementTarget="{Binding ElementName=TagIconButton}" Placement="Bottom"
-                                   IsOpen="{Binding IsTagPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
-                                <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
-                                        BorderThickness="1" CornerRadius="3" Padding="8">
-                                    <StackPanel Width="200">
-                                        <TextBox Text="{Binding NewTagText, UpdateSourceTrigger=PropertyChanged}"
-                                                 Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Type a tag and press Enter"
-                                                 SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
-                                                 PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
-                                                 ContextMenuOpening="TextBox_ContextMenuOpening">
-                                            <TextBox.InputBindings>
-                                                <KeyBinding Key="Return" Command="{Binding AddTagCommand}"/>
-                                            </TextBox.InputBindings>
-                                        </TextBox>
-                                        <TextBlock Text="{Binding TagHint}" FontSize="10.5" Margin="2,4,2,0"
-                                                   Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
-                                        <ItemsControl ItemsSource="{Binding FilteredAvailableTags}" Margin="0,6,0,0"
-                                                      MaxHeight="180">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Button HorizontalContentAlignment="Left" Padding="6,4" Margin="0,0,0,1"
-                                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                            Command="{Binding DataContext.SelectExistingTagCommand, RelativeSource={RelativeSource AncestorType=Popup}}"
-                                                            CommandParameter="{Binding}">
-                                                        <TextBlock Text="{Binding}" FontSize="12.5"/>
-                                                    </Button>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </Border>
-                            </Popup>
                         </StackPanel>
 
-                        <Separator Width="8" Background="Transparent"/>
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
 
+                        <!-- Group 3: Utilities & Export -->
+                        <Button Style="{StaticResource IconButton}" Click="ExportNote_Click" ToolTip="Export / Print Note (Ctrl+E)"
+                                AutomationProperties.Name="Export note">
+                            <TextBlock Text="&#x1F4E4;" Style="{StaticResource IconGlyph}"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" ToolTip="Task Info" AutomationProperties.Name="Task Info"
+                                Command="{Binding ToggleInfoPanelCommand}">
+                            <TextBlock Text="&#x24D8;" Style="{StaticResource IconGlyph}"/>
+                        </Button>
+
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
+
+                        <!-- Group 4: Destructive & Management Actions -->
                         <Button Style="{StaticResource IconButton}"
                                 AutomationProperties.Name="{Binding Task.IsClosed, Converter={StaticResource CloseReopenLabel}}"
                                 Command="{Binding DataContext.ToggleCloseSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
@@ -718,11 +770,6 @@
                                 AutomationProperties.Name="Delete permanently"
                                 Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
                             <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}" Foreground="{DynamicResource DangerBrush}"/>
-                        </Button>
-
-                        <Button Style="{StaticResource IconButton}" ToolTip="Info" AutomationProperties.Name="Info"
-                                Command="{Binding ToggleInfoPanelCommand}">
-                            <TextBlock Text="&#x24D8;" Style="{StaticResource IconGlyph}"/>
                         </Button>
                     </StackPanel>
 

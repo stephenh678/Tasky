@@ -8,6 +8,9 @@ using TodoApp.Models;
 
 namespace TodoApp.Services;
 
+/// <summary>
+/// Provides data persistence for task application state with automatic backups and retry logic.
+/// </summary>
 public class TodoStore
 {
     private const int MaxBackups = 10;
@@ -19,6 +22,11 @@ public class TodoStore
         return Path.Combine(documents, "Tasky", "Tasky.tasky");
     }
 
+    /// <summary>
+    /// Loads application state from the specified file path.
+    /// </summary>
+    /// <param name="path">The file path to load from</param>
+    /// <returns>The loaded application state or a new AppState if file doesn't exist</returns>
     public AppState Load(string path)
     {
         var state = File.Exists(path) ? ReadFromDisk(path) : new AppState();
@@ -43,28 +51,96 @@ public class TodoStore
     private static AppState ReadFromDisk(string path)
     {
         const int maxAttempts = 3;
+        const int retryDelayMs = 300;
+        
+        AppLogger.Debug("TodoStore", $"ReadFromDisk: Reading '{path}' (File size: {new FileInfo(path).Length} bytes)");
+
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             try
             {
                 var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
+                var state = JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
+                AppLogger.Info("TodoStore", $"ReadFromDisk: Successfully parsed {state.Tasks.Count} tasks from '{path}'");
+                return state;
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                return new AppState();
+                AppLogger.Error("TodoStore", $"Corrupted JSON in '{path}'", ex);
+                throw new InvalidDataException("The task data file appears to be corrupted and cannot be loaded as valid JSON.", ex);
             }
-            catch (IOException) when (attempt < maxAttempts)
+            catch (IOException ex) when (attempt < maxAttempts)
             {
-                Thread.Sleep(300);
+                AppLogger.Warn("TodoStore", $"Transient lock reading '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                Thread.Sleep(retryDelayMs);
             }
-            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            catch (UnauthorizedAccessException ex) when (attempt < maxAttempts)
             {
-                Thread.Sleep(300);
+                AppLogger.Warn("TodoStore", $"Access denied reading '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                Thread.Sleep(retryDelayMs);
             }
         }
 
-        throw new InvalidOperationException("unreachable");
+        AppLogger.Error("TodoStore", $"Failed to access file '{path}' after {maxAttempts} attempts");
+        throw new IOException($"Could not access file '{path}' after {maxAttempts} attempts.");
+    }
+
+    /// <summary>
+    /// Asynchronously loads application state from the specified file path.
+    /// Preferred for new code as it uses proper async/await patterns.
+    /// </summary>
+    public async Task<AppState> LoadAsync(string path)
+    {
+        var state = File.Exists(path) ? await ReadFromDiskAsync(path) : new AppState();
+
+        var migrated = false;
+        foreach (var task in state.Tasks)
+            migrated |= MigrateToBody(task);
+
+        if (migrated)
+        {
+            AppLogger.Info("TodoStore", $"Migrated legacy task notes to Body format for {state.Tasks.Count} tasks.");
+            await SaveAsync(state, path);
+        }
+
+        return state;
+    }
+
+    private static async Task<AppState> ReadFromDiskAsync(string path)
+    {
+        const int maxAttempts = 3;
+        const int retryDelayMs = 300;
+
+        AppLogger.Debug("TodoStore", $"ReadFromDiskAsync: Reading '{path}'");
+        
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                var json = await File.ReadAllTextAsync(path);
+                var state = JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
+                AppLogger.Info("TodoStore", $"ReadFromDiskAsync: Successfully loaded {state.Tasks.Count} tasks from '{path}'");
+                return state;
+            }
+            catch (JsonException ex)
+            {
+                AppLogger.Error("TodoStore", $"Corrupted JSON in '{path}'", ex);
+                throw new InvalidDataException("The task data file appears to be corrupted and cannot be loaded as valid JSON.", ex);
+            }
+            catch (IOException ex) when (attempt < maxAttempts)
+            {
+                AppLogger.Warn("TodoStore", $"Transient lock reading async '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                await Task.Delay(retryDelayMs);
+            }
+            catch (UnauthorizedAccessException ex) when (attempt < maxAttempts)
+            {
+                AppLogger.Warn("TodoStore", $"Access denied reading async '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                await Task.Delay(retryDelayMs);
+            }
+        }
+
+        AppLogger.Error("TodoStore", $"Failed to access async '{path}' after {maxAttempts} attempts");
+        throw new IOException($"Could not access file '{path}' after {maxAttempts} attempts.");
     }
 
     // Kept for the handful of callers that need the write to have landed before they continue
@@ -76,18 +152,27 @@ public class TodoStore
     // thread is the one blocked here waiting for them, so the continuation can never run. Task.Run
     // moves the whole async chain onto a thread-pool thread first, where there's no captured UI
     // context to deadlock against.
+    /// <summary>
+    /// Synchronously saves application state. Blocks until the save completes.
+    /// For new code, prefer SaveAsync for non-blocking I/O.
+    /// </summary>
     public void Save(AppState state, string path) => Task.Run(() => SaveAsync(state, path)).GetAwaiter().GetResult();
 
-    // Writes to a temp file and atomically swaps it into place (File.Replace/Move) instead of
-    // overwriting the live file directly, so a crash or an OneDrive-sync file lock mid-write can't
-    // leave a half-written data file behind. Runs off the UI thread and serializes concurrent
-    // callers (nearly every task edit triggers a save) so two saves can't race over the same temp
-    // file.
+    /// <summary>
+    /// Asynchronously saves application state with atomic write and automatic backups.
+    /// Preferred method for I/O operations to keep the UI responsive.
+    /// </summary>
+    /// <param name="state">The application state to save</param>
+    /// <param name="path">The file path to save to</param>
+    /// <returns>A task representing the asynchronous save operation</returns>
     public async Task SaveAsync(AppState state, string path)
     {
         await _saveLock.WaitAsync();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            AppLogger.Debug("TodoStore", $"SaveAsync: Starting atomic save of {state.Tasks.Count} tasks to '{path}'");
+            
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
@@ -103,6 +188,15 @@ public class TodoStore
                 File.Replace(tempPath, path, null);
             else
                 File.Move(tempPath, path);
+
+            sw.Stop();
+            var fi = new FileInfo(path);
+            AppLogger.Info("TodoStore", $"SaveAsync: Successfully saved {state.Tasks.Count} tasks ({fi.Length:N0} bytes) in {sw.ElapsedMilliseconds}ms");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("TodoStore", $"SaveAsync FAILED for '{path}'", ex);
+            throw;
         }
         finally
         {
@@ -110,8 +204,11 @@ public class TodoStore
         }
     }
 
-    // Lists the rolling backups for a data file, newest first, with a task count read from
-    // each snapshot so the restore dialog can show something more useful than a bare timestamp.
+    /// <summary>
+    /// Lists all available backups for the data file, sorted newest first.
+    /// </summary>
+    /// <param name="dataFilePath">The data file path to list backups for</param>
+    /// <returns>A list of available backup snapshots with metadata</returns>
     public List<BackupInfo> ListBackups(string dataFilePath)
     {
         var dir = Path.GetDirectoryName(dataFilePath);
@@ -122,10 +219,13 @@ public class TodoStore
 
         var name = Path.GetFileNameWithoutExtension(dataFilePath);
         var ext = Path.GetExtension(dataFilePath);
+        var pattern = new System.Text.RegularExpressions.Regex($@"^{System.Text.RegularExpressions.Regex.Escape(name)}_\d{{8}}_\d{{6}}_\d{{3}}{System.Text.RegularExpressions.Regex.Escape(ext)}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         var result = new List<BackupInfo>();
         foreach (var file in Directory.GetFiles(backupsDir, $"{name}_*{ext}"))
         {
+            if (!pattern.IsMatch(Path.GetFileName(file))) continue;
+
             var count = 0;
             try
             {
@@ -142,8 +242,12 @@ public class TodoStore
         return result.OrderByDescending(b => b.Timestamp).ToList();
     }
 
-    // Restoring is itself destructive to whatever is currently on disk, so the current file gets
-    // snapshotted first - a restore is always undoable by restoring again.
+    /// <summary>
+    /// Restores a previous backup snapshot to the data file.
+    /// The current file is automatically backed up first, making this operation undoable.
+    /// </summary>
+    /// <param name="backupFilePath">The path to the backup file to restore</param>
+    /// <param name="dataFilePath">The path to the data file to restore to</param>
     public void RestoreBackup(string backupFilePath, string dataFilePath)
     {
         if (File.Exists(dataFilePath))
@@ -167,10 +271,9 @@ public class TodoStore
             var backupPath = Path.Combine(backupsDir, $"{name}_{DateTime.Now:yyyyMMdd_HHmmss_fff}{ext}");
             File.Copy(path, backupPath, overwrite: false);
 
-            // Ordinal, not the default current-culture comparer: these are machine-generated
-            // timestamp names, not linguistic text, and a destructive operation (deciding which
-            // backups to delete) shouldn't depend on the OS's collation rules.
+            var pattern = new System.Text.RegularExpressions.Regex($@"^{System.Text.RegularExpressions.Regex.Escape(name)}_\d{{8}}_\d{{6}}_\d{{3}}{System.Text.RegularExpressions.Regex.Escape(ext)}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             var stale = Directory.GetFiles(backupsDir, $"{name}_*{ext}")
+                .Where(f => pattern.IsMatch(Path.GetFileName(f)))
                 .OrderByDescending(f => f, StringComparer.Ordinal)
                 .Skip(MaxBackups);
             foreach (var old in stale)

@@ -42,11 +42,32 @@ public class AttachmentService
         return destPath;
     }
 
+    public void DeleteTaskFolder(Guid taskId)
+    {
+        try
+        {
+            var folder = Path.Combine(_rootFolder, taskId.ToString());
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+                AppLogger.Info("AttachmentService", $"Deleted task attachments folder: '{folder}'");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("AttachmentService", $"Failed to delete attachments folder for task {taskId}", ex);
+        }
+    }
+
     public void DeleteFile(string path)
     {
         try
         {
-            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                AppLogger.Info("AttachmentService", $"Deleted attachment file: '{path}'");
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

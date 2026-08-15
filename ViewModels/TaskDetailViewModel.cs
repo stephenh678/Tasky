@@ -26,6 +26,21 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
     public TaskItem Task { get; }
 
+    public NoteBlock PrimaryBlock
+    {
+        get
+        {
+            if (Task.Body.Count == 0)
+            {
+                var block = new NoteBlock { Type = NoteBlockType.Text };
+                Task.Body.Add(block);
+                AttachBlock(block);
+                return block;
+            }
+            return Task.Body[0];
+        }
+    }
+
     public string NewTagText
     {
         get => _newTagText;
@@ -124,6 +139,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
                 RecurrenceRule.Daily => basis.AddDays(1),
                 RecurrenceRule.Weekly => basis.AddDays(7),
                 RecurrenceRule.Monthly => basis.AddMonths(1),
+                RecurrenceRule.Yearly => basis.AddYears(1),
                 _ => basis
             };
             return $"Marking this completed creates the next occurrence, due {next:MMM d, yyyy}.";
@@ -268,6 +284,15 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             // an arbitrary local file and have it opened with no warning.
             if (!_attachments.IsUnderAttachmentsRoot(block.PhotoPath)) return;
 
+            var ext = Path.GetExtension(block.PhotoPath);
+            if (ExecutableExtensions.Contains(ext))
+            {
+                var confirm = ThemedMessageBox.Show(
+                    $"\"{block.FileName}\" is an executable program or script. Opening it will execute code on your computer.\n\nDo you want to continue?",
+                    "Security Warning", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+                if (confirm != System.Windows.MessageBoxResult.Yes) return;
+            }
+
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(block.PhotoPath) { UseShellExecute = true });
@@ -333,6 +358,10 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     }
 
     public static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp" };
+    public static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".scr", ".com", ".pif", ".hta"
+    };
 
     public void AddPhotosFromPaths(IEnumerable<string> paths)
     {
@@ -345,7 +374,8 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             try
             {
                 var copy = _attachments.CopyFile(Task.Id, path);
-                Task.Body.Add(new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = copy });
+                var block = new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = copy, Text = string.Empty, Rtf = string.Empty };
+                Task.Body.Add(block);
                 added = true;
             }
             catch (IOException)
@@ -381,7 +411,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         encoder.Save(stream);
         var fileName = $"pasted_{DateTime.Now:yyyyMMdd_HHmmss}.png";
         var path = _attachments.SaveBytes(Task.Id, stream.ToArray(), fileName);
-        Task.Body.Add(new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = path });
+        Task.Body.Add(new NoteBlock { Type = NoteBlockType.Photo, PhotoPath = path, Text = string.Empty, Rtf = string.Empty });
         _onChanged();
     }
 
@@ -426,17 +456,14 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
     private void Body_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        // Reordering (drag-and-drop) raises this as a Move, not an Add - NewItems is still
-        // populated with the (already-attached) moved item, so this must only re-attach on a
-        // genuine Add or it'd double-subscribe the same block's PropertyChanged handler.
-        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
+        if (e.NewItems is not null)
             foreach (NoteBlock block in e.NewItems)
                 AttachBlock(block);
 
         // A block removed via RemoveBlockCommand can come back through its own undo entry
         // (Task.Body.Insert) - detaching here, not just in Detach(), stops that round-trip from
         // double-subscribing the same block.
-        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        if (e.OldItems is not null)
             foreach (NoteBlock block in e.OldItems)
                 DetachBlock(block);
 
@@ -471,17 +498,17 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     {
         if (e.PropertyName == nameof(NoteBlock.Text))
             OnPropertyChanged(nameof(WordCount));
-        _onTypingChanged();
+
+        if (e.PropertyName is nameof(NoteBlock.Text) or nameof(NoteBlock.Rtf) or nameof(NoteBlock.PhotoPath))
+            _onTypingChanged();
     }
 
     private void ChecklistItems_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        // Same reasoning as Body_CollectionChanged above - only re-attach on a genuine Add, and
-        // detach on Remove so a checklist item can't get double-subscribed either.
-        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
+        if (e.NewItems is not null)
             foreach (ChecklistItem item in e.NewItems)
                 AttachChecklistItem(item);
-        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        if (e.OldItems is not null)
             foreach (ChecklistItem item in e.OldItems)
                 DetachChecklistItem(item);
         _onChanged();
@@ -498,8 +525,6 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         else
             _onTypingChanged();
     }
-
-    public void NotifyChanged() => _onChanged();
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

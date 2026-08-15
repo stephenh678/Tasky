@@ -14,14 +14,29 @@ public partial class PhotoViewerWindow : Window
         InitializeComponent();
         ThemeService.ApplyTitleBar(this);
 
-        var image = new BitmapImage();
-        image.BeginInit();
-        image.CacheOption = BitmapCacheOption.OnLoad;
-        image.UriSource = new Uri(path, UriKind.Absolute);
-        image.EndInit();
-        PhotoImage.Source = image;
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.UriSource = new Uri(path, UriKind.Absolute);
+            image.EndInit();
+            PhotoImage.Source = image;
+        }
+        catch (Exception ex)
+        {
+            App.LogException(ex);
+        }
 
         Title = Path.GetFileName(path);
+    }
+
+    public PhotoViewerWindow(BitmapSource bitmapSource, string title = "Photo Viewer")
+    {
+        InitializeComponent();
+        ThemeService.ApplyTitleBar(this);
+        PhotoImage.Source = bitmapSource;
+        Title = title;
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();

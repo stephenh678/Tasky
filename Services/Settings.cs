@@ -12,4 +12,5 @@ public class Settings
     public double WindowWidth { get; set; } = 1180;
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
+    public bool IsVerboseLogging { get; set; } = false;
 }

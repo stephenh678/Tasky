@@ -5,8 +5,13 @@ using System.Runtime.CompilerServices;
 
 namespace TodoApp.Models;
 
+/// <summary>
+/// Represents a single task item in the application.
+/// </summary>
 public class TaskItem : INotifyPropertyChanged
 {
+    private const int MaxTextLength = 500;
+    
     private string _text = string.Empty;
     private bool _isDone;
     private bool _isClosed;
@@ -31,10 +36,18 @@ public class TaskItem : INotifyPropertyChanged
         set => SetField(ref _isPinned, value);
     }
 
+    /// <summary>
+    /// The task title. Limited to 500 characters.
+    /// </summary>
     public string Text
     {
         get => _text;
-        set => SetField(ref _text, value);
+        set
+        {
+            var input = value ?? string.Empty;
+            var truncated = input.Length > MaxTextLength ? input.Substring(0, MaxTextLength) : input;
+            SetField(ref _text, truncated);
+        }
     }
 
     public bool IsDone
@@ -65,7 +78,7 @@ public class TaskItem : INotifyPropertyChanged
     public string Notes
     {
         get => _notes;
-        set => SetField(ref _notes, value);
+        set => SetField(ref _notes, value ?? string.Empty);
     }
 
     public ObservableCollection<TaskLink> Links { get; set; } = new();

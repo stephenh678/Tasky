@@ -12,9 +12,26 @@ public class HasBlockTypeConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object parameter, CultureInfo culture)
     {
-        if (value is not IEnumerable<NoteBlock> blocks) return Visibility.Collapsed;
-        if (parameter is not string typeName || !Enum.TryParse<NoteBlockType>(typeName, out var type)) return Visibility.Collapsed;
-        return blocks.Any(b => b.Type == type) ? Visibility.Visible : Visibility.Collapsed;
+        var typeName = parameter as string ?? string.Empty;
+
+        TaskItem? task = value as TaskItem;
+        if (task is null && value is IEnumerable<NoteBlock> blocks)
+        {
+            task = new TaskItem { Body = new System.Collections.ObjectModel.ObservableCollection<NoteBlock>(blocks) };
+        }
+
+        if (task is null) return Visibility.Collapsed;
+
+        var has = typeName.ToLowerInvariant() switch
+        {
+            "photo" or "image" => TaskMediaHelper.HasPhoto(task),
+            "file" or "attachment" => TaskMediaHelper.HasAttachment(task),
+            "link" or "url" => TaskMediaHelper.HasLink(task),
+            "checklist" or "checkbox" => TaskMediaHelper.HasChecklist(task),
+            _ => false
+        };
+
+        return has ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public object ConvertBack(object? value, Type targetType, object parameter, CultureInfo culture)

@@ -408,6 +408,26 @@
         <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}"/>
     </Style>
 
+    <!-- Unlike TextBox above, RichTextBox's Aero2 default template paints its own focus-state
+         border directly (not through the Background/BorderThickness properties), so setting those
+         locally on the note editor still left a visible box the instant it gained focus - the same
+         class of issue this whole file works around. PART_ContentHost is a hard WPF requirement
+         for TextBoxBase-derived controls to actually host and scroll their text content; without
+         that exact name the control silently fails to render. -->
+    <Style TargetType="RichTextBox">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CaretBrush" Value="{DynamicResource PrimaryTextBrush}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RichTextBox">
+                    <ScrollViewer x:Name="PART_ContentHost" Background="Transparent" BorderThickness="0"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ToolBar assigns its OWN default style to child Button/ComboBox/Separator elements (via
          these specific resource keys), which silently overrides a plain implicit style targeting
          Button/ComboBox for anything placed inside a ToolBar. Toolbar buttons deliberately stay

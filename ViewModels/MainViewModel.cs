@@ -54,6 +54,8 @@ public class MainViewModel : INotifyPropertyChanged
     private Task _pendingSaveTask = Task.CompletedTask;
     private int _saveGeneration;
     private bool _isRestoringBackup;
+    private bool _isExecutingUndo;
+    private bool _reminderCheckInProgress;
 
     // A passthrough, not an independent collection - _state.Tasks is now the single source of
     // truth for both "what's saved" and "what's shown", instead of the two being manually kept in
@@ -158,6 +160,7 @@ public class MainViewModel : INotifyPropertyChanged
         set
         {
             if (!SetField(ref _selectedTask, value)) return;
+            AppLogger.Debug("MainViewModel", $"SelectedTask changed -> ID='{value?.Id}' Title='{value?.Text ?? "(null)"}'");
             FlushPendingSave();
 
             // Without this, reselecting the same task later creates ANOTHER TaskDetailViewModel
@@ -203,6 +206,19 @@ public class MainViewModel : INotifyPropertyChanged
         {
             if (_settings.RemindersEnabled == value) return;
             _settings.RemindersEnabled = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsVerboseLogging
+    {
+        get => _settings.IsVerboseLogging;
+        set
+        {
+            if (_settings.IsVerboseLogging == value) return;
+            _settings.IsVerboseLogging = value;
+            AppLogger.IsVerbose = value;
             _settingsStore.Save(_settings);
             OnPropertyChanged();
         }
@@ -272,6 +288,7 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkDeleteCommand { get; private set; } = null!;
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand RestoreBackupCommand { get; private set; } = null!;
+    public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
 
     public event Action? FocusTitleRequested;
 
@@ -281,6 +298,7 @@ public class MainViewModel : INotifyPropertyChanged
         _isDarkTheme = _settings.Theme == "Dark";
         _isSidebarCollapsed = _settings.SidebarCollapsed;
         ThemeService.Apply(_settings.Theme);
+        AppLogger.IsVerbose = _settings.IsVerboseLogging;
 
         SidebarItems.Add(_allItem);
         SidebarItems.Add(_recurringItem);
@@ -339,8 +357,8 @@ public class MainViewModel : INotifyPropertyChanged
             if (targets.Count == 0) return;
 
             var message = targets.Count == 1
-                ? $"Delete \"{targets[0].Text}\" permanently?"
-                : $"Delete {targets.Count} tasks permanently?";
+                ? $"Delete \"{targets[0].Text}\" permanently? This also removes its photos and attachments."
+                : $"Delete {targets.Count} tasks permanently? This also removes their photos and attachments.";
             var result = ThemedMessageBox.Show(message, "Delete Task", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
@@ -348,19 +366,10 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
+                CleanupTaskAttachments(task);
             }
             SelectedTask = null;
             OnTaskChanged();
-
-            PushUndo(targets.Count == 1 ? $"Delete \"{targets[0].Text}\"" : $"Delete {targets.Count} task(s)", () =>
-            {
-                foreach (var task in targets)
-                {
-                    AllTasks.Add(task);
-                    AttachTask(task);
-                }
-                OnTaskChanged();
-            });
         }, _ => SelectedTask is not null || SelectedTasks.Count > 0);
 
         TrashAllClosedCommand = new RelayCommand(_ =>
@@ -394,7 +403,7 @@ public class MainViewModel : INotifyPropertyChanged
             var trashed = AllTasks.Where(t => t.IsClosed).ToList();
             if (trashed.Count == 0) return;
 
-            var result = ThemedMessageBox.Show($"Permanently delete {trashed.Count} task(s) in Trash? This also removes their photos.",
+            var result = ThemedMessageBox.Show($"Permanently delete {trashed.Count} task(s) in Trash? This also removes their photos and attachments.",
                 "Empty Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
@@ -402,8 +411,7 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
-                foreach (var block in task.Body.Where(b => b.Type == NoteBlockType.Photo || b.Type == NoteBlockType.File))
-                    _attachments.DeleteFile(block.PhotoPath);
+                CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
             OnTaskChanged();
@@ -521,6 +529,17 @@ public class MainViewModel : INotifyPropertyChanged
                 _isRestoringBackup = false;
             }
         }, _ => !_isRestoringBackup);
+
+        ClearDebugLogCommand = new RelayCommand(_ =>
+        {
+            var confirm = ThemedMessageBox.Show(
+                "Are you sure you want to clear the debug log file?\n\nExisting entries will be truncated and a fresh log will be started.",
+                "Clear Debug Log", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            AppLogger.ClearLogFile();
+            ThemedMessageBox.Show("Debug log file has been cleared.", "Debug Log", MessageBoxButton.OK, MessageBoxImage.Information);
+        });
     }
 
     // Undo, and every Bulk* command driven by the task list's multi-selection (SelectedTasks)
@@ -568,7 +587,7 @@ public class MainViewModel : INotifyPropertyChanged
             var targets = SelectedTasks.ToList();
             if (targets.Count == 0) return;
 
-            var result = ThemedMessageBox.Show($"Delete {targets.Count} task(s) permanently?",
+            var result = ThemedMessageBox.Show($"Delete {targets.Count} task(s) permanently? This also removes their photos and attachments.",
                 "Delete Tasks", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
@@ -576,25 +595,41 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
+                CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
             OnTaskChanged();
-
-            PushUndo($"Delete {targets.Count} task(s)", () =>
-            {
-                foreach (var task in targets)
-                {
-                    AllTasks.Add(task);
-                    AttachTask(task);
-                }
-                OnTaskChanged();
-            });
         }, _ => SelectedTasks.Count > 0);
 
         BulkTogglePinCommand = new RelayCommand(_ =>
         {
             foreach (var t in SelectedTasks) t.IsPinned = !t.IsPinned;
         }, _ => SelectedTasks.Count > 0);
+    }
+
+    private void CleanupTaskAttachments(TaskItem task)
+    {
+        try
+        {
+            _attachments.DeleteTaskFolder(task.Id);
+
+            var taskDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky", "Attachments", task.Id.ToString());
+            if (Directory.Exists(taskDir))
+            {
+                Directory.Delete(taskDir, recursive: true);
+                AppLogger.Info("MainViewModel", $"Deleted task attachment folder: '{taskDir}'");
+            }
+
+            foreach (var block in task.Body)
+            {
+                if (!string.IsNullOrWhiteSpace(block.PhotoPath))
+                    _attachments.DeleteFile(block.PhotoPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("MainViewModel", $"Failed to cleanup attachments for task {task.Id}", ex);
+        }
     }
 
     public void AddQuickTask(string title)
@@ -640,9 +675,13 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void CheckReminders()
     {
-        if (!RemindersEnabled) return;
-
-        var today = DateTime.Today;
+        // Prevent overlapping reminder checks if the previous check is still running
+        if (_reminderCheckInProgress || !RemindersEnabled) return;
+        
+        _reminderCheckInProgress = true;
+        try
+        {
+            var today = DateTime.Today;
         var due = AllTasks.Where(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date <= today
                                        && !_notifiedTaskIds.Contains(t.Id))
             .ToList();
@@ -650,10 +689,15 @@ public class MainViewModel : INotifyPropertyChanged
 
         foreach (var t in due) _notifiedTaskIds.Add(t.Id);
 
-        if (due.Count == 1)
-            _tray.ShowBalloon("Task due", due[0].Text);
-        else
-            _tray.ShowBalloon("Tasks due", $"{due.Count} tasks are due or overdue.");
+            if (due.Count == 1)
+                _tray.ShowBalloon("Task due", due[0].Text);
+            else
+                _tray.ShowBalloon("Tasks due", $"{due.Count} tasks are due or overdue.");
+        }
+        finally
+        {
+            _reminderCheckInProgress = false;
+        }
     }
 
     private static DateTime NextDueDate(DateTime from, RecurrenceRule rule) => rule switch
@@ -661,13 +705,14 @@ public class MainViewModel : INotifyPropertyChanged
         RecurrenceRule.Daily => from.AddDays(1),
         RecurrenceRule.Weekly => from.AddDays(7),
         RecurrenceRule.Monthly => from.AddMonths(1),
+        RecurrenceRule.Yearly => from.AddYears(1),
         _ => from
     };
 
     // Completing a recurring task doesn't just close it out - it spawns the next occurrence
     // (title, due date advanced by the rule, tags) so the series continues. The completed
     // instance still moves into Closed as normal.
-    private void SpawnNextOccurrence(TaskItem completed)
+    private TaskItem SpawnNextOccurrence(TaskItem completed)
     {
         var next = new TaskItem
         {
@@ -678,6 +723,7 @@ public class MainViewModel : INotifyPropertyChanged
         };
         AllTasks.Add(next);
         AttachTask(next);
+        return next;
     }
 
     // Determines which file to open on startup: the last file the user had open, otherwise the
@@ -697,12 +743,14 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void LoadFile(string path, bool restoreSelection = false)
     {
+        AppLogger.Info("MainViewModel", $"LoadFile: Loading file '{path}' (restoreSelection={restoreSelection})");
         FlushPendingSave();
 
         foreach (var task in AllTasks)
             DetachTask(task);
         AllTasks.Clear();
         _undoStack.Clear();
+        _notifiedTaskIds.Clear();
         OnPropertyChanged(nameof(UndoMenuLabel));
 
         _currentFilePath = path;
@@ -719,6 +767,8 @@ public class MainViewModel : INotifyPropertyChanged
             AllTasks.Add(task);
             AttachTask(task);
         }
+
+        AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
 
         SelectedTask = null;
         SelectedSidebarItem = _allItem;
@@ -765,7 +815,7 @@ public class MainViewModel : INotifyPropertyChanged
         }
 
         return Contains(t.Text, q)
-            || t.Body.Where(b => b.Type == NoteBlockType.Text).Any(b => Contains(b.Text, q))
+            || t.Body.Any(b => Contains(b.Text, q))
             || t.Tags.Any(tag => Contains(tag, q));
     }
 
@@ -775,8 +825,8 @@ public class MainViewModel : INotifyPropertyChanged
         QuickFilter.DueToday => t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today,
         QuickFilter.NoDueDate => !t.DueDate.HasValue,
         QuickFilter.Recurring => t.Recurrence != RecurrenceRule.None,
-        QuickFilter.HasLink => t.Body.Any(b => b.Type == NoteBlockType.Link),
-        QuickFilter.HasAttachment => t.Body.Any(b => b.Type is NoteBlockType.Photo or NoteBlockType.File),
+        QuickFilter.HasLink => TaskMediaHelper.HasLink(t),
+        QuickFilter.HasAttachment => TaskMediaHelper.HasAttachment(t) || TaskMediaHelper.HasPhoto(t),
         _ => true
     };
 
@@ -793,17 +843,31 @@ public class MainViewModel : INotifyPropertyChanged
         if (sender is not TaskItem task) return;
         task.ModifiedAt = DateTime.Now;
 
-        if (e.PropertyName == nameof(TaskItem.IsDone))
+        if (e.PropertyName == nameof(TaskItem.IsDone) && !_isExecutingUndo)
         {
-            // Every other mutating action in the app (delete, trash, tag removal, bulk actions)
-            // is on the undo stack - the complete checkbox wasn't, despite sitting right next to
-            // the pin toggle in the list and instantly dropping the task out of the current view.
             var isDone = task.IsDone;
-            PushUndo(isDone ? $"Mark \"{task.Text}\" complete" : $"Mark \"{task.Text}\" incomplete",
-                () => task.IsDone = !isDone);
-
+            TaskItem? spawned = null;
             if (isDone && task.Recurrence != RecurrenceRule.None)
-                SpawnNextOccurrence(task);
+                spawned = SpawnNextOccurrence(task);
+
+            PushUndo(isDone ? $"Mark \"{task.Text}\" complete" : $"Mark \"{task.Text}\" incomplete", () =>
+            {
+                _isExecutingUndo = true;
+                try
+                {
+                    task.IsDone = !isDone;
+                    if (spawned is not null)
+                    {
+                        DetachTask(spawned);
+                        AllTasks.Remove(spawned);
+                        OnTaskChanged();
+                    }
+                }
+                finally
+                {
+                    _isExecutingUndo = false;
+                }
+            });
         }
 
         // Typing the title fires on every keystroke; debounce it like body text instead of
@@ -872,19 +936,35 @@ public class MainViewModel : INotifyPropertyChanged
             .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        // Remove tags no longer in use (use HashSet for O(1) lookup instead of O(n) Contains)
+        var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
         for (var i = TagItems.Count - 1; i >= 0; i--)
-            if (!desired.Contains(TagItems[i].TagName, StringComparer.OrdinalIgnoreCase))
+            if (!desiredSet.Contains(TagItems[i].TagName ?? ""))
                 TagItems.RemoveAt(i);
 
+        // Add new tags
+        var existingSet = new HashSet<string>(
+            TagItems.Select(t => t.TagName ?? "").Where(t => t != ""), 
+            StringComparer.OrdinalIgnoreCase);
         foreach (var tag in desired)
-            if (!TagItems.Any(item => item.TagName!.Equals(tag, StringComparison.OrdinalIgnoreCase)))
+            if (!existingSet.Contains(tag))
                 TagItems.Add(new SidebarFilterItem(tag));
 
+        // Reorder tags efficiently with O(n) using dictionary lookup instead of O(n²) IndexOf
         var ordered = TagItems.OrderBy(t => t.TagName, StringComparer.OrdinalIgnoreCase).ToList();
+        var currentPositions = new Dictionary<SidebarFilterItem, int>(TagItems.Count);
+        for (var i = 0; i < TagItems.Count; i++)
+            currentPositions[TagItems[i]] = i;
+        
         for (var i = 0; i < ordered.Count; i++)
         {
-            var currentIndex = TagItems.IndexOf(ordered[i]);
-            if (currentIndex != i) TagItems.Move(currentIndex, i);
+            var item = ordered[i];
+            if (currentPositions.TryGetValue(item, out var currentIndex) && currentIndex != i)
+            {
+                TagItems.Move(currentIndex, i);
+                // Update position tracking after move
+                currentPositions[TagItems[i]] = i;
+            }
         }
     }
 

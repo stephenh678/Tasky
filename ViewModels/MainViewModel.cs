@@ -607,6 +607,13 @@ public class MainViewModel : INotifyPropertyChanged
             SaveStatusText = "Syncing with Google Drive...";
             await FlushPendingSaveAsync();
 
+            // A brand-new or just-emptied data file is never written to disk until the first
+            // real edit triggers a save - FlushPendingSaveAsync only flushes an edit that's
+            // already pending, so it's a no-op here and UploadFileAsync would otherwise throw
+            // FileNotFoundException trying to read a file that only ever existed in memory.
+            if (!File.Exists(_currentFilePath))
+                await _store.SaveAsync(_state, _currentFilePath);
+
             var remoteId = _settings.GoogleDriveFileId;
 
             // Check remote modified timestamp if remoteId exists

@@ -5,7 +5,6 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:TodoApp"
         xmlns:conv="clr-namespace:TodoApp.Converters"
-        xmlns:sel="clr-namespace:TodoApp.Selectors"
         xmlns:beh="clr-namespace:TodoApp.Behaviors"
         xmlns:docs="clr-namespace:System.Windows.Documents;assembly=PresentationFramework"
         xmlns:vm="clr-namespace:TodoApp.ViewModels"
@@ -21,11 +20,13 @@
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenFileCommand}"/>
         <KeyBinding Key="S" Modifiers="Control+Shift" Command="{Binding SaveFileAsCommand}"/>
         <KeyBinding Key="Z" Modifiers="Control" Command="{Binding UndoCommand}"/>
-        <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddTextBlockCommand}"/>
-        <KeyBinding Key="P" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddPhotoBlockCommand}"/>
-        <KeyBinding Key="L" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddLinkBlockCommand}"/>
-        <KeyBinding Key="F" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddFileBlockCommand}"/>
-        <KeyBinding Key="C" Modifiers="Control+Shift" Command="{Binding SelectedTaskDetail.AddChecklistBlockCommand}"/>
+        <!-- Ctrl+Shift+P/L/C/K/F and Ctrl+E are handled in Window_PreviewKeyDown instead of as
+             KeyBindings here - they call the same AddPhoto_Click/AddLink_Click/AddChecklist_Click/
+             AddTable_Click/AddFile_Click/ExportNote_Click handlers the toolbar buttons use, which
+             insert inline into NoteEditor. The KeyBindings that used to live here instead called
+             SelectedTaskDetail.Add*BlockCommand, which add to the now-unrendered Task.Body block
+             list from the old per-block editor - removed as dead/misleading now that
+             Window_PreviewKeyDown's e.Handled=true pre-empts them anyway. -->
     </Window.InputBindings>
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -33,7 +34,6 @@
         <conv:DueDateColorConverter x:Key="DueDateColor"/>
         <conv:NullToVisibilityConverter x:Key="NullToVis"/>
         <conv:InverseNullToVisibilityConverter x:Key="InverseNullToVis"/>
-        <conv:FilePathToImageConverter x:Key="PathToImage"/>
         <conv:CloseReopenLabelConverter x:Key="CloseReopenLabel"/>
         <conv:CloseReopenIconConverter x:Key="CloseReopenIcon"/>
         <conv:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis"/>
@@ -180,249 +180,6 @@
                 </StackPanel.ContextMenu>
             </StackPanel>
         </DataTemplate>
-
-        <DataTemplate x:Key="TextBlockTemplate">
-            <Grid Margin="0,0,0,16">
-                <RichTextBox x:Name="Editor" Padding="0" VerticalContentAlignment="Top"
-                             MinHeight="450"
-                             Foreground="{DynamicResource PrimaryTextBrush}" FontSize="14"
-                             AcceptsReturn="True" AcceptsTab="True"
-                             GotFocus="RichTextBox_GotFocus"
-                             LostFocus="RichTextBox_LostFocus"
-                             SelectionChanged="RichTextBox_SelectionChanged"
-                             PreviewMouseLeftButtonDown="RichTextBox_PreviewMouseLeftButtonDown"
-                             PreviewMouseRightButtonDown="RichTextBox_PreviewMouseRightButtonDown"
-                             ContextMenuOpening="RichTextBox_ContextMenuOpening"
-                             PreviewMouseMove="RichTextBox_PreviewMouseMove"
-                             SpellCheck.IsEnabled="True"
-                             beh:RichTextBoxBehavior.Enable="True">
-                    <RichTextBox.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Bold" FontWeight="Bold" Click="Bold_Click"/>
-                            <MenuItem Header="Italic" FontStyle="Italic" Click="Italic_Click"/>
-                            <MenuItem Click="Underline_Click">
-                                <MenuItem.Header>
-                                    <TextBlock Text="Underline" TextDecorations="Underline"/>
-                                </MenuItem.Header>
-                            </MenuItem>
-                            <Separator/>
-                            <MenuItem Header="Font Size">
-                                <MenuItem Header="10" Tag="10" Click="FontSize_Click"/>
-                                <MenuItem Header="12" Tag="12" Click="FontSize_Click"/>
-                                <MenuItem Header="14" Tag="14" Click="FontSize_Click"/>
-                                <MenuItem Header="16" Tag="16" Click="FontSize_Click"/>
-                                <MenuItem Header="18" Tag="18" Click="FontSize_Click"/>
-                                <MenuItem Header="24" Tag="24" Click="FontSize_Click"/>
-                                <MenuItem Header="32" Tag="32" Click="FontSize_Click"/>
-                            </MenuItem>
-                            <MenuItem Header="Text Color">
-                                <MenuItem Header="Black" Tag="#2C3338" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#2C3338" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Red" Tag="#D63638" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#D63638" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Orange" Tag="#E68A00" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#E68A00" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Green" Tag="#00A32A" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#00A32A" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Blue" Tag="#3361CC" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#3361CC" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Purple" Tag="#8C4FE0" Click="TextColor_Click">
-                                    <MenuItem.Icon><Border Background="#8C4FE0" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                            </MenuItem>
-                            <MenuItem Header="Highlight">
-                                <MenuItem Header="None" Tag="Transparent" Click="HighlightColor_Click"/>
-                                <MenuItem Header="Yellow" Tag="#FFF3B0" Click="HighlightColor_Click">
-                                    <MenuItem.Icon><Border Background="#FFF3B0" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Green" Tag="#C8F0C8" Click="HighlightColor_Click">
-                                    <MenuItem.Icon><Border Background="#C8F0C8" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Blue" Tag="#CEE0FA" Click="HighlightColor_Click">
-                                    <MenuItem.Icon><Border Background="#CEE0FA" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Pink" Tag="#FAD1E0" Click="HighlightColor_Click">
-                                    <MenuItem.Icon><Border Background="#FAD1E0" Width="12" Height="12"/></MenuItem.Icon>
-                                </MenuItem>
-                            </MenuItem>
-                            <Separator/>
-                            <MenuItem Header="Bulleted List" Click="Bullets_Click"/>
-                            <MenuItem Header="Numbered List" Click="Numbering_Click"/>
-                        </ContextMenu>
-                    </RichTextBox.ContextMenu>
-                </RichTextBox>
-                <TextBlock Text="Start typing notes, instructions, or paste content here..." FontSize="14" FontStyle="Italic"
-                           Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
-                           VerticalAlignment="Top" Margin="0,2,0,0"
-                           Visibility="{Binding ElementName=Editor, Path=(beh:RichTextBoxBehavior.IsEmpty), Converter={StaticResource BoolToVis}}"/>
-            </Grid>
-        </DataTemplate>
-
-        <DataTemplate x:Key="PhotoBlockTemplate">
-            <Grid Margin="0,4,0,16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Image Grid.Column="0" Source="{Binding PhotoPath, Converter={StaticResource PathToImage}}" Stretch="Uniform" Cursor="Hand"
-                       MaxWidth="320" MaxHeight="320"
-                       MouseLeftButtonUp="Photo_Click"/>
-                <Button Grid.Column="1" Content="&#x2715;" ToolTip="Remove photo" AutomationProperties.Name="Remove photo"
-                        Style="{StaticResource IconButton}"
-                        Width="18" Height="18" FontSize="9" Opacity="0.3" VerticalAlignment="Top" Margin="6,2,0,0"
-                        Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-            </Grid>
-        </DataTemplate>
-
-        <DataTemplate x:Key="LinkBlockTemplate">
-            <Grid Margin="0,0,0,16">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <TextBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
-                         Text="{Binding LinkLabel, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="13.5" FontWeight="SemiBold" BorderThickness="0" Padding="0"
-                         Foreground="{DynamicResource PrimaryTextBrush}"
-                         Background="Transparent" Margin="0,0,0,2"
-                         SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
-                         PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
-                         ContextMenuOpening="TextBox_ContextMenuOpening"/>
-
-                <TextBox Grid.Row="1" Grid.Column="0"
-                         Text="{Binding Url, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="12" Foreground="{DynamicResource AccentBrush}" BorderThickness="0" Padding="0"
-                         Background="Transparent"/>
-
-                <Button Grid.Row="1" Grid.Column="1" Content="&#x1F517;" ToolTip="Open link"
-                        AutomationProperties.Name="Open link"
-                        Style="{StaticResource IconButton}"
-                        Command="{Binding DataContext.OpenBlockLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-
-                <Button Grid.Row="1" Grid.Column="2" Content="&#x2715;" ToolTip="Remove link"
-                        AutomationProperties.Name="Remove link"
-                        Style="{StaticResource IconButton}"
-                        Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-            </Grid>
-        </DataTemplate>
-
-        <DataTemplate x:Key="FileBlockTemplate">
-            <Grid Margin="0,0,0,16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <TextBlock Grid.Column="0" Text="&#x1F4CE;" FontFamily="{StaticResource IconFont}"
-                           FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
-
-                <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="12.5"
-                           Foreground="{DynamicResource PrimaryTextBrush}"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-
-                <Button Grid.Column="2" Content="Open" ToolTip="Open file" Margin="8,0,0,0"
-                        Command="{Binding DataContext.OpenBlockFileCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-
-                <Button Grid.Column="3" Content="&#x2715;" ToolTip="Remove file"
-                        AutomationProperties.Name="Remove file"
-                        Style="{StaticResource IconButton}" Margin="4,0,0,0"
-                        Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-            </Grid>
-        </DataTemplate>
-
-        <DataTemplate x:Key="ChecklistBlockTemplate">
-            <StackPanel Margin="0,0,0,16">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="CHECKLIST" FontSize="10.5" FontWeight="Bold"
-                               Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
-                    <Button Grid.Column="1" Content="&#x2715;" ToolTip="Remove checklist"
-                            AutomationProperties.Name="Remove checklist"
-                            Width="18" Height="18" FontSize="9" Opacity="0.4"
-                            Style="{StaticResource IconButton}"
-                            Command="{Binding DataContext.RemoveBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                            CommandParameter="{Binding}"/>
-                </Grid>
-
-                <ItemsControl ItemsSource="{Binding ChecklistItems}" Margin="0,6,0,0">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Margin="0,2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <CheckBox Grid.Column="0" VerticalAlignment="Center" IsChecked="{Binding IsChecked}"/>
-                                <Grid Grid.Column="1" Margin="6,0">
-                                    <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
-                                             BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SecondaryBrush}"
-                                             Background="Transparent" FontSize="12.5" Padding="2,3"
-                                             Foreground="{DynamicResource PrimaryTextBrush}"
-                                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
-                                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
-                                             ContextMenuOpening="TextBox_ContextMenuOpening">
-                                        <TextBox.Style>
-                                            <Style TargetType="TextBox">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsChecked}" Value="True">
-                                                        <Setter Property="TextDecorations" Value="Strikethrough"/>
-                                                        <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBox.Style>
-                                    </TextBox>
-                                    <TextBlock Text="Click to add text..." FontSize="12.5" FontStyle="Italic" Padding="2,3"
-                                               Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
-                                               Visibility="{Binding Text, Converter={StaticResource EmptyStringToVis}}"/>
-                                </Grid>
-                                <Button Grid.Column="2" Content="&#x2715;" ToolTip="Remove item"
-                                        AutomationProperties.Name="Remove item"
-                                        Width="18" Height="18" FontSize="9" Opacity="0.4"
-                                        Style="{StaticResource IconButton}"
-                                        Command="{Binding DataContext.RemoveChecklistItemCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
-                                        CommandParameter="{Binding}"/>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-
-                <Button Content="+ Add item" HorizontalAlignment="Left" Margin="0,6,0,0" Padding="4,2"
-                        Background="Transparent" BorderThickness="0" Cursor="Hand" FontSize="11.5"
-                        Foreground="{DynamicResource AccentBrush}"
-                        Command="{Binding DataContext.AddChecklistItemCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                        CommandParameter="{Binding}"/>
-            </StackPanel>
-        </DataTemplate>
-
-        <sel:NoteBlockTemplateSelector x:Key="BlockTemplateSelector"
-                                        TextTemplate="{StaticResource TextBlockTemplate}"
-                                        PhotoTemplate="{StaticResource PhotoBlockTemplate}"
-                                        LinkTemplate="{StaticResource LinkBlockTemplate}"
-                                        FileTemplate="{StaticResource FileBlockTemplate}"
-                                        ChecklistTemplate="{StaticResource ChecklistBlockTemplate}"/>
 
     </Window.Resources>
 

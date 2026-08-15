@@ -18,29 +18,41 @@ let the app take care of not losing your work.
   restore, delete permanently
 
 ### Rich task notes
-Each task's body is a free-form stream of blocks, added in any order, reordered by drag handle,
-and mixed freely:
-- **Text** — rich text with bold/italic/underline, font family/size, text color, and highlight
-- **Photos** — paste from clipboard or drag-and-drop; click to view full-size
-- **Links** — paste a bare URL and it's auto-converted into a link block
-- **Files** — attach any file type, open it with its default app from inside Tasky
-- **Checklists** — add/check off sub-items within a task, independently reorderable too
+Each task's body is one continuous, borderless document — type freely, and insert whatever else
+you need directly into the flow at your cursor, all mixed inline rather than boxed off as separate
+pieces:
+- **Rich text** — bold/italic/underline, font family/size, text color, and highlight
+- **Photos** — paste from clipboard, drag-and-drop, or **Insert Photo**; click to view full-size
+- **Links** — **Insert Link** turns a URL into an inline hyperlink at your cursor
+- **Files** — **Insert File** attaches any file type inline as a chip; open it with its default
+  app from inside Tasky
+- **Checklists** — **Insert Checklist** drops a checkable item inline; keep adding more as needed
+- **Tables** — **Insert Table** prompts for rows/columns and inserts a real table inline
 
-Spell check runs on every text field, with themed right-click suggestions.
+Spell check runs throughout, with themed right-click suggestions.
 
 Tasks also carry tags (picked from existing ones or typed fresh — always lowercased), a due
 date, and an optional recurrence rule (daily/weekly/monthly). Completing a recurring task
 automatically spawns the next occurrence with the due date advanced.
+
+### Export & print
+Turn a task's note into a standalone file, or send it to a printer, via **Export / Print Note...**
+(File menu, editor toolbar, or `Ctrl+E`):
+- **HTML** — a self-contained, styled page with embedded images and real tables
+- **Markdown** — checklists become `- [ ]`/`- [x]` items, tables become Markdown tables
+- **Print** — opens the standard Windows print dialog
 
 ### Data safety
 - Auto-save (debounced, so it doesn't hammer the disk while you type), with a small status
   indicator ("Saving…" / "Saved") and a clear failure message if a write doesn't go through
 - Rolling backups taken before every save, with a **Restore from Backup** dialog to roll back to
   any recent snapshot
-- Ctrl+Z undo for deletes, trashing, restoring, tag removal, block removal, and marking a task
+- Ctrl+Z undo for deletes, trashing, restoring, tag removal, and marking a task
   complete/incomplete
 - Completed and trashed tasks lock from editing — you can still restore/reopen them, but their
   content can't be changed by accident
+- **Help → Open Debug Log File...** / **Clear Debug Log File...** / **Verbose Logging** for
+  troubleshooting — Tasky logs to `Documents\Tasky\debug.log`
 
 ### Quick capture
 - Global hotkey **Ctrl+Alt+T** and a system tray icon open a small always-on-top box to jot down
@@ -113,8 +125,9 @@ folder; attachments live in an `Attachments` folder the same way.
 | `Ctrl+Shift+S` | Save data file as |
 | `F11` | Toggle Focus Mode |
 | `Ctrl+Alt+T` | Global quick-add (works even when Tasky isn't focused) |
-| `Ctrl+Shift+T` | Add text block to the selected task |
-| `Ctrl+Shift+P` | Add photo block to the selected task |
-| `Ctrl+Shift+L` | Add link block to the selected task |
-| `Ctrl+Shift+F` | Add file block to the selected task |
-| `Ctrl+Shift+C` | Add checklist block to the selected task |
+| `Ctrl+E` | Export / print the selected task's note |
+| `Ctrl+Shift+P` | Insert a photo inline at the cursor |
+| `Ctrl+Shift+L` | Insert a link inline at the cursor |
+| `Ctrl+Shift+F` | Insert a file inline at the cursor |
+| `Ctrl+Shift+C` | Insert a checklist item inline at the cursor |
+| `Ctrl+Shift+K` | Insert a table inline at the cursor |

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -1218,6 +1219,11 @@ public static class RichTextBoxBehavior
         return "File";
     }
 
+    private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".scr", ".com", ".pif", ".hta"
+    };
+
     public static void OpenFileTarget(string filePath)
     {
         try
@@ -1227,6 +1233,26 @@ public static class RichTextBoxBehavior
             {
                 ThemedMessageBox.Show($"The file could not be found at:\n{filePath}", "Open File", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
+            }
+
+            // filePath is loaded straight from the .tasky JSON (embedded in the block's RTF).
+            // Refusing anything outside the Attachments folder (the only place
+            // CopyFileToAttachments ever writes to) means a hand-edited or restored-from-an-
+            // untrusted-backup file can't point this at an arbitrary local file and have it
+            // opened with no warning.
+            if (!Path.GetFullPath(filePath).StartsWith(GetAttachmentsDirectory() + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                AppLogger.Warn("NoteEditor", $"Refused to open file outside Attachments folder: '{filePath}'");
+                ThemedMessageBox.Show($"This file is outside Tasky's Attachments folder and can't be opened from here:\n{filePath}", "Open File", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (ExecutableExtensions.Contains(Path.GetExtension(filePath)))
+            {
+                var confirm = ThemedMessageBox.Show(
+                    $"\"{Path.GetFileName(filePath)}\" is an executable program or script. Opening it will execute code on your computer.\n\nDo you want to continue?",
+                    "Security Warning", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes) return;
             }
 
             var psi = new ProcessStartInfo(filePath) { UseShellExecute = true };
@@ -1253,6 +1279,18 @@ public static class RichTextBoxBehavior
     {
         try
         {
+            // e.Uri ultimately comes from the .tasky JSON (embedded in the block's RTF).
+            // Restricting to http(s) means a hyperlink whose target was ever hand-edited or
+            // restored from an untrusted backup (e.g. a file:// URI pointing at a local
+            // executable) can't get handed to ShellExecute and launched with no warning.
+            if (e.Uri.Scheme is not ("http" or "https"))
+            {
+                AppLogger.Warn("NoteEditor", $"Refused to open link with non-http(s) scheme: '{e.Uri}'");
+                ThemedMessageBox.Show($"This link's address isn't a web link and can't be opened from here:\n{e.Uri}", "Open Link", MessageBoxButton.OK, MessageBoxImage.Warning);
+                e.Handled = true;
+                return;
+            }
+
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
             e.Handled = true;
         }

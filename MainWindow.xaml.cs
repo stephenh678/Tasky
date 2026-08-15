@@ -185,7 +185,7 @@ public partial class MainWindow : Window
             }
 
             _readyToClose = true;
-            Dispatcher.Invoke(Close);
+            Application.Current.Shutdown();
         };
     }
 

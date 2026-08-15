@@ -908,6 +908,18 @@ public partial class MainWindow : Window
         // No action needed - just here to handle events
     }
 
+    private static FrameworkElement? FindFirstVisualDescendantWithContextMenu(DependencyObject root)
+    {
+        if (root is FrameworkElement { ContextMenu: not null } self) return self;
+        var childCount = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < childCount; i++)
+        {
+            var found = FindFirstVisualDescendantWithContextMenu(VisualTreeHelper.GetChild(root, i));
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
     private static T? FindFirstVisualDescendant<T>(DependencyObject root) where T : DependencyObject
     {
         if (root is null) return null;
@@ -972,10 +984,16 @@ public partial class MainWindow : Window
                         var bounds = transform.TransformBounds(new Rect(0, 0, elem.ActualWidth, elem.ActualHeight));
                         if (bounds.Contains(point))
                         {
-                            if (elem.ContextMenu is not null)
+                            // The ContextMenu (Save As/Open/Delete, etc.) actually lives on an inner
+                            // element - e.g. CreateImageContainer sets it on the Image, CreateFileCard
+                            // on the inner "CardBody" Border - not on this outer wrapper Grid, so
+                            // checking elem.ContextMenu directly always came up null and right-clicks
+                            // fell through to the RichTextBox's default select-on-right-click instead.
+                            var menuOwner = FindFirstVisualDescendantWithContextMenu(elem);
+                            if (menuOwner?.ContextMenu is not null)
                             {
-                                elem.ContextMenu.PlacementTarget = elem;
-                                elem.ContextMenu.IsOpen = true;
+                                menuOwner.ContextMenu.PlacementTarget = menuOwner;
+                                menuOwner.ContextMenu.IsOpen = true;
                                 e.Handled = true;
                                 return;
                             }

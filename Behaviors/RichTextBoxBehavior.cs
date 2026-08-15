@@ -894,6 +894,13 @@ public static class RichTextBoxBehavior
         image.ToolTip = "Click to expand photo\nRight-click for resize/delete options";
         imageBorder.Child = image;
 
+        // Border.ClipToBounds only clips to the element's rectangular bounds - it ignores
+        // CornerRadius entirely, so the image's square corners would otherwise poke out past
+        // the rounded outline. A geometry clip is the only way to actually round the content,
+        // and it needs concrete pixel dimensions, so it's set from SizeChanged rather than once.
+        imageBorder.SizeChanged += (s, e) =>
+            imageBorder.Clip = new RectangleGeometry(new Rect(0, 0, e.NewSize.Width, e.NewSize.Height), 6, 6);
+
         var delBorder = new Border
         {
             Width = 22,

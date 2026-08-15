@@ -202,26 +202,45 @@ public class GoogleDriveService
         var fileName = Path.GetFileName(localPath);
         using var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
-        if (!string.IsNullOrEmpty(existingRemoteFileId))
+        // The caller's cached ID isn't the only way an existing file can be found - it's lost on
+        // disconnect, and a second device's very first connect never has one at all. Without a
+        // name-based fallback (unlike GetOrCreateFolderAsync, which already does this for
+        // folders), either case would silently create a duplicate Tasky.tasky instead of finding
+        // the one that's already there.
+        var resolvedRemoteId = existingRemoteFileId;
+        if (string.IsNullOrEmpty(resolvedRemoteId))
+        {
+            var lookupRequest = _driveService.Files.List();
+            lookupRequest.Q = $"name = '{fileName}' and '{taskyFolderId}' in parents and trashed = false";
+            lookupRequest.Fields = "files(id, name)";
+            var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
+            if (existingFiles is { Count: > 0 })
+            {
+                resolvedRemoteId = existingFiles[0].Id;
+                AppLogger.Info("GoogleDriveService", $"Found existing remote file '{fileName}' (ID '{resolvedRemoteId}') by name - reusing instead of creating a duplicate");
+            }
+        }
+
+        if (!string.IsNullOrEmpty(resolvedRemoteId))
         {
             try
             {
                 var updateBody = new Google.Apis.Drive.v3.Data.File { Name = fileName };
-                var updateRequest = _driveService.Files.Update(updateBody, existingRemoteFileId, fileStream, "application/json");
+                var updateRequest = _driveService.Files.Update(updateBody, resolvedRemoteId, fileStream, "application/json");
                 var progress = await updateRequest.UploadAsync();
 
                 if (progress.Status == Google.Apis.Upload.UploadStatus.Completed)
                 {
-                    AppLogger.Info("GoogleDriveService", $"Successfully updated existing remote file ID '{existingRemoteFileId}'");
+                    AppLogger.Info("GoogleDriveService", $"Successfully updated existing remote file ID '{resolvedRemoteId}'");
                     await SyncAttachmentsAsync(localPath, taskyFolderId, settings, settingsStore);
-                    return existingRemoteFileId;
+                    return resolvedRemoteId;
                 }
 
                 if (progress.Exception is not null) throw progress.Exception;
             }
             catch (Exception ex)
             {
-                AppLogger.Warn("GoogleDriveService", $"Could not update existing file '{existingRemoteFileId}', creating new: {ex.Message}");
+                AppLogger.Warn("GoogleDriveService", $"Could not update existing file '{resolvedRemoteId}', creating new: {ex.Message}");
             }
         }
 

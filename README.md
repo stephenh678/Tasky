@@ -105,7 +105,9 @@ The result lands in `publish\`. Despite `PublishSingleFile`, WPF's native render
 (`D3DCompiler_47_cor3.dll`, `wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `PenImc_cor3.dll`,
 `vcruntime140_cor3.dll`) can't be embedded and are published alongside `Tasky.exe` as separate
 files — **the whole `publish\` folder is the deliverable, not the exe by itself.** Zip the folder
-if you're distributing it; the exe won't launch on its own without those DLLs next to it.
+if you're distributing it; the exe won't launch on its own without those DLLs next to it. Also
+copy `Uninstall-Tasky.ps1` and `Uninstall Tasky.bat` from the repo root into the same folder before
+zipping — they're not part of the build output, but should ship in every release.
 
 ## Data storage
 
@@ -137,6 +139,19 @@ folder; attachments live in an `Attachments` folder the same way.
   Drive, with each data file's attachments kept in their own isolated subfolder so multiple files
   never mix their attachments together
 - **Shutdown Protection** — forces a final sync on application close
+
+## Uninstalling
+
+Tasky has no installer, so there's normally nothing to "uninstall" beyond deleting the folder —
+but it does keep state in a couple of other places (settings, Google Drive sign-in cache, task
+data). Run **`Uninstall Tasky.bat`** (ships alongside `Tasky.exe`) for a guided removal: it asks
+you to close Tasky first, shows exactly what it's about to remove, gives you the option to keep
+your existing `.tasky` files/backups/attachments, and finishes by deleting the application files
+(including the uninstaller itself). It requests administrator rights only if the app's folder
+actually needs them (e.g. installed under `Program Files`). Deleting the local Google Drive
+sign-in cache signs Tasky out on this computer but doesn't revoke access on Google's side — do
+that at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) if you want
+that too.
 
 ## Keyboard shortcuts
 

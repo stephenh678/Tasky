@@ -648,6 +648,7 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     await _googleDrive.DownloadFileAsync(remoteId, tempPath, downloadAttachments: false);
                     var remoteState = await _store.LoadAsync(tempPath);
+                    remoteState.DeletedTasks = DeduplicateTombstones(remoteState.DeletedTasks);
                     var (added, updated, removed) = MergeRemoteState(remoteState);
                     AppLogger.Info("MainViewModel", $"Google Drive merge: +{added} task(s), ~{updated} updated, -{removed} removed.");
 
@@ -772,9 +773,34 @@ public class MainViewModel : INotifyPropertyChanged
     // to tell "a device deleted this task" apart from "a device just hasn't pulled this task
     // down yet" - both look identical (missing from that device's list) without a record of which
     // task IDs were actually deleted and when.
+    //
+    // A task can legitimately be tombstoned more than once in its lifetime - delete, then a later
+    // edit on another device revives it (an intentional part of the merge - see MergeRemoteState),
+    // then it gets deleted again. Update the existing tombstone's timestamp instead of appending a
+    // second one for the same TaskId: MergeRemoteState builds a Dictionary keyed by TaskId from
+    // this list, which throws on a duplicate key - a second entry wouldn't just pick the "wrong"
+    // timestamp, it would crash the sync outright, and keep crashing on every retry.
     private void RecordTaskDeletionTombstone(TaskItem task)
     {
-        _state.DeletedTasks.Add(new TaskSyncRecord { TaskId = task.Id, Timestamp = DateTime.Now });
+        var existing = _state.DeletedTasks.FirstOrDefault(r => r.TaskId == task.Id);
+        if (existing is not null)
+            existing.Timestamp = DateTime.Now;
+        else
+            _state.DeletedTasks.Add(new TaskSyncRecord { TaskId = task.Id, Timestamp = DateTime.Now });
+    }
+
+    // Belt-and-suspenders for data written before RecordTaskDeletionTombstone deduplicated on
+    // write (or any other source of a malformed file, e.g. hand-edited) - MergeRemoteState builds
+    // a Dictionary keyed by TaskId from this list, which throws on a duplicate key, so a file
+    // that already has one has to be cleaned up before it ever reaches that point. Keeps the
+    // latest timestamp per TaskId, applied to both local (on load) and remote (right after
+    // download) so neither side can be the one that crashes the merge.
+    private static List<TaskSyncRecord> DeduplicateTombstones(List<TaskSyncRecord> tombstones)
+    {
+        return tombstones
+            .GroupBy(r => r.TaskId)
+            .Select(g => g.OrderByDescending(r => r.Timestamp).First())
+            .ToList();
     }
 
     // Per-task merge for Google Drive sync, replacing a whole-file "which copy is newer" guess.
@@ -1117,7 +1143,7 @@ public class MainViewModel : INotifyPropertyChanged
         // by a previous session stays invisible to Google Drive's merge (which only ever
         // consults the in-memory _state.DeletedTasks), letting a deleted task get silently
         // resurrected on the next sync.
-        _state.DeletedTasks = loaded.DeletedTasks;
+        _state.DeletedTasks = DeduplicateTombstones(loaded.DeletedTasks);
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
 

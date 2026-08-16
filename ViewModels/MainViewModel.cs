@@ -607,14 +607,50 @@ public class MainViewModel : INotifyPropertyChanged
             SaveStatusText = "Syncing with Google Drive...";
             await FlushPendingSaveAsync();
 
+            var remoteId = _settings.GoogleDriveFileId;
+
+            // This device has never linked to a remote file before (first-ever connect, or
+            // reconnect after a disconnect) - resolve whether one already exists on Drive by name
+            // (e.g. already synced from another device) before deciding what to do. Without this,
+            // remoteId stays unset, the conflict-timestamp check below (which only evaluates a
+            // known remoteId) never runs at all, and the fallback further down uploads
+            // unconditionally - silently overwriting another device's real data, whether that's
+            // with an empty placeholder file (this device has nothing yet) or with this device's
+            // own real-but-independent tasks (never reconciled with what's already on Drive).
+            if (string.IsNullOrEmpty(remoteId))
+            {
+                var lookupFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
+                var discoveredId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), lookupFolderId);
+                if (!string.IsNullOrEmpty(discoveredId))
+                {
+                    remoteId = discoveredId;
+                    _settings.GoogleDriveFileId = discoveredId;
+
+                    if (_state.Tasks.Count == 0)
+                    {
+                        // Nothing local to lose - always safe to just pull down what's already
+                        // there, no need to run this through the conflict check below at all.
+                        AppLogger.Info("MainViewModel", $"Found existing Google Drive data (ID '{discoveredId}') on this device's first sync - downloading instead of uploading an empty file.");
+                        await _googleDrive.DownloadFileAsync(discoveredId, _currentFilePath);
+                        LoadFile(_currentFilePath);
+                        _settings.LastGoogleDriveSyncTime = DateTime.Now;
+                        _settingsStore.Save(_settings);
+                        SaveStatusText = "Downloaded existing tasks from Google Drive.";
+                        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+                        OnPropertyChanged(nameof(IsGoogleDriveConnected));
+                        return;
+                    }
+                    // Local already has real tasks of its own too - don't auto-pick a winner
+                    // here, let the conflict check below evaluate it now that remoteId is known.
+                }
+            }
+
             // A brand-new or just-emptied data file is never written to disk until the first
             // real edit triggers a save - FlushPendingSaveAsync only flushes an edit that's
             // already pending, so it's a no-op here and UploadFileAsync would otherwise throw
             // FileNotFoundException trying to read a file that only ever existed in memory.
             if (!File.Exists(_currentFilePath))
                 await _store.SaveAsync(_state, _currentFilePath);
-
-            var remoteId = _settings.GoogleDriveFileId;
 
             // Check remote modified timestamp if remoteId exists
             if (!string.IsNullOrEmpty(remoteId))

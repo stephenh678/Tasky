@@ -186,6 +186,21 @@ public class GoogleDriveService
     }
 
     /// <summary>
+    /// Looks up a file by name within a Drive folder without creating one, for callers that
+    /// need to know whether existing remote content is present before deciding what to do.
+    /// </summary>
+    public async Task<string?> FindExistingFileIdAsync(string fileName, string parentFolderId)
+    {
+        if (_driveService is null) return null;
+
+        var lookupRequest = _driveService.Files.List();
+        lookupRequest.Q = $"name = '{fileName}' and '{parentFolderId}' in parents and trashed = false";
+        lookupRequest.Fields = "files(id, name)";
+        var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
+        return existingFiles is { Count: > 0 } ? existingFiles[0].Id : null;
+    }
+
+    /// <summary>
     /// Uploads or updates a .tasky file in Google Drive under the 'Tasky' folder.
     /// </summary>
     public async Task<string> UploadFileAsync(string localPath, string? existingRemoteFileId = null, Settings? settings = null, SettingsStore? settingsStore = null)
@@ -210,15 +225,9 @@ public class GoogleDriveService
         var resolvedRemoteId = existingRemoteFileId;
         if (string.IsNullOrEmpty(resolvedRemoteId))
         {
-            var lookupRequest = _driveService.Files.List();
-            lookupRequest.Q = $"name = '{fileName}' and '{taskyFolderId}' in parents and trashed = false";
-            lookupRequest.Fields = "files(id, name)";
-            var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
-            if (existingFiles is { Count: > 0 })
-            {
-                resolvedRemoteId = existingFiles[0].Id;
+            resolvedRemoteId = await FindExistingFileIdAsync(fileName, taskyFolderId);
+            if (!string.IsNullOrEmpty(resolvedRemoteId))
                 AppLogger.Info("GoogleDriveService", $"Found existing remote file '{fileName}' (ID '{resolvedRemoteId}') by name - reusing instead of creating a duplicate");
-            }
         }
 
         if (!string.IsNullOrEmpty(resolvedRemoteId))

@@ -492,7 +492,7 @@ public class GoogleDriveService
     /// <summary>
     /// Downloads a .tasky file and its attachments from Google Drive to the local path.
     /// </summary>
-    public async Task DownloadFileAsync(string remoteFileId, string destinationLocalPath)
+    public async Task DownloadFileAsync(string remoteFileId, string destinationLocalPath, bool downloadAttachments = true)
     {
         if (_driveService is null)
             throw new InvalidOperationException("Not authenticated with Google Drive.");
@@ -509,6 +509,8 @@ public class GoogleDriveService
         memoryStream.Position = 0;
         await File.WriteAllBytesAsync(destinationLocalPath, memoryStream.ToArray());
         AppLogger.Info("GoogleDriveService", $"Download completed successfully for '{destinationLocalPath}'");
+
+        if (!downloadAttachments) return;
 
         // Download attachments from Tasky/Attachments and Tasky/InlineImages on Google Drive
         try

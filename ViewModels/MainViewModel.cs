@@ -403,6 +403,7 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
+                RecordTaskDeletionTombstone(task);
                 CleanupTaskAttachments(task);
             }
             SelectedTask = null;
@@ -448,6 +449,7 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
+                RecordTaskDeletionTombstone(task);
                 CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
@@ -608,41 +610,16 @@ public class MainViewModel : INotifyPropertyChanged
             await FlushPendingSaveAsync();
 
             var remoteId = _settings.GoogleDriveFileId;
+            var taskyFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
 
             // This device has never linked to a remote file before (first-ever connect, or
-            // reconnect after a disconnect) - resolve whether one already exists on Drive by name
-            // (e.g. already synced from another device) before deciding what to do. Without this,
-            // remoteId stays unset, the conflict-timestamp check below (which only evaluates a
-            // known remoteId) never runs at all, and the fallback further down uploads
-            // unconditionally - silently overwriting another device's real data, whether that's
-            // with an empty placeholder file (this device has nothing yet) or with this device's
-            // own real-but-independent tasks (never reconciled with what's already on Drive).
+            // reconnect after a disconnect) - resolve whether one already exists on Drive by
+            // name before deciding what to do.
             if (string.IsNullOrEmpty(remoteId))
             {
-                var lookupFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
-                var discoveredId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), lookupFolderId);
-                if (!string.IsNullOrEmpty(discoveredId))
-                {
-                    remoteId = discoveredId;
-                    _settings.GoogleDriveFileId = discoveredId;
-
-                    if (_state.Tasks.Count == 0)
-                    {
-                        // Nothing local to lose - always safe to just pull down what's already
-                        // there, no need to run this through the conflict check below at all.
-                        AppLogger.Info("MainViewModel", $"Found existing Google Drive data (ID '{discoveredId}') on this device's first sync - downloading instead of uploading an empty file.");
-                        await _googleDrive.DownloadFileAsync(discoveredId, _currentFilePath);
-                        LoadFile(_currentFilePath);
-                        _settings.LastGoogleDriveSyncTime = DateTime.Now;
-                        _settingsStore.Save(_settings);
-                        SaveStatusText = "Downloaded existing tasks from Google Drive.";
-                        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
-                        OnPropertyChanged(nameof(IsGoogleDriveConnected));
-                        return;
-                    }
-                    // Local already has real tasks of its own too - don't auto-pick a winner
-                    // here, let the conflict check below evaluate it now that remoteId is known.
-                }
+                remoteId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), taskyFolderId);
+                if (!string.IsNullOrEmpty(remoteId))
+                    _settings.GoogleDriveFileId = remoteId;
             }
 
             // A brand-new or just-emptied data file is never written to disk until the first
@@ -652,74 +629,43 @@ public class MainViewModel : INotifyPropertyChanged
             if (!File.Exists(_currentFilePath))
                 await _store.SaveAsync(_state, _currentFilePath);
 
-            // Check remote modified timestamp if remoteId exists
             if (!string.IsNullOrEmpty(remoteId))
             {
-                var remoteModified = await _googleDrive.GetRemoteModifiedTimeAsync(remoteId);
-                var localInfo = new FileInfo(_currentFilePath);
-
-                if (remoteModified.HasValue && localInfo.Exists && remoteModified.Value > localInfo.LastWriteTime.AddSeconds(2))
+                // A remote file already exists - merge it into local rather than guessing which
+                // whole file is "newer." A device that's behind just adopts what's new, a device
+                // with its own new tasks keeps them, and deletions propagate via tombstones
+                // instead of a device that hasn't pulled a delete yet resurrecting it. See
+                // MergeRemoteState for the one case this can't fully reconcile (the same task
+                // edited on two devices since they last agreed).
+                //
+                // A remote file that's empty or not valid JSON (an interrupted upload, or a
+                // leftover from some earlier failure) must not abort the whole sync - there's
+                // nothing usable to merge, but local's own state is still good, so fall through
+                // and let it upload normally rather than leaving the device stuck retrying a
+                // sync that can never succeed against a file it can't read.
+                var tempPath = Path.Combine(Path.GetTempPath(), $"tasky_remote_{Guid.NewGuid():N}.tasky");
+                try
                 {
-                    // Check if local file was NOT modified since the last sync (clean remote update from another device)
-                    bool localUnmodifiedSinceSync = _settings.LastGoogleDriveSyncTime.HasValue &&
-                                                    localInfo.LastWriteTime <= _settings.LastGoogleDriveSyncTime.Value.AddSeconds(5);
+                    await _googleDrive.DownloadFileAsync(remoteId, tempPath, downloadAttachments: false);
+                    var remoteState = await _store.LoadAsync(tempPath);
+                    var (added, updated, removed) = MergeRemoteState(remoteState);
+                    AppLogger.Info("MainViewModel", $"Google Drive merge: +{added} task(s), ~{updated} updated, -{removed} removed.");
 
-                    if (localUnmodifiedSinceSync)
-                    {
-                        // Clean remote update: download newer file from Google Drive safely
-                        AppLogger.Info("MainViewModel", $"Remote Google Drive file is newer ({remoteModified.Value:g}). Downloading automatically.");
-                        await _googleDrive.DownloadFileAsync(remoteId, _currentFilePath);
-                        LoadFile(_currentFilePath);
-                        _settings.LastGoogleDriveSyncTime = DateTime.Now;
-                        _settingsStore.Save(_settings);
-                        SaveStatusText = "Downloaded latest tasks from Google Drive.";
-                        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
-                        OnPropertyChanged(nameof(IsGoogleDriveConnected));
-                        return;
-                    }
-                    else
-                    {
-                        // Conflict: Both local and remote have edits!
-                        if (!isSilentOnExit)
-                        {
-                            var choice = ThemedMessageBox.Show(
-                                $"A newer version of your tasks was found on Google Drive (modified {remoteModified.Value:g}).\n\n" +
-                                "Do you want to download the remote version from Google Drive?\n" +
-                                "Click 'Yes' to download remote version, or 'No' to overwrite Google Drive with your local version.",
-                                "Google Drive Sync Conflict",
-                                MessageBoxButton.YesNoCancel,
-                                MessageBoxImage.Question);
-
-                            if (choice == MessageBoxResult.Cancel)
-                            {
-                                SaveStatusText = "Google Drive sync cancelled.";
-                                return;
-                            }
-
-                            if (choice == MessageBoxResult.Yes)
-                            {
-                                await _googleDrive.DownloadFileAsync(remoteId, _currentFilePath);
-                                LoadFile(_currentFilePath);
-                                _settings.LastGoogleDriveSyncTime = DateTime.Now;
-                                _settingsStore.Save(_settings);
-                                SaveStatusText = "Downloaded latest tasks from Google Drive.";
-                                OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
-                                OnPropertyChanged(nameof(IsGoogleDriveConnected));
-                                return;
-                            }
-                        }
-                        else
-                        {
-                            // In silent background mode, do not overwrite a newer remote file!
-                            AppLogger.Warn("MainViewModel", $"Background auto-sync paused: Remote file on Google Drive is newer ({remoteModified.Value:g}).");
-                            SaveStatusText = "Google Drive sync paused: Remote file is newer. Click ☁️ to resolve.";
-                            return;
-                        }
-                    }
+                    RefreshTags();
+                    FilteredTasksView.Refresh();
+                    await _store.SaveAsync(_state, _currentFilePath);
+                }
+                catch (InvalidDataException ex)
+                {
+                    AppLogger.Warn("MainViewModel", $"Remote Google Drive file '{remoteId}' isn't readable ({ex.Message}) - skipping merge and uploading local state as-is.");
+                }
+                finally
+                {
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch (IOException) { }
                 }
             }
 
-            // Upload local file to Google Drive
+            // Upload the merged (or, on a first-ever sync anywhere, simply local) result.
             var newRemoteId = await _googleDrive.UploadFileAsync(_currentFilePath, remoteId, _settings, _settingsStore);
             _settings.GoogleDriveFileId = newRemoteId;
             _settings.LastGoogleDriveSyncTime = DateTime.Now;
@@ -808,6 +754,7 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 DetachTask(task);
                 AllTasks.Remove(task);
+                RecordTaskDeletionTombstone(task);
                 CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
@@ -818,6 +765,112 @@ public class MainViewModel : INotifyPropertyChanged
         {
             foreach (var t in SelectedTasks) t.IsPinned = !t.IsPinned;
         }, _ => SelectedTasks.Count > 0);
+    }
+
+    // Permanent delete has no undo path (unlike Move to Trash), so a tombstone recorded here
+    // never needs to be retracted. Without this, Google Drive's per-task merge would have no way
+    // to tell "a device deleted this task" apart from "a device just hasn't pulled this task
+    // down yet" - both look identical (missing from that device's list) without a record of which
+    // task IDs were actually deleted and when.
+    private void RecordTaskDeletionTombstone(TaskItem task)
+    {
+        _state.DeletedTasks.Add(new TaskSyncRecord { TaskId = task.Id, Timestamp = DateTime.Now });
+    }
+
+    // Per-task merge for Google Drive sync, replacing a whole-file "which copy is newer" guess.
+    // The whole-file version couldn't tell "clean update from another device" apart from "real
+    // conflict" without misfiring (that's the story of this session's last several bug reports),
+    // because a single timestamp on the whole file conflates every task's history into one
+    // number. Per task, the picture is much clearer: a task missing from one side either belongs
+    // there (bring it in) or was deleted (a tombstone says when, so a device that's simply behind
+    // doesn't resurrect it) - and a task edited on only one side since they last agreed is always
+    // safe to adopt. The one thing this still can't fully reconcile is the same task edited on
+    // both sides in the same window - that's genuine field-level merging (CRDT territory), out of
+    // scope here, so it falls back to keeping whichever edit has the later ModifiedAt and the
+    // other edit to that specific task is lost. Narrower and rarer than losing an entire list.
+    private (int Added, int Updated, int Removed) MergeRemoteState(AppState remoteState)
+    {
+        var localById = _state.Tasks.ToDictionary(t => t.Id);
+        var remoteById = remoteState.Tasks.ToDictionary(t => t.Id);
+        var localTombstones = _state.DeletedTasks.ToDictionary(r => r.TaskId, r => r.Timestamp);
+        var remoteTombstones = remoteState.DeletedTasks.ToDictionary(r => r.TaskId, r => r.Timestamp);
+
+        var added = 0;
+        var updated = 0;
+        var removed = 0;
+
+        // Remote-only tasks: bring them in, unless this device already deleted the same ID and
+        // remote's copy predates that deletion (i.e. remote just hasn't learned about it yet).
+        foreach (var (id, remoteTask) in remoteById)
+        {
+            if (localById.ContainsKey(id)) continue;
+
+            if (localTombstones.TryGetValue(id, out var deletedAt) && remoteTask.ModifiedAt <= deletedAt)
+                continue;
+
+            AllTasks.Add(remoteTask);
+            AttachTask(remoteTask);
+            added++;
+        }
+
+        // Local-only tasks: leave them (they'll upload as-is), unless another device already
+        // deleted the same ID and this device hasn't touched it since that deletion.
+        foreach (var (id, localTask) in localById)
+        {
+            if (remoteById.ContainsKey(id)) continue;
+
+            if (remoteTombstones.TryGetValue(id, out var deletedAt) && localTask.ModifiedAt <= deletedAt)
+            {
+                DetachTask(localTask);
+                AllTasks.Remove(localTask);
+                if (SelectedTask == localTask) SelectedTask = null;
+                removed++;
+            }
+        }
+
+        // Present on both sides: the newer edit to THIS task wins - detached first, since
+        // TaskItem's property setters trigger Task_PropertyChanged while attached, which would
+        // stamp ModifiedAt to "now" (clobbering the timestamp being restored here) and can spawn
+        // a recurring-task occurrence or push an undo entry - none of which belong in a sync merge.
+        foreach (var (id, remoteTask) in remoteById)
+        {
+            if (!localById.TryGetValue(id, out var localTask)) continue;
+            if (remoteTask.ModifiedAt <= localTask.ModifiedAt) continue;
+
+            DetachTask(localTask);
+            ApplyTaskFields(localTask, remoteTask);
+            AttachTask(localTask);
+            updated++;
+        }
+
+        // Tombstones union both ways, so a third device merging later learns about every
+        // deletion recorded anywhere, not just the ones this device made itself.
+        var mergedTombstoneIds = new HashSet<Guid>(_state.DeletedTasks.Select(r => r.TaskId));
+        foreach (var remoteTombstone in remoteState.DeletedTasks)
+        {
+            if (mergedTombstoneIds.Add(remoteTombstone.TaskId))
+                _state.DeletedTasks.Add(remoteTombstone);
+        }
+
+        return (added, updated, removed);
+    }
+
+    private static void ApplyTaskFields(TaskItem target, TaskItem source)
+    {
+        target.Text = source.Text;
+        target.IsDone = source.IsDone;
+        target.IsClosed = source.IsClosed;
+        target.IsPinned = source.IsPinned;
+        target.DueDate = source.DueDate;
+        target.Recurrence = source.Recurrence;
+
+        target.Tags.Clear();
+        foreach (var tag in source.Tags) target.Tags.Add(tag);
+
+        target.Body.Clear();
+        foreach (var block in source.Body) target.Body.Add(block);
+
+        target.ModifiedAt = source.ModifiedAt;
     }
 
     private void CleanupTaskAttachments(TaskItem deletedTask)
@@ -1058,6 +1111,13 @@ public class MainViewModel : INotifyPropertyChanged
             AllTasks.Add(task);
             AttachTask(task);
         }
+
+        // DeletedTasks isn't bound to any UI collection (unlike Tasks/AllTasks), so a plain
+        // reassignment is safe here - but it still has to happen, or a tombstone written to disk
+        // by a previous session stays invisible to Google Drive's merge (which only ever
+        // consults the in-memory _state.DeletedTasks), letting a deleted task get silently
+        // resurrected on the next sync.
+        _state.DeletedTasks = loaded.DeletedTasks;
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
 

@@ -15,6 +15,7 @@ public class Settings
     public bool IsVerboseLogging { get; set; } = false;
     public bool IsGoogleDriveEnabled { get; set; } = false;
     public string? GoogleDriveFileId { get; set; }
+    public string? GoogleDriveFolderId { get; set; }
     public string? GoogleDriveAccountEmail { get; set; }
     public string? GoogleDriveClientId { get; set; }
     public string? GoogleDriveClientSecret { get; set; }

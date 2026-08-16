@@ -160,14 +160,29 @@ public class GoogleDriveService
         if (!string.IsNullOrEmpty(parentFolderId))
             q += $" and '{parentFolderId}' in parents";
 
-        var listRequest = _driveService.Files.List();
-        listRequest.Q = q;
-        listRequest.Fields = "files(id, name)";
-        var result = await listRequest.ExecuteAsync();
-
-        if (result.Files != null && result.Files.Count > 0)
+        // A folder that was genuinely just created by another device can briefly not show up in
+        // a files.list query - Drive's search index lags the write by a couple of seconds. Retry
+        // a few times before concluding it doesn't exist; otherwise a second device's first-ever
+        // connect can race this and create a duplicate "Tasky" folder instead of finding the real
+        // one (observed live: 3 separate duplicate folders got created this way in one evening).
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            return result.Files[0].Id;
+            var listRequest = _driveService.Files.List();
+            listRequest.Q = q;
+            listRequest.Fields = "files(id, name)";
+            var result = await listRequest.ExecuteAsync();
+
+            if (result.Files != null && result.Files.Count > 0)
+            {
+                return result.Files[0].Id;
+            }
+
+            if (attempt < maxAttempts)
+            {
+                AppLogger.Warn("GoogleDriveService", $"Folder '{folderName}' not found on attempt {attempt}/{maxAttempts} - retrying in case Drive's index is still catching up.");
+                await Task.Delay(1500);
+            }
         }
 
         // Create new folder
@@ -201,6 +216,19 @@ public class GoogleDriveService
     }
 
     /// <summary>
+    /// Looks up the parent folder ID a given file actually lives in.
+    /// </summary>
+    private async Task<string?> GetParentFolderIdAsync(string fileId)
+    {
+        if (_driveService is null) return null;
+
+        var getRequest = _driveService.Files.Get(fileId);
+        getRequest.Fields = "parents";
+        var file = await getRequest.ExecuteAsync();
+        return file.Parents is { Count: > 0 } ? file.Parents[0] : null;
+    }
+
+    /// <summary>
     /// Uploads or updates a .tasky file in Google Drive under the 'Tasky' folder.
     /// </summary>
     public async Task<string> UploadFileAsync(string localPath, string? existingRemoteFileId = null, Settings? settings = null, SettingsStore? settingsStore = null)
@@ -213,7 +241,29 @@ public class GoogleDriveService
 
         AppLogger.Info("GoogleDriveService", $"Uploading file '{localPath}' to Google Drive");
 
-        var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
+        // Cache the resolved "Tasky" folder ID once found, instead of re-resolving it by name on
+        // every single sync - besides the wasted round-trip, each fresh lookup is one more chance
+        // to hit the index-lag race in GetOrCreateFolderAsync and spawn a duplicate folder.
+        var taskyFolderId = settings?.GoogleDriveFolderId;
+        if (string.IsNullOrEmpty(taskyFolderId))
+        {
+            // If we already know exactly which remote file this is, ask Drive where that file
+            // actually lives instead of a separate by-name folder search - a by-name search can
+            // resolve to a *different* duplicate "Tasky" folder than the one the cached file is
+            // really sitting in (observed live: a device with a stale cached file ID cached a
+            // folder ID that didn't match). Only fall back to name-based lookup/creation when
+            // there's no existing file yet to anchor to (this device's first-ever upload).
+            taskyFolderId = !string.IsNullOrEmpty(existingRemoteFileId)
+                ? await GetParentFolderIdAsync(existingRemoteFileId)
+                : null;
+            taskyFolderId ??= await GetOrCreateFolderAsync("Tasky");
+
+            if (settings is not null && settingsStore is not null)
+            {
+                settings.GoogleDriveFolderId = taskyFolderId;
+                settingsStore.Save(settings);
+            }
+        }
         var fileName = Path.GetFileName(localPath);
         using var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 

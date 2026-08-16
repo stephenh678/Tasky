@@ -58,6 +58,8 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isExecutingUndo;
     private bool _reminderCheckInProgress;
     private readonly DispatcherTimer _autoSyncTimer;
+    private readonly DispatcherTimer _idleSyncTimer;
+    private bool _syncInProgress;
 
     // A passthrough, not an independent collection - _state.Tasks is now the single source of
     // truth for both "what's saved" and "what's shown", instead of the two being manually kept in
@@ -339,6 +341,22 @@ public class MainViewModel : INotifyPropertyChanged
             }
         };
 
+        // Everything above only pulls in another device's changes as a side effect of this
+        // device also saving something - two idle devices just sitting there never notice each
+        // other's edits. This timer pulls (and pushes) on its own fixed cadence regardless of
+        // local activity, so a change made elsewhere shows up here without the user having to
+        // touch anything first.
+        _idleSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
+        _idleSyncTimer.Tick += async (_, _) =>
+        {
+            if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated)
+            {
+                AppLogger.Info("MainViewModel", "Triggering periodic idle Google Drive sync...");
+                await PerformGoogleDriveSyncAsync(isSilentOnExit: true);
+            }
+        };
+        _idleSyncTimer.Start();
+
         InitializeTaskCommands();
         InitializeViewCommands();
         InitializeFileCommands();
@@ -358,6 +376,11 @@ public class MainViewModel : INotifyPropertyChanged
                     {
                         OnPropertyChanged(nameof(IsGoogleDriveConnected));
                         OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+
+                        // Pull in whatever changed elsewhere since this device was last open,
+                        // instead of only finding out once the user edits something here first.
+                        AppLogger.Info("MainViewModel", "Syncing with Google Drive on startup...");
+                        _ = PerformGoogleDriveSyncAsync(isSilentOnExit: true);
                     });
                 }
             });
@@ -604,19 +627,35 @@ public class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        // Now that sync can be triggered by three independent, unrelated timers (edit-debounce,
+        // idle, and the one-shot startup sync) plus manual "Sync Now" and exit, two of them can
+        // land close enough together to overlap - e.g. the idle timer fires right as an edit's
+        // debounced sync also kicks off. Overlapping runs would race on the same local file and
+        // remote state, so only one is allowed to actually run at a time; the others no-op and
+        // whichever trigger fires next will just pick up the same work.
+        if (_syncInProgress) return;
+        _syncInProgress = true;
+
         try
         {
             SaveStatusText = "Syncing with Google Drive...";
             await FlushPendingSaveAsync();
 
             var remoteId = _settings.GoogleDriveFileId;
-            var taskyFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
 
             // This device has never linked to a remote file before (first-ever connect, or
             // reconnect after a disconnect) - resolve whether one already exists on Drive by
-            // name before deciding what to do.
+            // name before deciding what to do. Once a file ID is cached there's no need to touch
+            // the "Tasky" folder lookup at all on this path - UploadFileAsync resolves (and
+            // caches) it separately when it actually needs it.
             if (string.IsNullOrEmpty(remoteId))
             {
+                var taskyFolderId = _settings.GoogleDriveFolderId;
+                if (string.IsNullOrEmpty(taskyFolderId))
+                {
+                    taskyFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
+                    _settings.GoogleDriveFolderId = taskyFolderId;
+                }
                 remoteId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), taskyFolderId);
                 if (!string.IsNullOrEmpty(remoteId))
                     _settings.GoogleDriveFileId = remoteId;
@@ -699,6 +738,10 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 ThemedMessageBox.Show($"Google Drive sync failed:\n{ex.Message}", "Google Drive Sync Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+        finally
+        {
+            _syncInProgress = false;
         }
     }
 

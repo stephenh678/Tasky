@@ -63,6 +63,8 @@
                     Padding="16,10" FontWeight="SemiBold" FontSize="13" Click="Connect_Click"/>
             <Button x:Name="SyncNowButton" Content="🔄 Sync Now" Visibility="Collapsed"
                     Padding="16,10" FontWeight="SemiBold" FontSize="13" Click="SyncNow_Click"/>
+            <Button x:Name="ChooseFileButton" Content="📄 Choose File..." Visibility="Collapsed" Margin="8,0,0,0"
+                    Padding="16,10" FontSize="13" Click="ChooseFile_Click"/>
         </StackPanel>
 
         <!-- Status / Progress Message -->

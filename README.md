@@ -116,6 +116,12 @@ folder; attachments live in an `Attachments` folder the same way.
 
 ### Cloud Sync & Backup
 - **Google Drive Integration** — optional 1-click Google sign-in to sync your task files and attachments across computers
+- **Per-file sync** — each local `.tasky` file (see **Multiple files** above) tracks its own remote
+  copy independently, so keeping more than one data file around never causes one file's sync to
+  overwrite another's
+- **Choose Which File to Sync** — connecting Google Drive (or clicking **Choose File...** any time
+  after) shows any `.tasky` files already on your Drive, so you can attach this computer to an
+  existing one instead of guessing, or create a new file that syncs alongside it
 - **Per-task merge** — sync no longer overwrites one whole file with another. Each sync downloads
   the remote file, merges it with local state task-by-task (newest edit wins per task, tasks unique
   to either side are kept), then uploads the merged result — so editing on two computers doesn't
@@ -124,7 +130,9 @@ folder; attachments live in an `Attachments` folder the same way.
   on one computer stays deleted after syncing on another, without resurrecting it
 - **Automatic Background Live Sync** — debounced auto-sync uploads task edits and media 10 seconds after you finish typing
 - **Sync on Launch & While Idle** — pulls in changes from other computers as soon as the app opens, and again every few minutes while it's running, so you don't have to make an edit yourself just to see what changed elsewhere
-- **Folder & Attachment Syncing** — stores files safely in a dedicated `Tasky` folder and `Tasky/Attachments/` subfolder on Google Drive
+- **Folder & Attachment Syncing** — stores files safely in a dedicated `Tasky` folder on Google
+  Drive, with each data file's attachments kept in their own isolated subfolder so multiple files
+  never mix their attachments together
 - **Shutdown Protection** — forces a final sync on application close
 
 ## Keyboard shortcuts

@@ -337,11 +337,39 @@ public class GoogleDriveService
     {
         if (_driveService is null) return;
 
-        await SyncMediaDirectoryAsync("Attachments", localDataFilePath, taskyFolderId, settings, settingsStore);
-        await SyncMediaDirectoryAsync("InlineImages", localDataFilePath, taskyFolderId, settings, settingsStore);
+        var containerFolderId = await ResolveMediaContainerFolderIdAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
+
+        await SyncMediaDirectoryAsync("Attachments", localDataFilePath, containerFolderId, settings, settingsStore);
+        await SyncMediaDirectoryAsync("InlineImages", localDataFilePath, containerFolderId, settings, settingsStore);
     }
 
-    private async Task SyncMediaDirectoryAsync(string dirName, string localDataFilePath, string taskyFolderId, Settings? settings = null, SettingsStore? settingsStore = null)
+    /// <summary>
+    /// Resolves (and caches) the Drive folder that holds one specific local .tasky file's own
+    /// "Attachments"/"InlineImages" subfolders. Before this existed, every file's attachments
+    /// lived flat in the shared root "Tasky" folder, so two different .tasky files' attachments
+    /// (and the 3-way-diff "was this in the last sync" bookkeeping) could collide. The one file
+    /// that already has real data sitting in that flat layout keeps using it; every other file
+    /// gets its own subfolder so they can never collide.
+    /// </summary>
+    private async Task<string> ResolveMediaContainerFolderIdAsync(string localDataFilePath, string taskyFolderId, Settings? settings, SettingsStore? settingsStore)
+    {
+        if (settings is null) return taskyFolderId;
+
+        var fileKey = Path.GetFileName(localDataFilePath).ToLowerInvariant();
+        if (settings.GoogleDriveMediaContainerFolderIdsByFile.TryGetValue(fileKey, out var cached))
+            return cached;
+
+        var containerId = !string.IsNullOrEmpty(settings.GoogleDriveLegacyAttachmentsFileKey)
+                           && settings.GoogleDriveLegacyAttachmentsFileKey == fileKey
+            ? taskyFolderId
+            : await GetOrCreateFolderAsync(Path.GetFileNameWithoutExtension(fileKey), taskyFolderId);
+
+        settings.GoogleDriveMediaContainerFolderIdsByFile[fileKey] = containerId;
+        settingsStore?.Save(settings);
+        return containerId;
+    }
+
+    private async Task SyncMediaDirectoryAsync(string dirName, string localDataFilePath, string containerFolderId, Settings? settings = null, SettingsStore? settingsStore = null)
     {
         if (_driveService is null) return;
 
@@ -351,7 +379,7 @@ public class GoogleDriveService
             var localDir = Path.Combine(baseDir, dirName);
             Directory.CreateDirectory(localDir);
 
-            var remoteFolderId = await GetOrCreateFolderAsync(dirName, taskyFolderId);
+            var remoteFolderId = await GetOrCreateFolderAsync(dirName, containerFolderId);
 
             // Fetch remote files on Google Drive under dirName
             var listReq = _driveService.Files.List();
@@ -368,9 +396,8 @@ public class GoogleDriveService
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var referencedFiles = GetReferencedAttachmentFilenames(localDataFilePath);
-            var lastSyncedSet = settings?.LastSyncedMediaFiles is not null
-                ? new HashSet<string>(settings.LastSyncedMediaFiles, StringComparer.OrdinalIgnoreCase)
-                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var mediaFileKey = Path.GetFileName(localDataFilePath).ToLowerInvariant();
+            var lastSyncedSet = ResolveLastSyncedMediaSet(mediaFileKey, settings);
 
             // 1. Process Remote Files with 3-Way Diff logic
             foreach (var rFile in remoteFiles)
@@ -450,7 +477,7 @@ public class GoogleDriveService
             // Save updated lastSyncedSet back to settings if provided
             if (settings is not null && settingsStore is not null)
             {
-                settings.LastSyncedMediaFiles = lastSyncedSet.ToList();
+                settings.LastSyncedMediaFilesByFile[mediaFileKey] = lastSyncedSet.ToList();
                 settingsStore.Save(settings);
             }
         }
@@ -458,6 +485,25 @@ public class GoogleDriveService
         {
             AppLogger.Warn("GoogleDriveService", $"SyncMediaDirectoryAsync error for {dirName}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Same legacy-preservation logic as ResolveMediaContainerFolderIdAsync, for the "was this
+    /// file part of the last sync" bookkeeping instead of the folder location: the file that owns
+    /// the old flat layout inherits its real accumulated history so nothing looks newly-added (or
+    /// worse, looks deleted-and-needing-pruning) on the first sync under the new per-file scheme.
+    /// </summary>
+    private static HashSet<string> ResolveLastSyncedMediaSet(string fileKey, Settings? settings)
+    {
+        if (settings is null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (settings.LastSyncedMediaFilesByFile.TryGetValue(fileKey, out var existing))
+            return new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrEmpty(settings.GoogleDriveLegacyAttachmentsFileKey) && settings.GoogleDriveLegacyAttachmentsFileKey == fileKey)
+            return new HashSet<string>(settings.LastSyncedMediaFiles, StringComparer.OrdinalIgnoreCase);
+
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     private static HashSet<string> GetReferencedAttachmentFilenames(string localDataFilePath)
@@ -542,7 +588,7 @@ public class GoogleDriveService
     /// <summary>
     /// Downloads a .tasky file and its attachments from Google Drive to the local path.
     /// </summary>
-    public async Task DownloadFileAsync(string remoteFileId, string destinationLocalPath, bool downloadAttachments = true)
+    public async Task DownloadFileAsync(string remoteFileId, string destinationLocalPath, bool downloadAttachments = true, Settings? settings = null, SettingsStore? settingsStore = null)
     {
         if (_driveService is null)
             throw new InvalidOperationException("Not authenticated with Google Drive.");
@@ -562,12 +608,15 @@ public class GoogleDriveService
 
         if (!downloadAttachments) return;
 
-        // Download attachments from Tasky/Attachments and Tasky/InlineImages on Google Drive
+        // Download attachments from this file's own Attachments/InlineImages folder on Google
+        // Drive (the shared flat root for the legacy file, a dedicated subfolder otherwise - see
+        // ResolveMediaContainerFolderIdAsync).
         try
         {
             var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
-            await DownloadMediaDirectoryAsync("Attachments", dir ?? ".", taskyFolderId);
-            await DownloadMediaDirectoryAsync("InlineImages", dir ?? ".", taskyFolderId);
+            var containerFolderId = await ResolveMediaContainerFolderIdAsync(destinationLocalPath, taskyFolderId, settings, settingsStore);
+            await DownloadMediaDirectoryAsync("Attachments", dir ?? ".", containerFolderId);
+            await DownloadMediaDirectoryAsync("InlineImages", dir ?? ".", containerFolderId);
         }
         catch (Exception ex)
         {
@@ -640,10 +689,17 @@ public class GoogleDriveService
         try
         {
             var request = _driveService.Files.List();
-            request.Q = "name contains '.tasky' and trashed = false";
+            // Drive's "contains" operator on name is word/prefix-tokenized, not a literal
+            // substring match - it ignores the dot, so "name contains '.tasky'" alone also
+            // matches a folder or file named just "Tasky" (e.g. the root Tasky sync folder, or a
+            // leftover duplicate folder). Exclude folders in the query, then re-check the exact
+            // ".tasky" suffix client-side as a second guard regardless of Drive's matching quirks.
+            request.Q = "name contains '.tasky' and trashed = false and mimeType != 'application/vnd.google-apps.folder'";
             request.Fields = "files(id, name, modifiedTime, size)";
             var result = await request.ExecuteAsync();
-            return result.Files?.ToList() ?? new List<Google.Apis.Drive.v3.Data.File>();
+            return (result.Files ?? new List<Google.Apis.Drive.v3.Data.File>())
+                .Where(f => !string.IsNullOrEmpty(f.Name) && f.Name.EndsWith(".tasky", StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
         catch (Exception ex)
         {

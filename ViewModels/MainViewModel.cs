@@ -509,19 +509,7 @@ public class MainViewModel : INotifyPropertyChanged
     // touch the file on disk directly, rather than mutating in-memory task state.
     private void InitializeFileCommands()
     {
-        NewFileCommand = new RelayCommand(_ =>
-        {
-            var dialog = new SaveFileDialog
-            {
-                Title = "New Tasky File",
-                Filter = "Tasky files (*.tasky)|*.tasky",
-                FileName = "Tasky.tasky"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            _store.Save(new AppState(), dialog.FileName);
-            LoadFile(dialog.FileName);
-        });
+        NewFileCommand = new RelayCommand(_ => CreateNewLocalFileForSync());
 
         OpenFileCommand = new RelayCommand(_ =>
         {
@@ -532,6 +520,20 @@ public class MainViewModel : INotifyPropertyChanged
             };
             if (dialog.ShowDialog() != true) return;
             LoadFile(dialog.FileName);
+
+            // Renaming a synced .tasky file outside the app (Explorer) then reopening it here
+            // looks, from the app's perspective, identical to opening a brand-new file - there's
+            // no reliable way to tell "this is file X under a new name" from "this really is a
+            // new file" by name alone. Rather than silently create a duplicate remote file on the
+            // next sync, nudge toward the explicit fix (Choose File) - but only once this device
+            // has actual sync history to plausibly be renaming *from*, so a first-time Drive user
+            // opening an old file doesn't get an unexplained warning.
+            if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated
+                && _settings.GoogleDriveFileIdsByFile.Count > 0
+                && !_settings.GoogleDriveFileIdsByFile.ContainsKey(Path.GetFileName(dialog.FileName).ToLowerInvariant()))
+            {
+                SaveStatusText = "This file isn't linked to Google Drive yet - syncing will create a new remote copy. If it's a renamed version of a file you already sync, use Google Drive → Choose File to link it instead.";
+            }
         });
 
         SaveFileAsCommand = new RelayCommand(_ =>
@@ -610,13 +612,86 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void OpenGoogleDriveWindow()
     {
-        var window = new GoogleDriveWindow(_googleDrive, _settings, _settingsStore, () => PerformGoogleDriveSyncAsync())
+        var window = new GoogleDriveWindow(
+            _googleDrive, _settings, _settingsStore, () => PerformGoogleDriveSyncAsync(),
+            AttachExistingGoogleDriveFileAsync, CreateNewLocalFileForSync)
         {
             Owner = Application.Current?.MainWindow
         };
         window.ShowDialog();
         OnPropertyChanged(nameof(IsGoogleDriveConnected));
         OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
+    }
+
+    // Downloads a file the user picked from their existing Google Drive files and makes it the
+    // active local file, instead of the app guessing (and potentially clobbering the wrong
+    // remote file - see the per-file GoogleDriveFileIdsByFile cache this pairs with).
+    private async Task AttachExistingGoogleDriveFileAsync(string remoteFileId, string remoteFileName)
+    {
+        await FlushPendingSaveAsync();
+
+        var defaultDir = Path.GetDirectoryName(TodoStore.GetDefaultDataFilePath())
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
+        Directory.CreateDirectory(defaultDir);
+        var targetPath = Path.Combine(defaultDir, remoteFileName);
+
+        // Don't silently overwrite an unrelated local file that happens to share this name -
+        // let the user pick a different destination instead. A directory of the same name is
+        // just as much a collision as a file (Directory.CreateDirectory further up won't create
+        // "Documents\Tasky\Tasky.tasky" as a folder itself, but nothing rules out one already
+        // existing there from outside the app).
+        if (File.Exists(targetPath) || Directory.Exists(targetPath))
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "Save Downloaded Tasky File As",
+                Filter = "Tasky files (*.tasky)|*.tasky",
+                FileName = remoteFileName,
+                InitialDirectory = defaultDir
+            };
+            if (dialog.ShowDialog() != true) return;
+            targetPath = dialog.FileName;
+        }
+
+        var targetFileKey = Path.GetFileName(targetPath).ToLowerInvariant();
+        // This device might be attaching to the one file that already has real attachments
+        // sitting in the shared flat Drive layout (e.g. a fresh install picking up a
+        // long-established file) - if it has no legacy owner of its own yet, assume this could
+        // be it, so the download below actually finds them instead of coming up empty.
+        MarkLegacyAttachmentsOwnerIfUnset(targetFileKey);
+
+        await _googleDrive.DownloadFileAsync(remoteFileId, targetPath, downloadAttachments: true, _settings, _settingsStore);
+        LoadFile(targetPath);
+
+        _settings.GoogleDriveFileIdsByFile[targetFileKey] = remoteFileId;
+        _settingsStore.Save(_settings);
+    }
+
+    // See GoogleDriveLegacyAttachmentsFileKey / ResolveMediaContainerFolderIdAsync: the first
+    // file a device ever links to a pre-existing remote copy (rather than creating a brand-new
+    // one) is presumed to be the one whose attachments already live in Drive's old shared flat
+    // layout, so that layout keeps getting used for it instead of leaving real data behind under
+    // a new subfolder nothing looks at. Only ever adopts a value once per device.
+    private void MarkLegacyAttachmentsOwnerIfUnset(string fileKey)
+        => _settings.GoogleDriveLegacyAttachmentsFileKey ??= fileKey;
+
+    // Same New File flow as NewFileCommand, exposed for the Google Drive "Choose File" picker so
+    // choosing "Create New" there doesn't just silently reuse whatever file already happens to be
+    // open - it's an explicit choice, same as picking an existing remote file is.
+    private bool CreateNewLocalFileForSync()
+    {
+        FlushPendingSave();
+        var dialog = new SaveFileDialog
+        {
+            Title = "New Tasky File",
+            Filter = "Tasky files (*.tasky)|*.tasky",
+            FileName = "Tasky.tasky"
+        };
+        if (dialog.ShowDialog() != true) return false;
+
+        _store.Save(new AppState(), dialog.FileName);
+        LoadFile(dialog.FileName);
+        return true;
     }
 
     public async Task PerformGoogleDriveSyncAsync(bool isSilentOnExit = false)
@@ -641,7 +716,27 @@ public class MainViewModel : INotifyPropertyChanged
             SaveStatusText = "Syncing with Google Drive...";
             await FlushPendingSaveAsync();
 
-            var remoteId = _settings.GoogleDriveFileId;
+            // Cache the remote file ID per local filename, not globally - a device can have more
+            // than one .tasky file open over its lifetime (New/Open/Save As), and each one syncs
+            // to its own remote file. A single global cache would hand a different file's remote
+            // ID to whichever file happens to be open next, silently overwriting it on upload.
+            var fileKey = Path.GetFileName(_currentFilePath).ToLowerInvariant();
+            var remoteId = _settings.GoogleDriveFileIdsByFile.TryGetValue(fileKey, out var cachedRemoteId)
+                ? cachedRemoteId
+                : null;
+
+            // Legacy migration: versions before this fix cached a single global remote file ID.
+            // If this file has never been synced under the new per-file cache AND the per-file
+            // cache is otherwise empty (i.e. this device hasn't adopted the new scheme for any
+            // file yet), the old global ID can only belong to whichever file was open when it was
+            // last cached - almost always this same file, since most installs only ever use one.
+            if (remoteId is null && !string.IsNullOrEmpty(_settings.GoogleDriveFileId) && _settings.GoogleDriveFileIdsByFile.Count == 0)
+            {
+                remoteId = _settings.GoogleDriveFileId;
+                // This file is definitely the one the old flat attachments layout belongs to -
+                // it's the exact file the legacy single-ID cache was tracking.
+                MarkLegacyAttachmentsOwnerIfUnset(fileKey);
+            }
 
             // This device has never linked to a remote file before (first-ever connect, or
             // reconnect after a disconnect) - resolve whether one already exists on Drive by
@@ -658,7 +753,13 @@ public class MainViewModel : INotifyPropertyChanged
                 }
                 remoteId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), taskyFolderId);
                 if (!string.IsNullOrEmpty(remoteId))
-                    _settings.GoogleDriveFileId = remoteId;
+                {
+                    _settings.GoogleDriveFileIdsByFile[fileKey] = remoteId;
+                    // Found real pre-existing data under this exact name (e.g. reconnecting after
+                    // a disconnect, or a fresh install syncing the default filename) - same
+                    // reasoning as the legacy-ID branch above, just reached a different way.
+                    MarkLegacyAttachmentsOwnerIfUnset(fileKey);
+                }
             }
 
             // A brand-new or just-emptied data file is never written to disk until the first
@@ -707,7 +808,7 @@ public class MainViewModel : INotifyPropertyChanged
 
             // Upload the merged (or, on a first-ever sync anywhere, simply local) result.
             var newRemoteId = await _googleDrive.UploadFileAsync(_currentFilePath, remoteId, _settings, _settingsStore);
-            _settings.GoogleDriveFileId = newRemoteId;
+            _settings.GoogleDriveFileIdsByFile[fileKey] = newRemoteId;
             _settings.LastGoogleDriveSyncTime = DateTime.Now;
             _settingsStore.Save(_settings);
 

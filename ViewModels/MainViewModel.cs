@@ -623,13 +623,34 @@ public class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
     }
 
-    // Downloads a file the user picked from their existing Google Drive files and makes it the
-    // active local file, instead of the app guessing (and potentially clobbering the wrong
-    // remote file - see the per-file GoogleDriveFileIdsByFile cache this pairs with).
-    private async Task AttachExistingGoogleDriveFileAsync(string remoteFileId, string remoteFileName)
+    // Attaches to a file the user picked from their existing Google Drive files. Returns false
+    // only when the user explicitly backed out of picking a destination for a genuinely separate
+    // file - the caller uses that to know a sync shouldn't run right afterward.
+    private async Task<bool> AttachExistingGoogleDriveFileAsync(string remoteFileId, string remoteFileName)
     {
         await FlushPendingSaveAsync();
 
+        var currentFileName = Path.GetFileName(_currentFilePath);
+        if (string.Equals(currentFileName, remoteFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            // The remote file you picked shares this device's current local filename - Tasky.tasky
+            // is every install's default, so this is the common case (attaching a second device to
+            // an existing synced file), not a rare collision. Treating it as "download a separate
+            // copy, ask where to put it" would either overwrite whatever's already open here or -
+            // if you picked a different destination - silently abandon it, since the app would
+            // switch to the new file and never look at the old one again. Just linking the ID here
+            // and letting the caller's normal sync pass run right after (as it always does) merges
+            // the remote content into what's already open instead, the same way any other sync
+            // would - no separate download-and-switch step needed since it's already the open file.
+            var fileKey = currentFileName.ToLowerInvariant();
+            MarkLegacyAttachmentsOwnerIfUnset(fileKey);
+            _settings.GoogleDriveFileIdsByFile[fileKey] = remoteFileId;
+            _settingsStore.Save(_settings);
+            return true;
+        }
+
+        // Different filename - this really is a separate file, so download it to its own local
+        // path and make it the active file.
         var defaultDir = Path.GetDirectoryName(TodoStore.GetDefaultDataFilePath())
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
         Directory.CreateDirectory(defaultDir);
@@ -642,6 +663,15 @@ public class MainViewModel : INotifyPropertyChanged
         // existing there from outside the app).
         if (File.Exists(targetPath) || Directory.Exists(targetPath))
         {
+            // The Save As dialog that follows is easy to misread as part of a normal download -
+            // explain up front why it's asking, since this only happens when the file being
+            // attached has nothing to do with whatever already has this name locally.
+            ThemedMessageBox.Show(
+                $"A local file named \"{remoteFileName}\" already exists that isn't related to the " +
+                "file you just selected. Choose a different name or location to save the downloaded " +
+                "copy so it doesn't overwrite that file.",
+                "Naming Conflict", MessageBoxButton.OK, MessageBoxImage.Information);
+
             var dialog = new SaveFileDialog
             {
                 Title = "Save Downloaded Tasky File As",
@@ -649,7 +679,7 @@ public class MainViewModel : INotifyPropertyChanged
                 FileName = remoteFileName,
                 InitialDirectory = defaultDir
             };
-            if (dialog.ShowDialog() != true) return;
+            if (dialog.ShowDialog() != true) return false;
             targetPath = dialog.FileName;
         }
 
@@ -665,6 +695,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         _settings.GoogleDriveFileIdsByFile[targetFileKey] = remoteFileId;
         _settingsStore.Save(_settings);
+        return true;
     }
 
     // See GoogleDriveLegacyAttachmentsFileKey / ResolveMediaContainerFolderIdAsync: the first

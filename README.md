@@ -123,7 +123,10 @@ folder; attachments live in an `Attachments` folder the same way.
   overwrite another's
 - **Choose Which File to Sync** — connecting Google Drive (or clicking **Choose File...** any time
   after) shows any `.tasky` files already on your Drive, so you can attach this computer to an
-  existing one instead of guessing, or create a new file that syncs alongside it
+  existing one instead of guessing, or create a new file that syncs alongside it. Picking a remote
+  file with the same name as what's already open here merges it in directly (the common case when
+  setting up a second device); picking a genuinely different file only prompts for a save location
+  if that name is already in use locally, and explains why before asking
 - **Self-Healing Sync Folder** — if the `Tasky` folder on Drive ever goes missing or ends up in
   Trash, the next sync just finds or creates a real one instead of silently uploading into a
   folder nobody can see

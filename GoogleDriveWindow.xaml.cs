@@ -15,12 +15,12 @@ public partial class GoogleDriveWindow : Window
     private readonly Settings _settings;
     private readonly SettingsStore _settingsStore;
     private readonly Func<Task> _onSyncRequested;
-    private readonly Func<string, string, Task> _onAttachExistingRemoteFile;
+    private readonly Func<string, string, Task<bool>> _onAttachExistingRemoteFile;
     private readonly Func<bool> _onCreateNewLocalFile;
 
     public GoogleDriveWindow(
         GoogleDriveService driveService, Settings settings, SettingsStore settingsStore, Func<Task> onSyncRequested,
-        Func<string, string, Task> onAttachExistingRemoteFile, Func<bool> onCreateNewLocalFile)
+        Func<string, string, Task<bool>> onAttachExistingRemoteFile, Func<bool> onCreateNewLocalFile)
     {
         InitializeComponent();
         ThemeService.ApplyTitleBar(this);
@@ -227,9 +227,12 @@ public partial class GoogleDriveWindow : Window
         if (picker.Result == GoogleDriveFilePickerResult.UseExisting
             && picker.SelectedRemoteFileId is not null && picker.SelectedRemoteFileName is not null)
         {
-            ProgressStatusText.Text = $"Downloading '{picker.SelectedRemoteFileName}'...";
-            await _onAttachExistingRemoteFile(picker.SelectedRemoteFileId, picker.SelectedRemoteFileName);
-            return true;
+            ProgressStatusText.Text = $"Attaching '{picker.SelectedRemoteFileName}'...";
+            // Reflects whether attaching actually completed - false means the user backed out of
+            // a destination-picker dialog partway through, in which case the caller shouldn't
+            // run a sync right afterward (there was previously a bug here where it did so
+            // unconditionally, causing a sync to fire even after backing out).
+            return await _onAttachExistingRemoteFile(picker.SelectedRemoteFileId, picker.SelectedRemoteFileName);
         }
 
         if (picker.Result == GoogleDriveFilePickerResult.CreateNew)

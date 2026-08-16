@@ -122,6 +122,9 @@ folder; attachments live in an `Attachments` folder the same way.
 - **Choose Which File to Sync** — connecting Google Drive (or clicking **Choose File...** any time
   after) shows any `.tasky` files already on your Drive, so you can attach this computer to an
   existing one instead of guessing, or create a new file that syncs alongside it
+- **Self-Healing Sync Folder** — if the `Tasky` folder on Drive ever goes missing or ends up in
+  Trash, the next sync just finds or creates a real one instead of silently uploading into a
+  folder nobody can see
 - **Per-task merge** — sync no longer overwrites one whole file with another. Each sync downloads
   the remote file, merges it with local state task-by-task (newest edit wins per task, tasks unique
   to either side are kept), then uploads the merged result — so editing on two computers doesn't

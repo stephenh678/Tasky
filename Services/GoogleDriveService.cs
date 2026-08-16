@@ -20,6 +20,10 @@ public class GoogleDriveService
 
     private DriveService? _driveService;
     private UserCredential? _credential;
+    // Folder IDs already confirmed usable (exists, not trashed) this run - avoids re-validating
+    // the same cached "Tasky" folder on every single sync (auto-sync fires every 10s of editing,
+    // idle sync every 3 minutes) once it's already been checked once.
+    private readonly HashSet<string> _knownGoodFolderIds = new();
 
     public bool IsAuthenticated => _driveService is not null && _credential is not null;
 
@@ -201,6 +205,69 @@ public class GoogleDriveService
     }
 
     /// <summary>
+    /// Resolves the cached "Tasky" root folder, but first makes sure it's still real and not
+    /// sitting in Trash before trusting it. Drive doesn't reject uploads into a trashed folder's
+    /// subtree - it just hides everything under it from normal browsing - so a cached ID whose
+    /// folder got trashed after the fact would otherwise make every future sync look successful
+    /// while silently writing into a folder nobody can see anymore. A trashed (or permanently
+    /// deleted) cached folder is never restored - there's no reliable way to tell an accidental
+    /// trash from a deliberate one (e.g. resetting for a fresh-install test), so this always
+    /// treats it as gone and resolves a fresh one instead via the normal find-or-create-by-name
+    /// path. That still converges multiple devices onto the same folder without duplicating it:
+    /// whichever device gets there first creates it, and every other device's by-name search
+    /// finds and reuses that same real folder instead of each creating its own.
+    /// Only touches the network once per folder ID per app run - already-validated IDs are free.
+    /// </summary>
+    /// <param name="anchorFileId">
+    /// If the folder ID isn't cached yet but a remote file we already know about is, prefer
+    /// discovering the folder from where that file actually lives rather than a blind by-name
+    /// search - a by-name search can land on a *different* duplicate "Tasky" folder than the one
+    /// the file is really sitting in.
+    /// </param>
+    public async Task<string> EnsureUsableTaskyFolderAsync(Settings settings, SettingsStore settingsStore, string? anchorFileId = null)
+    {
+        var cachedId = settings.GoogleDriveFolderId;
+        if (string.IsNullOrEmpty(cachedId))
+        {
+            cachedId = !string.IsNullOrEmpty(anchorFileId) ? await GetParentFolderIdAsync(anchorFileId) : null;
+            cachedId ??= await GetOrCreateFolderAsync("Tasky");
+            settings.GoogleDriveFolderId = cachedId;
+            settingsStore.Save(settings);
+            _knownGoodFolderIds.Add(cachedId);
+            return cachedId;
+        }
+
+        if (_knownGoodFolderIds.Contains(cachedId)) return cachedId;
+        if (_driveService is null) return cachedId;
+
+        var isUsable = false;
+        try
+        {
+            var getRequest = _driveService.Files.Get(cachedId);
+            getRequest.Fields = "id, trashed";
+            var folder = await getRequest.ExecuteAsync();
+            isUsable = folder.Trashed != true;
+        }
+        catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            isUsable = false;
+        }
+
+        if (isUsable)
+        {
+            _knownGoodFolderIds.Add(cachedId);
+            return cachedId;
+        }
+
+        AppLogger.Warn("GoogleDriveService", $"Cached Tasky folder '{cachedId}' is trashed or gone - resolving a fresh one instead of restoring it.");
+        var freshId = await GetOrCreateFolderAsync("Tasky");
+        settings.GoogleDriveFolderId = freshId;
+        settingsStore.Save(settings);
+        _knownGoodFolderIds.Add(freshId);
+        return freshId;
+    }
+
+    /// <summary>
     /// Looks up a file by name within a Drive folder without creating one, for callers that
     /// need to know whether existing remote content is present before deciding what to do.
     /// </summary>
@@ -243,9 +310,15 @@ public class GoogleDriveService
 
         // Cache the resolved "Tasky" folder ID once found, instead of re-resolving it by name on
         // every single sync - besides the wasted round-trip, each fresh lookup is one more chance
-        // to hit the index-lag race in GetOrCreateFolderAsync and spawn a duplicate folder.
-        var taskyFolderId = settings?.GoogleDriveFolderId;
-        if (string.IsNullOrEmpty(taskyFolderId))
+        // to hit the index-lag race in GetOrCreateFolderAsync and spawn a duplicate folder. Once
+        // cached, EnsureUsableTaskyFolderAsync still validates it isn't sitting in Trash (see its
+        // doc comment) rather than trusting it blindly forever.
+        string taskyFolderId;
+        if (settings is not null && settingsStore is not null)
+        {
+            taskyFolderId = await EnsureUsableTaskyFolderAsync(settings, settingsStore, existingRemoteFileId);
+        }
+        else
         {
             // If we already know exactly which remote file this is, ask Drive where that file
             // actually lives instead of a separate by-name folder search - a by-name search can
@@ -253,16 +326,9 @@ public class GoogleDriveService
             // really sitting in (observed live: a device with a stale cached file ID cached a
             // folder ID that didn't match). Only fall back to name-based lookup/creation when
             // there's no existing file yet to anchor to (this device's first-ever upload).
-            taskyFolderId = !string.IsNullOrEmpty(existingRemoteFileId)
+            taskyFolderId = (!string.IsNullOrEmpty(existingRemoteFileId)
                 ? await GetParentFolderIdAsync(existingRemoteFileId)
-                : null;
-            taskyFolderId ??= await GetOrCreateFolderAsync("Tasky");
-
-            if (settings is not null && settingsStore is not null)
-            {
-                settings.GoogleDriveFolderId = taskyFolderId;
-                settingsStore.Save(settings);
-            }
+                : null) ?? await GetOrCreateFolderAsync("Tasky");
         }
         var fileName = Path.GetFileName(localPath);
         using var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);

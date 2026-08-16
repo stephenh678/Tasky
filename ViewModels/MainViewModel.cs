@@ -745,12 +745,7 @@ public class MainViewModel : INotifyPropertyChanged
             // caches) it separately when it actually needs it.
             if (string.IsNullOrEmpty(remoteId))
             {
-                var taskyFolderId = _settings.GoogleDriveFolderId;
-                if (string.IsNullOrEmpty(taskyFolderId))
-                {
-                    taskyFolderId = await _googleDrive.GetOrCreateFolderAsync("Tasky");
-                    _settings.GoogleDriveFolderId = taskyFolderId;
-                }
+                var taskyFolderId = await _googleDrive.EnsureUsableTaskyFolderAsync(_settings, _settingsStore);
                 remoteId = await _googleDrive.FindExistingFileIdAsync(Path.GetFileName(_currentFilePath), taskyFolderId);
                 if (!string.IsNullOrEmpty(remoteId))
                 {

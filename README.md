@@ -123,6 +123,7 @@ folder; attachments live in an `Attachments` folder the same way.
 - **Deletion sync** — deleting a task records a tombstone that travels with sync, so a task deleted
   on one computer stays deleted after syncing on another, without resurrecting it
 - **Automatic Background Live Sync** — debounced auto-sync uploads task edits and media 10 seconds after you finish typing
+- **Sync on Launch & While Idle** — pulls in changes from other computers as soon as the app opens, and again every few minutes while it's running, so you don't have to make an edit yourself just to see what changed elsewhere
 - **Folder & Attachment Syncing** — stores files safely in a dedicated `Tasky` folder and `Tasky/Attachments/` subfolder on Google Drive
 - **Shutdown Protection** — forces a final sync on application close
 

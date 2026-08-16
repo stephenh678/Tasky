@@ -425,10 +425,15 @@ public class GoogleDriveService
         if (settings.GoogleDriveMediaContainerFolderIdsByFile.TryGetValue(fileKey, out var cached))
             return cached;
 
+        // "Tasky.tasky" is every install's default filename, and Path.GetFileNameWithoutExtension
+        // of that is literally "Tasky" - the exact same name as the root folder itself. Using that
+        // bare name for a non-legacy file's subfolder creates a "Tasky" folder nested inside
+        // "Tasky", which reads as a confusing duplicate rather than a per-file container. Appending
+        // a suffix guarantees this can never collide with the root folder's own name.
         var containerId = !string.IsNullOrEmpty(settings.GoogleDriveLegacyAttachmentsFileKey)
                            && settings.GoogleDriveLegacyAttachmentsFileKey == fileKey
             ? taskyFolderId
-            : await GetOrCreateFolderAsync(Path.GetFileNameWithoutExtension(fileKey), taskyFolderId);
+            : await GetOrCreateFolderAsync($"{Path.GetFileNameWithoutExtension(fileKey)} Attachments", taskyFolderId);
 
         settings.GoogleDriveMediaContainerFolderIdsByFile[fileKey] = containerId;
         settingsStore?.Save(settings);

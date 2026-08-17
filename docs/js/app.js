@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=5';
-import * as drive from './drive.js?v=5';
+import * as auth from './auth.js?v=8';
+import * as drive from './drive.js?v=8';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=5';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=5';
-import { renderEditableBody } from './editor.js?v=5';
-import { icon } from './icons.js?v=5';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=5';
+} from './model.js?v=8';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=8';
+import { renderEditableBody } from './editor.js?v=8';
+import { icon } from './icons.js?v=8';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=8';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -62,6 +62,7 @@ const sidebarCollapseBtn = el('sidebar-collapse-btn');
 const navBack = el('nav-back');
 const trashActionsRow = el('trash-actions-row');
 const emptyTrashBtn = el('empty-trash-btn');
+const mobileTabbar = el('mobile-tabbar');
 
 const SECTION_ICONS = { all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
 navBack.innerHTML = icon('back');
@@ -579,6 +580,17 @@ function removeTag(task, tag) {
 }
 
 // --- Rendering --------------------------------------------------------------
+// Shared by the sidebar list, the tag list, and the mobile tab bar - all three are just
+// different views onto the same "which section is current" state.
+function selectSection(section) {
+  currentSection = section;
+  searchBox.value = '';
+  searchQuery = '';
+  renderSidebar();
+  renderList();
+  showMobileView('list');
+}
+
 function renderSidebar() {
   sidebarList.innerHTML = '';
   for (const section of SECTIONS) {
@@ -587,14 +599,7 @@ function renderSidebar() {
     li.title = section.label;
     li.innerHTML = `${icon(SECTION_ICONS[section.kind])}<span class="sidebar-item-label">${section.label}</span><span class="count">${count}</span>`;
     if (currentSection.kind === section.kind) li.classList.add('active');
-    li.addEventListener('click', () => {
-      currentSection = { kind: section.kind };
-      searchBox.value = '';
-      searchQuery = '';
-      renderSidebar();
-      renderList();
-      showMobileView('list');
-    });
+    li.addEventListener('click', () => selectSection({ kind: section.kind }));
     sidebarList.appendChild(li);
   }
 
@@ -603,16 +608,37 @@ function renderSidebar() {
     const li = document.createElement('li');
     li.innerHTML = `<span>#${tag}</span>`;
     if (currentSection.kind === 'tag' && currentSection.tag === tag) li.classList.add('active');
-    li.addEventListener('click', () => {
-      currentSection = { kind: 'tag', tag };
-      searchBox.value = '';
-      searchQuery = '';
-      renderSidebar();
-      renderList();
-      showMobileView('list');
-    });
+    li.addEventListener('click', () => selectSection({ kind: 'tag', tag }));
     tagList.appendChild(li);
   }
+
+  renderMobileTabbar();
+}
+
+// Mobile-only bottom tab bar: the 4 fixed sections get one tap instead of open-drawer-then-pick,
+// with a "More" tab standing in for Tags (a variable-length list that can't be fixed tabs) and
+// for the sidebar screen generally. Hidden by CSS whenever the editor view is open.
+function renderMobileTabbar() {
+  mobileTabbar.innerHTML = '';
+  const onSidebarView = appEl.dataset.view === 'sidebar';
+
+  for (const section of SECTIONS) {
+    const btn = document.createElement('button');
+    btn.className = 'mobile-tab';
+    btn.type = 'button';
+    btn.innerHTML = `${icon(SECTION_ICONS[section.kind])}<span>${section.label}</span>`;
+    if (!onSidebarView && currentSection.kind === section.kind) btn.classList.add('active');
+    btn.addEventListener('click', () => selectSection({ kind: section.kind }));
+    mobileTabbar.appendChild(btn);
+  }
+
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'mobile-tab';
+  moreBtn.type = 'button';
+  moreBtn.innerHTML = `${icon('menu')}<span>More</span>`;
+  if (onSidebarView || currentSection.kind === 'tag') moreBtn.classList.add('active');
+  moreBtn.addEventListener('click', () => showMobileView('sidebar'));
+  mobileTabbar.appendChild(moreBtn);
 }
 
 function renderList() {
@@ -781,6 +807,7 @@ quickFilterSelect.addEventListener('change', () => {
 // --- Mobile / tablet navigation ---------------------------------------------
 function showMobileView(view) {
   appEl.dataset.view = view;
+  renderMobileTabbar();
 }
 navBack.addEventListener('click', () => {
   showMobileView(appEl.dataset.view === 'editor' ? 'list' : 'sidebar');

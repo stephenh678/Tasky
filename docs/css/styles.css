@@ -52,7 +52,7 @@
 html, body { height: 100%; }
 /* Text size preference - most of this stylesheet sizes type in em, which cascades from this root
    size, so scaling it here scales the whole app proportionally without a unit-by-unit audit. */
-html { font-size: 100%; }
+html { font-size: 100%; touch-action: manipulation; }
 :root[data-font-size="small"] { font-size: 90%; }
 :root[data-font-size="large"] { font-size: 115%; }
 body {
@@ -65,6 +65,28 @@ body {
 button { font-family: inherit; }
 a { color: var(--accent); }
 .icon { width: 18px; height: 18px; display: block; }
+
+/* Browsers render native scrollbars in a fixed OS color regardless of the page's own theme -
+   left alone, that's a bright light-mode scrollbar sitting in an otherwise dark UI. Themed via
+   the same CSS variables the rest of the page uses, so it follows light/dark automatically. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
 
 /* Sign-in screen */
 .signin-screen {
@@ -498,6 +520,8 @@ a { color: var(--accent); }
   .sidebar-collapsed .count { display: initial; }
 }
 
+.mobile-tabbar { display: none; }
+
 /* Mobile: one pane at a time, driven by data-view on .app */
 @media (max-width: 767px) {
   .app-body, .app-body.sidebar-collapsed { grid-template-columns: 1fr; }
@@ -506,24 +530,88 @@ a { color: var(--accent); }
   .app[data-view="list"] .list-pane { display: flex; }
   .app[data-view="editor"] .editor-pane { display: block; }
   .app:not([data-view="sidebar"]) .nav-back { display: inline-block; }
+  /* The tab bar now owns top-level navigation between sections - a back button on the list view
+     would just be a redundant way to reach the same "sidebar" screen the More tab already opens. */
+  .app[data-view="list"] .nav-back { display: none; }
   .sidebar-drawer-btn { display: none; }
 
   /* The save-status text ("Loaded N task(s)", "Saving…", etc.) crowds the brand/icons in the
-     header on narrow screens - relocate it to a fixed bar at the bottom instead. position:fixed
-     takes it out of the header's flex flow entirely regardless of its DOM parent, so no markup
-     change is needed. Panes get bottom padding so their last item isn't hidden behind it. */
+     header on narrow screens - relocate it to a fixed bar at the bottom instead, sitting just
+     above the tab bar. position:fixed takes it out of the header's flex flow entirely regardless
+     of its DOM parent, so no markup change is needed. Always reserves the tab bar's height (even
+     on the editor view, where the tab bar itself is hidden) rather than conditionally repositioning
+     per view - a little unused space under the status text there is harmless; overlapping the tab
+     bar on every other view would not be. */
   .save-status {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--mobile-tabbar-height);
     z-index: 25;
     margin: 0;
     text-align: center;
     background: var(--pane-bg);
     border-top: 1px solid var(--border);
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 8px 12px;
   }
   .save-status:empty { display: none; }
-  .sidebar, .list-pane, .editor-pane { padding-bottom: 48px; }
+  .sidebar, .list-pane, .editor-pane { padding-bottom: calc(var(--mobile-tabbar-height) + 40px); }
+
+  :root { --mobile-tabbar-height: calc(50px + env(safe-area-inset-bottom, 0px)); }
+  .mobile-tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--mobile-tabbar-height);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-sizing: border-box;
+    border-top: 1px solid var(--border);
+    background: var(--pane-bg);
+    z-index: 26;
+  }
+  .app[data-view="editor"] .mobile-tabbar { display: none; }
+  .mobile-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 0.65em;
+    font-weight: 500;
+    padding: 0;
+    cursor: pointer;
+  }
+  .mobile-tab .icon { width: 20px; height: 20px; }
+  .mobile-tab.active { color: var(--accent); }
+
+  /* Touch targets: Apple HIG / Material Design both call for a ~44-48px minimum tap target.
+     min-width/min-height (not extra padding) grows the box symmetrically around the existing
+     icon via the same flex centering already in place, without changing how any icon itself
+     looks. Desktop keeps the tighter 32px sizing - this is a touch-specific concern, not a
+     visual-density one, so it's scoped to mobile rather than applied everywhere. */
+  .icon-btn, .account-avatar { min-width: 44px; min-height: 44px; }
+  /* These two are small icons inside otherwise-compact rows (a tag chip, a checklist line) -
+     enough padding to reach a full 44px here would visually bloat the chip/row itself, so this
+     is a smaller, safer bump rather than full compliance. Worth a look on a real phone. */
+  .tag-chip button { padding: 4px; margin: -4px; }
+  .block-remove { padding: 8px; top: -6px; right: -8px; }
+  .block-remove.small { padding: 6px; margin-left: 0; }
+  .task-list li input[type="checkbox"],
+  .block-checklist-item input[type="checkbox"] { width: 20px; height: 20px; }
+
+  /* iOS Safari zooms the whole page in on focus for any input/select under 16px - these all
+     read the app's own (smaller, and further-shrinkable via the Small text-size setting) type
+     scale rather than the page base size. A hard 16px floor beats fighting that zoom on every
+     field tap; the resulting mismatch with the text-size preference is deliberate and minor for
+     these specific compact controls. */
+  .search-box, .filter-select, .tag-input, .editor-field input, .editor-field select,
+  .block-checklist-item.editable input[type="text"], .checklist-add {
+    font-size: 16px;
+  }
 }

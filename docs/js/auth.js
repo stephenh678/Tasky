@@ -17,15 +17,21 @@
 // the token it gets back. The access token is also cached in localStorage (scoped narrowly to
 // drive.file + email, expires in under an hour - no more sensitive than a session cookie) so a
 // same-hour reload restores the session with zero network calls and zero redirects.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=1';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=3';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const STATE_KEY = 'tasky-auth-state';
 // Must exactly match an Authorized redirect URI on the Web OAuth client (Google does a strict
 // string comparison, no normalization) - stripping a trailing slash keeps this in sync with how
 // the URI is naturally registered in Cloud Console (without one) regardless of whether the page
-// was visited with or without a trailing slash.
-const REDIRECT_URI = (window.location.origin + window.location.pathname).replace(/\/$/, '');
+// was visited with or without a trailing slash. Also strips a trailing index.html, since an
+// installed PWA launches at manifest.json's start_url (which resolves to the literal .../index.html
+// path) while a normal browser visit resolves to the bare directory URL - without this, those two
+// access paths compute different redirect_uri values and only one of them matches what's
+// registered in Cloud Console, so signing in from the other fails with redirect_uri_mismatch.
+const REDIRECT_URI = (window.location.origin + window.location.pathname)
+  .replace(/\/index\.html$/i, '')
+  .replace(/\/$/, '');
 
 let accessToken = null;
 let tokenExpiresAt = 0;

@@ -144,6 +144,15 @@ function clamp(str, max) {
   return str.length > max ? str.slice(0, max) : str;
 }
 
+// Pasting an image directly into desktop's rich-text editor embeds it inline in a Text block's
+// Rtf (<Image UriSource="...">) rather than creating a separate Photo block - see editor.js's
+// extractInlineImageFileNames for the same detection used to actually render one. Shared here so
+// the task list's row indicators and quick filters count these as "has a photo" too, matching
+// what a user actually sees when they open the task.
+export function blockHasInlineImage(block) {
+  return block.Type === NoteBlockType.Text && !!block.Rtf && block.Rtf.includes('UriSource=');
+}
+
 function fileNameFromPath(path) {
   if (!path) return '';
   const parts = path.split(/[\\/]/);

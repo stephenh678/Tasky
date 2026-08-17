@@ -2,7 +2,7 @@
   "name": "Tasky",
   "short_name": "Tasky",
   "description": "Tasky task manager, synced with Google Drive",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#1e293b",

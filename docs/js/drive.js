@@ -1,7 +1,7 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=1';
-import { TASKY_FOLDER_NAME } from './config.js?v=1';
+import { getAccessToken } from './auth.js?v=3';
+import { TASKY_FOLDER_NAME } from './config.js?v=3';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -64,9 +64,84 @@ export async function findFileByName(name, folderId) {
   return files && files.length > 0 ? files[0].id : null;
 }
 
+/** Same as findFileByName but restricted to folders, matching GetOrCreateFolderAsync's query. */
+async function findFolderByName(name, folderId) {
+  const q = encodeURIComponent(
+    `mimeType='${FOLDER_MIME}' and '${folderId}' in parents and name='${name.replace(/'/g, "\\'")}' and trashed=false`
+  );
+  const res = await driveFetch(`${API}/files?q=${q}&fields=files(id,name)&spaces=drive`);
+  const { files } = await res.json();
+  return files && files.length > 0 ? files[0].id : null;
+}
+
 export async function downloadFileText(fileId) {
   const res = await driveFetch(`${API}/files/${fileId}?alt=media`);
   return res.text();
+}
+
+export async function downloadFileBlob(fileId) {
+  const res = await driveFetch(`${API}/files/${fileId}?alt=media`);
+  return res.blob();
+}
+
+// Desktop stores attachments under one of two layouts, per ResolveMediaContainerFolderIdAsync in
+// GoogleDriveService.cs: whichever file was already syncing before per-file containers existed
+// keeps its Attachments/InlineImages folders flat under the Tasky root; every other file gets its
+// own "<name-without-extension> Attachments" container folder holding those same two subfolders.
+// The web app has no access to the desktop's local Settings.json (that's what records which mode
+// a given file is in), so there's no way to know which layout this account uses - resolve every
+// candidate subfolder that actually exists and check each one when looking up a specific file.
+let syncContext = { taskyFolderId: null, dataFileName: null };
+let candidateFolderIdsPromise = null;
+
+export function setSyncContext(taskyFolderId, dataFileName) {
+  syncContext = { taskyFolderId, dataFileName };
+  candidateFolderIdsPromise = null;
+}
+
+function fileStem(name) {
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+async function ensureCandidateFolderIds() {
+  const { taskyFolderId, dataFileName } = syncContext;
+  if (!taskyFolderId || !dataFileName) return [];
+  if (!candidateFolderIdsPromise) {
+    candidateFolderIdsPromise = (async () => {
+      // ResolveMediaContainerFolderIdAsync derives the container name from
+      // Path.GetFileName(path).ToLowerInvariant() - the container for the default "Tasky.tasky"
+      // is literally "tasky Attachments" (lowercase), and Drive's name= query is case-sensitive,
+      // so this lowercase step isn't optional.
+      const containerId = await findFolderByName(`${fileStem(dataFileName.toLowerCase())} Attachments`, taskyFolderId);
+      const roots = [taskyFolderId, containerId].filter(Boolean);
+      const ids = [];
+      for (const root of roots) {
+        for (const dirName of ['Attachments', 'InlineImages']) {
+          const id = await findFolderByName(dirName, root);
+          if (id) ids.push(id);
+        }
+      }
+      console.info('Tasky: attachment search folders resolved', { taskyFolderId, dataFileName, containerId, candidateFolderIds: ids });
+      return ids;
+    })();
+  }
+  return candidateFolderIdsPromise;
+}
+
+/** Downloads an existing attachment (photo/file) by its filename, or null if not found on Drive. */
+export async function downloadAttachmentBlob(fileName) {
+  const folderIds = await ensureCandidateFolderIds();
+  if (folderIds.length === 0) {
+    console.warn(`Tasky: no attachment folders found on Drive for "${fileName}"`, syncContext);
+    return null;
+  }
+  for (const folderId of folderIds) {
+    const fileId = await findFileByName(fileName, folderId);
+    if (fileId) return downloadFileBlob(fileId);
+  }
+  console.warn(`Tasky: "${fileName}" not found in any of ${folderIds.length} candidate attachment folder(s)`, folderIds);
+  return null;
 }
 
 /**

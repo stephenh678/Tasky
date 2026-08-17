@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=1';
-import * as drive from './drive.js?v=1';
+import * as auth from './auth.js?v=3';
+import * as drive from './drive.js?v=3';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -9,11 +9,12 @@ import {
   newTaskItem,
   newTaskSyncRecord,
   spawnNextOccurrence,
-} from './model.js?v=1';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=1';
-import { renderEditableBody } from './editor.js?v=1';
-import { icon } from './icons.js?v=1';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=1';
+  blockHasInlineImage,
+} from './model.js?v=3';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=3';
+import { renderEditableBody } from './editor.js?v=3';
+import { icon } from './icons.js?v=3';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=3';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -276,12 +277,14 @@ async function onSignedIn() {
 
     if (match) {
       currentFileId = match.id;
+      drive.setSyncContext(taskyFolderId, match.name);
       const text = await drive.downloadFileText(match.id);
       appState = JSON.parse(text);
       appState.Tasks ??= [];
       appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
       saveStatus.textContent = `Loaded ${appState.Tasks.length} task(s)`;
     } else {
+      drive.setSyncContext(taskyFolderId, DEFAULT_DATA_FILE_NAME);
       saveStatus.textContent = '';
       noRemoteFileYet = true;
     }
@@ -333,7 +336,7 @@ function applyQuickFilter(tasks) {
       case 'hasLink':
         return t.Body.some((b) => b.Type === NoteBlockType.Link);
       case 'hasAttachment':
-        return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File);
+        return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b));
       default:
         return true;
     }
@@ -638,9 +641,15 @@ function renderList() {
     const info = document.createElement('div');
     info.className = 'task-row-info';
     const due = task.DueDate ? formatDate(parseDotNetDate(task.DueDate)) : '';
+    const indicators = [];
+    if (task.Recurrence !== RecurrenceRule.None) indicators.push(icon('repeat'));
+    if (task.Body.some((b) => b.Type === NoteBlockType.Link)) indicators.push(icon('link'));
+    if (task.Body.some((b) => b.Type === NoteBlockType.Photo || blockHasInlineImage(b))) indicators.push(icon('image'));
+    if (task.Body.some((b) => b.Type === NoteBlockType.File)) indicators.push(icon('paperclip'));
+    if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
     info.innerHTML = `
       <div class="task-title ${task.IsDone ? 'done' : ''}">${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>
-      <div class="task-sub">${due}</div>
+      <div class="task-sub">${due ? `<span>${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}</div>
     `;
 
     li.append(checkbox, info);

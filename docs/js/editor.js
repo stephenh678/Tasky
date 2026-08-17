@@ -7,8 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=1';
-import { icon } from './icons.js?v=1';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=3';
+import { icon } from './icons.js?v=3';
+import { downloadAttachmentBlob } from './drive.js?v=3';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -44,12 +45,8 @@ function renderBlock(block, task, index, onChange) {
       return renderChecklistBlock(block, onChange);
     case NoteBlockType.Link:
       return renderLinkBlock(block);
-    case NoteBlockType.Photo: {
-      const p = document.createElement('p');
-      p.className = 'block-photo';
-      p.textContent = `📷 ${block.FileName || 'photo'} (editing photos from the web isn't supported yet)`;
-      return p;
-    }
+    case NoteBlockType.Photo:
+      return renderPhotoByFileName(block.FileName);
     case NoteBlockType.File: {
       const p = document.createElement('p');
       p.className = 'block-file';
@@ -62,6 +59,8 @@ function renderBlock(block, task, index, onChange) {
 }
 
 function renderTextBlock(block, task, index, onChange) {
+  const wrap = document.createElement('div');
+
   const div = document.createElement('div');
   div.className = 'block-text';
   div.contentEditable = 'plaintext-only';
@@ -98,7 +97,31 @@ function renderTextBlock(block, task, index, onChange) {
     onChange({ rerenderBody: true });
   });
 
-  return div;
+  wrap.appendChild(div);
+
+  // Pasting an image straight into desktop's rich-text editor embeds it as an inline
+  // <Image UriSource="..."> inside the block's Rtf rather than creating a separate Photo block -
+  // there's no RTF engine here to render the rest of that markup (see file header), but the image
+  // itself is just another file in this task's InlineImages folder, which downloadAttachmentBlob
+  // already knows how to search. Pull out its filename and show it below the text.
+  for (const fileName of extractInlineImageFileNames(block.Rtf)) {
+    wrap.appendChild(renderPhotoByFileName(fileName));
+  }
+
+  return wrap;
+}
+
+function extractInlineImageFileNames(rtf) {
+  if (!rtf) return [];
+  const names = [];
+  const re = /UriSource="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(rtf))) {
+    const parts = m[1].split(/[\\/]/);
+    const name = parts[parts.length - 1];
+    if (name) names.push(name);
+  }
+  return names;
 }
 
 function renderChecklistBlock(block, onChange) {
@@ -151,6 +174,48 @@ function renderChecklistBlock(block, onChange) {
   div.appendChild(addRow);
 
   return div;
+}
+
+// Caches object URLs by filename so repeated re-renders (rerenderBody fires on nearly every body
+// edit) don't re-download the same photo from Drive each time.
+const photoUrlCache = new Map();
+
+function renderPhotoByFileName(rawFileName) {
+  const container = document.createElement('div');
+  container.className = 'block-photo';
+  const fileName = rawFileName || 'photo';
+
+  if (photoUrlCache.has(fileName)) {
+    container.appendChild(buildPhotoImg(photoUrlCache.get(fileName), fileName));
+    return container;
+  }
+
+  container.textContent = `Loading ${fileName}…`;
+  downloadAttachmentBlob(fileName)
+    .then((blob) => {
+      if (!blob) {
+        container.textContent = `📷 ${fileName} (not found on Drive)`;
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      photoUrlCache.set(fileName, url);
+      container.textContent = '';
+      container.appendChild(buildPhotoImg(url, fileName));
+    })
+    .catch((err) => {
+      container.textContent = `📷 ${fileName} (failed to load: ${err.message})`;
+      console.error('Tasky: photo download failed', fileName, err);
+    });
+
+  return container;
+}
+
+function buildPhotoImg(url, fileName) {
+  const img = document.createElement('img');
+  img.className = 'block-photo-img';
+  img.src = url;
+  img.alt = fileName;
+  return img;
 }
 
 function renderLinkBlock(block) {

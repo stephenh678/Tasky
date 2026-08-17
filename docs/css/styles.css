@@ -375,7 +375,9 @@ a { color: var(--accent); }
 .tag-chip button .icon { width: 10px; height: 10px; }
 .sidebar-list li .icon { width: 17px; height: 17px; }
 .task-title.done { text-decoration: line-through; color: var(--text-dim); }
-.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; }
+.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.task-indicators { display: flex; align-items: center; gap: 4px; }
+.task-indicators .icon { width: 12px; height: 12px; }
 
 .empty-state { color: var(--text-dim); text-align: center; padding: 40px 16px; }
 
@@ -452,6 +454,7 @@ a { color: var(--accent); }
 }
 .block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); }
 .block-photo, .block-file { color: var(--text-dim); font-style: italic; }
+.block-photo-img { max-width: 100%; border-radius: 8px; display: block; }
 .block-checklist-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .block-checklist-item.editable input[type="text"] {
   flex: 1;
@@ -500,4 +503,23 @@ a { color: var(--accent); }
   .app[data-view="editor"] .editor-pane { display: block; }
   .app:not([data-view="sidebar"]) .nav-back { display: inline-block; }
   .sidebar-drawer-btn { display: none; }
+
+  /* The save-status text ("Loaded N task(s)", "Saving…", etc.) crowds the brand/icons in the
+     header on narrow screens - relocate it to a fixed bar at the bottom instead. position:fixed
+     takes it out of the header's flex flow entirely regardless of its DOM parent, so no markup
+     change is needed. Panes get bottom padding so their last item isn't hidden behind it. */
+  .save-status {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 25;
+    margin: 0;
+    text-align: center;
+    background: var(--pane-bg);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+  .save-status:empty { display: none; }
+  .sidebar, .list-pane, .editor-pane { padding-bottom: 48px; }
 }

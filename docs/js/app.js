@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=15';
-import * as drive from './drive.js?v=15';
+import * as auth from './auth.js?v=16';
+import * as drive from './drive.js?v=16';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=15';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=15';
-import { renderEditableBody } from './editor.js?v=15';
-import { icon } from './icons.js?v=15';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=15';
+} from './model.js?v=16';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=16';
+import { renderEditableBody } from './editor.js?v=16';
+import { icon } from './icons.js?v=16';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=16';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -68,6 +68,7 @@ const emptyTrashBtn = el('empty-trash-btn');
 const doneActionsRow = el('done-actions-row');
 const moveAllTrashBtn = el('move-all-trash-btn');
 const mobileTabbar = el('mobile-tabbar');
+const paneResizer = el('pane-resizer');
 
 const SECTION_ICONS = { all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
 navBack.innerHTML = icon('back');
@@ -300,6 +301,54 @@ sidebarCollapseBtn.addEventListener('click', () => {
   setSidebarCollapsed(!appBody.classList.contains('sidebar-collapsed'));
 });
 setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true');
+
+// --- List pane resize (desktop only - see .pane-resizer, hidden below 1024px) -------------
+const LIST_PANE_WIDTH_KEY = 'tasky-list-pane-width';
+const LIST_PANE_MIN_WIDTH = 240;
+const LIST_PANE_MAX_WIDTH = 640;
+
+function setListPaneWidth(px) {
+  const clamped = Math.min(LIST_PANE_MAX_WIDTH, Math.max(LIST_PANE_MIN_WIDTH, px));
+  appBody.style.setProperty('--list-pane-width', `${clamped}px`);
+  // Chrome can leave a transitioned grid-template-columns frozen at its pre-change value when
+  // only the var() it depends on changes, unless something forces a layout read - the .resizing
+  // class disables the transition during a drag, but without this the very first frame (or a
+  // drag that ends on a rapid pointerup) can paint stale until some unrelated reflow happens to
+  // bail it out.
+  void appBody.offsetHeight;
+  return clamped;
+}
+
+const savedListPaneWidth = Number(localStorage.getItem(LIST_PANE_WIDTH_KEY));
+if (savedListPaneWidth) setListPaneWidth(savedListPaneWidth);
+
+paneResizer.addEventListener('pointerdown', (e) => {
+  try {
+    paneResizer.setPointerCapture(e.pointerId);
+  } catch {
+    // Capture keeps the drag alive even if the cursor outruns the 6px handle mid-move; without
+    // it the drag still mostly works since pointermove/up stay bound below, just less reliably
+    // on very fast movements - not worth aborting the whole gesture over.
+  }
+  paneResizer.classList.add('dragging');
+  appBody.classList.add('resizing');
+  const sidebarWidth = appBody.querySelector('.sidebar').getBoundingClientRect().width;
+  const bodyLeft = appBody.getBoundingClientRect().left;
+  let lastWidth = LIST_PANE_MIN_WIDTH;
+
+  function onMove(moveEvent) {
+    lastWidth = setListPaneWidth(moveEvent.clientX - bodyLeft - sidebarWidth);
+  }
+  function onUp() {
+    paneResizer.classList.remove('dragging');
+    appBody.classList.remove('resizing');
+    localStorage.setItem(LIST_PANE_WIDTH_KEY, String(lastWidth));
+    paneResizer.removeEventListener('pointermove', onMove);
+    paneResizer.removeEventListener('pointerup', onUp);
+  }
+  paneResizer.addEventListener('pointermove', onMove);
+  paneResizer.addEventListener('pointerup', onUp);
+});
 
 async function onSignedIn() {
   signinScreen.classList.add('hidden');

@@ -291,14 +291,36 @@ a { color: var(--accent); }
 .modal-close { position: absolute; top: 10px; right: 10px; }
 
 .app-body {
+  --list-pane-width: 320px;
   flex: 1;
   display: grid;
-  grid-template-columns: 220px 320px 1fr;
+  grid-template-columns: 220px var(--list-pane-width) 6px 1fr;
   min-height: 0;
   transition: grid-template-columns 0.15s ease;
 }
-.app-body.sidebar-collapsed { grid-template-columns: 56px 320px 1fr; }
+.app-body.sidebar-collapsed { grid-template-columns: 56px var(--list-pane-width) 6px 1fr; }
+.app-body.resizing { transition: none; }
 .pane { overflow-y: auto; min-height: 0; }
+
+/* Desktop-only drag handle between the list and editor panes (hidden below - see the
+   max-width:1023px tablet block, where list+editor already split the width evenly and there's
+   no fixed list-pane width left to adjust). Drawn as a thin line inset within a wider invisible
+   hit target so it's actually easy to grab without needing pixel precision. */
+.pane-resizer {
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+}
+.pane-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+.pane-resizer:hover::after, .pane-resizer.dragging::after { background: var(--accent); }
 .sidebar { border-right: 1px solid var(--border); background: var(--pane-bg); padding: 8px 0; position: relative; }
 /* overflow-y: hidden overrides .pane's auto - the search/filter toolbar above #task-list should
    stay put, with only the task rows themselves scrolling (#task-list already has its own
@@ -508,6 +530,9 @@ a { color: var(--accent); }
 /* Tablet: sidebar becomes an overlay drawer, list+editor share the width */
 @media (max-width: 1023px) {
   .app-body, .app-body.sidebar-collapsed { grid-template-columns: 1fr 1fr; }
+  /* display:none removes it from grid placement entirely, so list-pane and editor-pane still
+     land in exactly the two tracks defined above. */
+  .pane-resizer { display: none; }
   .sidebar {
     position: fixed;
     top: 0; left: 0; bottom: 0;

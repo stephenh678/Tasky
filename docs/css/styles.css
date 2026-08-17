@@ -147,7 +147,7 @@ a { color: var(--accent); }
 .brand { display: flex; align-items: center; gap: 8px; flex: 1; margin: 0 0 0 6px; min-width: 0; }
 .brand-logo { width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; }
 .header-title { font-size: 1.05em; font-weight: 600; margin: 0; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.save-status { font-size: 0.82em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.save-status { font-size: 0.82em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
 .save-status-action { color: var(--accent); text-decoration: underline; cursor: pointer; }
 .icon-btn {
   background: none;
@@ -553,6 +553,14 @@ a { color: var(--accent); }
     background: var(--pane-bg);
     border-top: 1px solid var(--border);
     padding: 8px 12px;
+    /* Overrides the header-row ellipsis truncation: this bar is full-width and out of any flex
+       flow, so a long error message (e.g. a Drive API failure with the request URL and reason)
+       can safely wrap across lines instead of being silently cut off illegibly. */
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+    word-break: break-word;
   }
   .save-status:empty { display: none; }
   .sidebar, .list-pane, .editor-pane { padding-bottom: var(--mobile-bottom-chrome); }

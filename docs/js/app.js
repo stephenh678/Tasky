@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=13';
-import * as drive from './drive.js?v=13';
+import * as auth from './auth.js?v=14';
+import * as drive from './drive.js?v=14';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=13';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=13';
-import { renderEditableBody } from './editor.js?v=13';
-import { icon } from './icons.js?v=13';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=13';
+} from './model.js?v=14';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=14';
+import { renderEditableBody } from './editor.js?v=14';
+import { icon } from './icons.js?v=14';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=14';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -105,6 +105,10 @@ let statusHideTimer = null;
 function setStatus(text, { autoHide = false } = {}) {
   clearTimeout(statusHideTimer);
   saveStatus.textContent = text;
+  // Desktop truncates long messages (a Drive API error includes the full request URL and
+  // reason) with an ellipsis to avoid disrupting the header layout - the title attribute
+  // still exposes the complete text on hover.
+  saveStatus.title = text;
   if (autoHide) {
     statusHideTimer = setTimeout(() => {
       if (saveStatus.textContent === text) saveStatus.textContent = '';

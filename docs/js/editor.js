@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=13';
-import { icon } from './icons.js?v=13';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=13';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=14';
+import { icon } from './icons.js?v=14';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=14';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 

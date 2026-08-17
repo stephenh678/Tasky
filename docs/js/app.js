@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=16';
-import * as drive from './drive.js?v=16';
+import * as auth from './auth.js?v=17';
+import * as drive from './drive.js?v=17';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=16';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=16';
-import { renderEditableBody } from './editor.js?v=16';
-import { icon } from './icons.js?v=16';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=16';
+} from './model.js?v=17';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=17';
+import { renderEditableBody } from './editor.js?v=17';
+import { icon } from './icons.js?v=17';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=17';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -875,12 +875,24 @@ editorRecurrence.addEventListener('change', () => {
   renderSidebar();
 });
 
-editorTagInput.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || !editorTagInput.value.trim()) return;
+function commitTagInput() {
+  if (!editorTagInput.value.trim()) return;
   const task = findTask(selectedTaskId);
   if (!task) return;
   addTag(task, editorTagInput.value);
   editorTagInput.value = '';
+}
+editorTagInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') commitTagInput();
+});
+// Many Android on-screen keyboards (Gboard included, with word prediction active) never fire a
+// real keydown for the Enter/Done key - they only surface it here, as an input event carrying
+// inputType "insertLineBreak". Without this, Enter silently did nothing on those keyboards even
+// though the exact same code path worked fine everywhere else. Reuses commitTagInput()'s own
+// guard (empty value after the keydown handler already ran) so a keyboard that fires both isn't
+// double-handled.
+editorTagInput.addEventListener('input', (e) => {
+  if (e.inputType === 'insertLineBreak') commitTagInput();
 });
 
 editorDone.addEventListener('change', () => {

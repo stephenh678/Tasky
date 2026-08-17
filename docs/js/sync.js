@@ -2,7 +2,7 @@
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate } from './model.js?v=16';
+import { parseDotNetDate } from './model.js?v=17';
 
 export function deduplicateTombstones(tombstones) {
   const byId = new Map();

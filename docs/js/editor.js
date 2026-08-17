@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=16';
-import { icon } from './icons.js?v=16';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=16';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=17';
+import { icon } from './icons.js?v=17';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=17';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -165,11 +165,21 @@ function renderChecklistBlock(block, onChange) {
   addRow.type = 'text';
   addRow.placeholder = '+ Add item and press Enter';
   addRow.className = 'checklist-add';
-  addRow.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || !addRow.value.trim()) return;
+  addRow.enterKeyHint = 'done';
+  function commitChecklistRow() {
+    if (!addRow.value.trim()) return;
     block.ChecklistItems.push(newChecklistItem({ text: addRow.value }));
     addRow.value = '';
     onChange({ rerenderBody: true });
+  }
+  addRow.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') commitChecklistRow();
+  });
+  // Many Android keyboards (Gboard included, with word prediction active) never fire a real
+  // keydown for Enter/Done - only this input event, carrying inputType "insertLineBreak". Reuses
+  // commitChecklistRow()'s own empty-value guard so a keyboard that fires both isn't double-handled.
+  addRow.addEventListener('input', (e) => {
+    if (e.inputType === 'insertLineBreak') commitChecklistRow();
   });
   div.appendChild(addRow);
 

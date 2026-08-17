@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=4';
-import { icon } from './icons.js?v=4';
-import { downloadAttachmentBlob } from './drive.js?v=4';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=5';
+import { icon } from './icons.js?v=5';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=5';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -260,6 +260,50 @@ function renderInsertToolbar(task, onChange) {
     onChange({ rerenderBody: true });
   });
 
-  bar.append(addText, addChecklist, addLink);
+  const addPhoto = document.createElement('button');
+  addPhoto.className = 'btn btn-ghost';
+  addPhoto.textContent = '+ Photo';
+  const photoInput = document.createElement('input');
+  photoInput.type = 'file';
+  photoInput.accept = 'image/*';
+  photoInput.className = 'hidden';
+  addPhoto.addEventListener('click', () => photoInput.click());
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files?.[0];
+    photoInput.value = ''; // lets the same file be picked again later
+    if (file) handlePhotoPick(task, file, onChange);
+  });
+
+  bar.append(addText, addChecklist, addLink, addPhoto, photoInput);
   return bar;
+}
+
+async function handlePhotoPick(task, file, onChange) {
+  const dot = file.name.lastIndexOf('.');
+  const ext = dot > -1 ? file.name.slice(dot) : '.jpg';
+  // A fresh random name per upload (mirroring desktop's own {Guid}.png convention for pasted
+  // images) sidesteps any chance of colliding with another task's identically-named photo in the
+  // same shared Drive Attachments folder - there's no per-task subfolder on either side.
+  const fileName = `${crypto.randomUUID()}${ext}`;
+
+  const block = newNoteBlock(NoteBlockType.Photo, { photoPath: fileName });
+  task.Body.push(block);
+  // Show it immediately from the local file rather than waiting on the upload + a Drive
+  // round-trip to fetch back what was just picked.
+  photoUrlCache.set(fileName, URL.createObjectURL(file));
+  onChange({ rerenderBody: true });
+
+  try {
+    await uploadAttachmentBlob(fileName, file);
+  } catch (err) {
+    console.error('Tasky: photo upload failed', fileName, err);
+    alert(`Photo upload failed: ${err.message}`);
+    // Roll back rather than leave a block whose FileName never actually made it to Drive - the
+    // synced .tasky JSON would otherwise reference a photo that doesn't exist there.
+    const idx = task.Body.indexOf(block);
+    if (idx !== -1) task.Body.splice(idx, 1);
+    URL.revokeObjectURL(photoUrlCache.get(fileName));
+    photoUrlCache.delete(fileName);
+    onChange({ rerenderBody: true });
+  }
 }

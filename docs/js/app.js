@@ -1,5 +1,5 @@
-import * as auth from './auth.js';
-import * as drive from './drive.js';
+import * as auth from './auth.js?v=1';
+import * as drive from './drive.js?v=1';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -9,11 +9,11 @@ import {
   newTaskItem,
   newTaskSyncRecord,
   spawnNextOccurrence,
-} from './model.js';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js';
-import { renderEditableBody } from './editor.js';
-import { icon } from './icons.js';
-import { DEFAULT_DATA_FILE_NAME } from './config.js';
+} from './model.js?v=1';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=1';
+import { renderEditableBody } from './editor.js?v=1';
+import { icon } from './icons.js?v=1';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=1';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');

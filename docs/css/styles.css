@@ -50,6 +50,11 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* Text size preference - most of this stylesheet sizes type in em, which cascades from this root
+   size, so scaling it here scales the whole app proportionally without a unit-by-unit audit. */
+html { font-size: 100%; }
+:root[data-font-size="small"] { font-size: 90%; }
+:root[data-font-size="large"] { font-size: 115%; }
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -212,6 +217,9 @@ a { color: var(--accent); }
 }
 .theme-switch button .icon { width: 16px; height: 16px; }
 .theme-switch button.active { background: var(--pane-bg); color: var(--accent); box-shadow: var(--shadow); }
+.font-size-switch button:nth-child(1) { font-size: 0.8em; }
+.font-size-switch button:nth-child(2) { font-size: 1em; }
+.font-size-switch button:nth-child(3) { font-size: 1.3em; }
 
 .account-avatar {
   width: 32px;
@@ -476,5 +484,8 @@ a { color: var(--accent); }
   .app[data-view="editor"] .editor-pane { display: block; }
   .app:not([data-view="sidebar"]) .nav-back { display: inline-block; }
   .sidebar-drawer-btn { display: none; }
-  .brand { display: none; }
+  /* Full wordmark crowds a phone-width header alongside back/menu/sync/account controls, but
+     showing nothing at all reads as unbranded - keep just the icon. */
+  .brand { flex: 0 0 auto; margin: 0 4px; }
+  .header-title { display: none; }
 }

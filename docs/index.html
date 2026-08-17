@@ -38,6 +38,12 @@
               <button data-theme-choice="dark" title="Dark"></button>
               <button data-theme-choice="system" title="Match system"></button>
             </div>
+            <div class="dropdown-section-label">Text Size</div>
+            <div class="theme-switch font-size-switch" id="font-size-switch">
+              <button data-font-size="small" title="Small">A</button>
+              <button data-font-size="medium" title="Medium">A</button>
+              <button data-font-size="large" title="Large">A</button>
+            </div>
             <button id="about-btn" class="dropdown-item">About Tasky Web</button>
           </div>
         </div>
@@ -55,6 +61,7 @@
           <button id="account-btn" class="account-avatar" aria-label="Account">?</button>
           <div id="account-dropdown" class="dropdown dropdown-right hidden">
             <div id="account-email" class="dropdown-email">Not signed in</div>
+            <div id="account-last-synced" class="dropdown-email"></div>
             <button id="account-signout-btn" class="dropdown-item">Sign out</button>
           </div>
         </div>

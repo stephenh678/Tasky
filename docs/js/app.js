@@ -46,10 +46,12 @@ const syncNowBtn = el('sync-now-btn');
 const accountBtn = el('account-btn');
 const accountDropdown = el('account-dropdown');
 const accountEmailEl = el('account-email');
+const accountLastSyncedEl = el('account-last-synced');
 const accountSignoutBtn = el('account-signout-btn');
 const menuBtn = el('menu-btn');
 const menuDropdown = el('menu-dropdown');
 const themeSwitch = el('theme-switch');
+const fontSizeSwitch = el('font-size-switch');
 const aboutBtn = el('about-btn');
 const aboutModal = el('about-modal');
 const aboutCloseBtn = el('about-close-btn');
@@ -177,6 +179,36 @@ themeSwitch.addEventListener('click', (e) => {
 });
 applyTheme(localStorage.getItem(THEME_KEY) ?? 'system');
 
+const FONT_SIZE_KEY = 'tasky-font-size';
+function applyFontSize(choice) {
+  if (choice === 'medium') delete document.documentElement.dataset.fontSize;
+  else document.documentElement.dataset.fontSize = choice;
+  localStorage.setItem(FONT_SIZE_KEY, choice);
+  for (const btn of fontSizeSwitch.querySelectorAll('button')) {
+    btn.classList.toggle('active', btn.dataset.fontSize === choice);
+  }
+}
+fontSizeSwitch.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-font-size]');
+  if (btn) applyFontSize(btn.dataset.fontSize);
+});
+applyFontSize(localStorage.getItem(FONT_SIZE_KEY) ?? 'medium');
+
+// --- Last synced indicator (mirrors the desktop app's "Last Synced" display) ------------------
+const LAST_SYNCED_KEY = 'tasky-last-synced';
+function formatLastSynced(date) {
+  if (!date) return 'Last synced: never';
+  return `Last synced: ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+}
+function setLastSynced(date) {
+  localStorage.setItem(LAST_SYNCED_KEY, date.toISOString());
+  accountLastSyncedEl.textContent = formatLastSynced(date);
+}
+{
+  const stored = localStorage.getItem(LAST_SYNCED_KEY);
+  accountLastSyncedEl.textContent = formatLastSynced(stored ? new Date(stored) : null);
+}
+
 aboutBtn.addEventListener('click', () => {
   closeDropdowns({});
   aboutModal.classList.remove('hidden');
@@ -202,6 +234,7 @@ syncNowBtn.addEventListener('click', async () => {
     dirty = false;
     await saveToDrive();
     saveStatus.textContent = 'Saved';
+    setLastSynced(new Date());
   } catch (err) {
     saveStatus.textContent = `Sync failed: ${err.message}`;
     console.error(err);
@@ -381,6 +414,7 @@ async function triggerSave() {
     await saveToDrive();
     saveStatus.textContent = 'Saved';
     saveStatus.classList.remove('save-status-action');
+    setLastSynced(new Date());
   } catch (err) {
     dirty = true;
     // getAccessToken() deliberately throws instead of attempting a background reauth (that's

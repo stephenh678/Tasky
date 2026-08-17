@@ -133,7 +133,7 @@ a { color: var(--accent); }
   justify-content: center;
 }
 .icon-btn:hover { background: var(--hover); }
-.nav-back { margin-right: 4px; }
+.nav-back { display: none; margin-right: 4px; }
 .sidebar-drawer-btn { display: none; }
 
 /* Grouped icon buttons read as one toolbar control (Cloud Console style) instead of loose

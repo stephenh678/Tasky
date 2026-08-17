@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -699,8 +700,38 @@ public partial class MainWindow : Window
     private void Photo_Click(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: NoteBlock { Type: NoteBlockType.Photo } block }) return;
-        if (!System.IO.File.Exists(block.PhotoPath)) return;
-        new PhotoViewerWindow(block.PhotoPath) { Owner = this }.Show();
+        var path = RichTextBoxBehavior.ResolveLocalAttachmentPath(block);
+        if (path is null) return;
+        new PhotoViewerWindow(path) { Owner = this }.Show();
+    }
+
+    private void AdditionalFile_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: NoteBlock { Type: NoteBlockType.File } block }) return;
+        var path = RichTextBoxBehavior.ResolveLocalAttachmentPath(block);
+        if (path is null) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("MainWindow", $"Failed to open attachment '{path}': {ex.Message}");
+        }
+    }
+
+    private void AdditionalLink_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: NoteBlock { Type: NoteBlockType.Link } block }) return;
+        if (string.IsNullOrWhiteSpace(block.Url)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(block.Url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("MainWindow", $"Failed to open link '{block.Url}': {ex.Message}");
+        }
     }
 
     private void TextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)

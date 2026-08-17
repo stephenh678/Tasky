@@ -37,9 +37,25 @@ public class TaskDetailViewModel : INotifyPropertyChanged
                 AttachBlock(block);
                 return block;
             }
+            if (Task.Body[0].Type != NoteBlockType.Text)
+            {
+                var block = new NoteBlock { Type = NoteBlockType.Text };
+                Task.Body.Insert(0, block);
+                AttachBlock(block);
+                return block;
+            }
             return Task.Body[0];
         }
     }
+
+    // Body[0] (PrimaryBlock) is the only content NoteEditor renders - anything else in Body only
+    // gets there via a client that isn't this desktop UI (Tasky Web's per-type "+" buttons, or a
+    // second device's own PrimaryBlock once merged in here as index 1+). Surfaced read-mostly
+    // below the main editor so that content isn't silently invisible on desktop - see
+    // Body_CollectionChanged for how this stays live across edits and remote sync merges.
+    public IReadOnlyList<NoteBlock> AdditionalBlocks => Task.Body.Skip(1).ToList();
+
+    public RelayCommand RemoveAdditionalBlockCommand { get; }
 
     public string NewTagText
     {
@@ -156,6 +172,18 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             Task.Body.Add(new NoteBlock { Type = NoteBlockType.Text });
             _onChanged();
         }
+        else if (Task.Body[0].Type != NoteBlockType.Text)
+        {
+            // NoteEditor only ever renders Body[0] as text/Rtf - a brand-new task whose very
+            // first content was added by something other than this desktop UI (e.g. Tasky Web's
+            // "+ Photo" on an otherwise-empty task) can leave a Photo/Link/Checklist/File block
+            // sitting at index 0, where it's invisible twice over: NoteEditor shows nothing useful
+            // for a non-Text primary block, and AdditionalBlocks (Body.Skip(1)) doesn't reach
+            // index 0 either. Insert an empty primary text block ahead of it instead of moving or
+            // otherwise touching the block itself, so it lands in AdditionalBlocks like any other.
+            Task.Body.Insert(0, new NoteBlock { Type = NoteBlockType.Text });
+            _onChanged();
+        }
 
         ToggleInfoPanelCommand = new RelayCommand(_ => ShowInfoPanel = !ShowInfoPanel);
         ToggleTagPopupCommand = new RelayCommand(_ =>
@@ -215,6 +243,22 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             });
         });
 
+        RemoveAdditionalBlockCommand = new RelayCommand(p =>
+        {
+            if (p is not NoteBlock block || block == PrimaryBlock) return;
+            var index = Task.Body.IndexOf(block);
+            if (index < 0) return;
+            Task.Body.RemoveAt(index);
+            Task.ModifiedAt = DateTime.Now;
+            _onChanged();
+            _pushUndo("Remove block", () =>
+            {
+                if (!Task.Body.Contains(block))
+                    Task.Body.Insert(Math.Min(index, Task.Body.Count), block);
+                Task.ModifiedAt = DateTime.Now;
+                _onChanged();
+            });
+        });
     }
 
     public static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp" };
@@ -269,6 +313,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         // for the same fix applied to editing an existing block's content.
         Task.ModifiedAt = DateTime.Now;
         OnPropertyChanged(nameof(WordCount));
+        OnPropertyChanged(nameof(AdditionalBlocks));
     }
 
     private void AttachBlock(NoteBlock block)

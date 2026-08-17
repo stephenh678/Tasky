@@ -695,6 +695,33 @@ public class GoogleDriveService
         }
     }
 
+    /// <summary>
+    /// Downloads any attachment files that exist remotely but not yet in this data file's own
+    /// local Attachments/InlineImages folders, without re-downloading the .tasky file itself.
+    /// Ongoing periodic sync (PerformGoogleDriveSyncAsync) only ever merges the JSON - ordinary
+    /// syncs never called this, so a photo or file added on another device (Tasky Web included)
+    /// synced its Body block/FileName reference here just fine, but its actual bytes never
+    /// arrived locally until the next full reconnect/open, which nothing prompts a user to do.
+    /// Cheap to call every sync: DownloadMediaDirectoryAsync already skips anything that already
+    /// exists locally, so this is just one Drive files.list call per folder once nothing's new.
+    /// </summary>
+    public async Task SyncAttachmentsDownAsync(string localDataFilePath, Settings? settings = null, SettingsStore? settingsStore = null)
+    {
+        if (_driveService is null) return;
+        try
+        {
+            var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
+            var containerFolderId = await ResolveMediaContainerFolderIdAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
+            var dir = Path.GetDirectoryName(localDataFilePath) ?? ".";
+            await DownloadMediaDirectoryAsync("Attachments", dir, containerFolderId);
+            await DownloadMediaDirectoryAsync("InlineImages", dir, containerFolderId);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("GoogleDriveService", $"Error syncing attachments down: {ex.Message}");
+        }
+    }
+
     private async Task DownloadMediaDirectoryAsync(string dirName, string targetBaseDir, string taskyFolderId)
     {
         if (_driveService is null) return;

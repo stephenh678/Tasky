@@ -821,6 +821,13 @@ public class MainViewModel : INotifyPropertyChanged
                     RefreshTags();
                     FilteredTasksView.Refresh();
                     await _store.SaveAsync(_state, _currentFilePath);
+
+                    // The merge above just pulled in any new/updated Body blocks by JSON alone -
+                    // a photo or file added elsewhere (Tasky Web included) has its FileName
+                    // reference now, but not yet the actual bytes. Cheap to call every sync (see
+                    // SyncAttachmentsDownAsync's own doc comment), so no need to gate this on
+                    // whether the merge actually added anything.
+                    await _googleDrive.SyncAttachmentsDownAsync(_currentFilePath, _settings, _settingsStore);
                 }
                 catch (InvalidDataException ex)
                 {

@@ -48,6 +48,7 @@
         <conv:MarkCompletedVisibilityConverter x:Key="MarkCompletedVis"/>
         <conv:InverseBooleanConverter x:Key="InverseBool"/>
         <conv:BoolToStatusBrushConverter x:Key="BoolToStatusBrush"/>
+        <conv:NoteBlockToPhotoSourceConverter x:Key="NoteBlockToPhotoSource"/>
 
         <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
              auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
@@ -876,6 +877,80 @@
                                        VerticalAlignment="Top" Margin="0,2,0,0"
                                        Visibility="{Binding ElementName=NoteEditor, Path=(beh:RichTextBoxBehavior.IsEmpty), Converter={StaticResource BoolToVis}}"/>
                         </Grid>
+
+                        <!-- Content synced from elsewhere that isn't Body[0] (PrimaryBlock, shown in
+                             NoteEditor above) - the only source of this today is Tasky Web's per-type
+                             "+" buttons (or a second desktop syncing its own PrimaryBlock in as index
+                             1+), since this app's own editor only ever writes to PrimaryBlock. Without
+                             this section that content is safely synced but never shown here. View/open/
+                             check-off/remove only - no inline editing of a block's own text from here,
+                             matching the read-mostly scope this was scoped to. -->
+                        <StackPanel Margin="0,16,0,0"
+                                    Visibility="{Binding AdditionalBlocks, Converter={StaticResource AnyItemToVis}}">
+                            <Border Height="1" Background="{DynamicResource SecondaryBrush}" Margin="0,0,0,12"/>
+                            <TextBlock Text="More content (synced from Tasky Web)" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,0,8"/>
+                            <ItemsControl ItemsSource="{Binding AdditionalBlocks}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource SecondaryHighlightBrush}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13"
+                                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                                               Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Text}"/>
+
+                                                    <StackPanel Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Photo}">
+                                                        <Image Source="{Binding Converter={StaticResource NoteBlockToPhotoSource}}"
+                                                               MaxHeight="180" HorizontalAlignment="Left" Stretch="Uniform" Cursor="Hand"
+                                                               MouseLeftButtonDown="Photo_Click"/>
+                                                        <TextBlock Text="{Binding FileName}" FontSize="11" Margin="0,4,0,0"
+                                                                   Foreground="{DynamicResource TertiaryBrush}"/>
+                                                    </StackPanel>
+
+                                                    <Border Cursor="Hand" MouseLeftButtonDown="AdditionalLink_Click"
+                                                            Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Link}">
+                                                        <TextBlock Text="{Binding LinkLabel}" TextWrapping="Wrap" FontSize="13"
+                                                                   Foreground="{DynamicResource AccentBrush}" TextDecorations="Underline"/>
+                                                    </Border>
+
+                                                    <Border Cursor="Hand" MouseLeftButtonDown="AdditionalFile_Click"
+                                                            Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=File}">
+                                                        <TextBlock Text="{Binding FileName}" FontSize="13"
+                                                                   Foreground="{DynamicResource AccentBrush}" TextDecorations="Underline"/>
+                                                    </Border>
+
+                                                    <ItemsControl ItemsSource="{Binding ChecklistItems}"
+                                                                  Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Checklist}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+                                                                    <CheckBox IsChecked="{Binding IsChecked}" VerticalAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding Text}" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                               FontSize="13" TextWrapping="Wrap"
+                                                                               Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+
+                                                <Button Grid.Column="1" Style="{StaticResource IconButton}" VerticalAlignment="Top"
+                                                        Command="{Binding DataContext.RemoveAdditionalBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" ToolTip="Remove">
+                                                    <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}"/>
+                                                </Button>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

@@ -225,7 +225,7 @@ public static class RichTextBoxBehavior
     private static bool HasMedia(FlowDocument doc) => doc.Blocks.Any(b =>
         b is BlockUIContainer || (b is Paragraph p && p.Inlines.Any(i => i is InlineUIContainer)));
 
-    private static string GetInlineAttachmentDirectory()
+    public static string GetInlineAttachmentDirectory()
     {
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky", "InlineImages");
         Directory.CreateDirectory(dir);
@@ -237,6 +237,30 @@ public static class RichTextBoxBehavior
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky", "Attachments");
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    // A NoteBlock's PhotoPath is whatever absolute path the machine that created it used - it's
+    // never rewritten after Drive sync downloads the actual bytes onto a different machine (or a
+    // browser, which has no local path at all and stores just the bare filename there instead).
+    // Falls back to looking the file up by name in the same local folders Drive sync already
+    // downloads into, so a photo/file added from Tasky Web (or a second desktop machine) resolves
+    // correctly here once its bytes have synced down, without needing PhotoPath itself to be
+    // machine-portable.
+    public static string? ResolveLocalAttachmentPath(NoteBlock block)
+    {
+        if (!string.IsNullOrWhiteSpace(block.PhotoPath) && File.Exists(block.PhotoPath))
+            return block.PhotoPath;
+
+        var fileName = block.FileName;
+        if (string.IsNullOrWhiteSpace(fileName)) return null;
+
+        var attachmentsPath = Path.Combine(GetAttachmentsDirectory(), fileName);
+        if (File.Exists(attachmentsPath)) return attachmentsPath;
+
+        var inlinePath = Path.Combine(GetInlineAttachmentDirectory(), fileName);
+        if (File.Exists(inlinePath)) return inlinePath;
+
+        return null;
     }
 
     public static string CopyFileToAttachments(string sourceFilePath)

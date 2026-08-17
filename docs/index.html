@@ -71,6 +71,7 @@
     <div class="app-body">
       <nav id="sidebar" class="pane sidebar">
         <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" aria-label="Collapse sidebar"></button>
+        <button id="sidebar-new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)"></button>
         <ul id="sidebar-list" class="sidebar-list"></ul>
         <div class="sidebar-section-label">Tags</div>
         <ul id="tag-list" class="sidebar-list tag-list"></ul>
@@ -79,8 +80,8 @@
       <section id="list-pane" class="pane list-pane">
         <div class="list-toolbar">
           <input id="search-box" type="search" placeholder="Search… (tag:name)" class="search-box" />
-          <button id="new-task-btn" class="icon-btn" aria-label="New task" title="New task (Ctrl+N)"></button>
         </div>
+        <button id="new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)"></button>
         <div class="list-filter-row">
           <select id="sort-select" class="filter-select" title="Sort by">
             <option value="modified">Sort: Modified</option>

@@ -290,6 +290,22 @@ a { color: var(--accent); }
 .sidebar-collapse-btn:hover { color: var(--text); background: var(--hover); }
 .sidebar-collapsed .sidebar-collapse-btn .icon { transform: rotate(180deg); }
 
+.new-task-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 16px);
+  margin: 0 8px 12px;
+  padding: 12px;
+  font-size: 1em;
+  font-weight: 600;
+}
+.new-task-btn .icon { width: 20px; height: 20px; flex-shrink: 0; }
+#list-pane > .new-task-btn { width: calc(100% - 20px); margin: 0 10px 10px; }
+.sidebar-collapsed .new-task-btn { width: 40px; height: 40px; padding: 0; margin: 0 auto 12px; border-radius: 50%; }
+.sidebar-collapsed .new-task-btn .sidebar-item-label { display: none; }
+
 .sidebar-list { list-style: none; margin: 0; padding: 0 8px; }
 .sidebar-section-label {
   font-size: 0.72em;
@@ -484,8 +500,4 @@ a { color: var(--accent); }
   .app[data-view="editor"] .editor-pane { display: block; }
   .app:not([data-view="sidebar"]) .nav-back { display: inline-block; }
   .sidebar-drawer-btn { display: none; }
-  /* Full wordmark crowds a phone-width header alongside back/menu/sync/account controls, but
-     showing nothing at all reads as unbranded - keep just the icon. */
-  .brand { flex: 0 0 auto; margin: 0 4px; }
-  .header-title { display: none; }
 }

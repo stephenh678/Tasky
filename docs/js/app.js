@@ -27,6 +27,7 @@ const taskListEl = el('task-list');
 const listEmpty = el('list-empty');
 const searchBox = el('search-box');
 const newTaskBtn = el('new-task-btn');
+const sidebarNewTaskBtn = el('sidebar-new-task-btn');
 const sortSelect = el('sort-select');
 const quickFilterSelect = el('quick-filter-select');
 const editorEmpty = el('editor-empty');
@@ -66,7 +67,8 @@ navBack.innerHTML = icon('back');
 sidebarDrawerBtn.innerHTML = icon('menu');
 menuBtn.innerHTML = icon('menu');
 syncNowBtn.innerHTML = icon('sync');
-newTaskBtn.innerHTML = icon('plus');
+newTaskBtn.innerHTML = `${icon('plus')}<span class="sidebar-item-label">New Task</span>`;
+sidebarNewTaskBtn.innerHTML = `${icon('plus')}<span class="sidebar-item-label">New Task</span>`;
 editorPinBtn.innerHTML = icon('pin');
 sidebarCollapseBtn.innerHTML = icon('chevronLeft');
 aboutCloseBtn.innerHTML = icon('x');
@@ -745,6 +747,7 @@ editorDeleteBtn.addEventListener('click', () => {
 });
 
 newTaskBtn.addEventListener('click', createTask);
+sidebarNewTaskBtn.addEventListener('click', createTask);
 emptyTrashBtn.addEventListener('click', emptyTrash);
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {

@@ -49,7 +49,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* Chrome for Android's pull-to-refresh triggers off document-level overscroll - without this, a
+   downward swipe that starts inside a scrolled-to-top list (search results, task list, editor
+   body) chains straight through to it and reloads the whole SPA, discarding anything not yet
+   autosaved. Blocking it here is enough; the inner panes already scroll independently. */
+html, body { height: 100%; overscroll-behavior-y: contain; }
 /* Text size preference - most of this stylesheet sizes type in em, which cascades from this root
    size, so scaling it here scales the whole app proportionally without a unit-by-unit audit. */
 html { font-size: 100%; touch-action: manipulation; }

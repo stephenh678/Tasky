@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=17';
-import * as drive from './drive.js?v=17';
+import * as auth from './auth.js?v=18';
+import * as drive from './drive.js?v=18';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=17';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=17';
-import { renderEditableBody } from './editor.js?v=17';
-import { icon } from './icons.js?v=17';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=17';
+} from './model.js?v=18';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=18';
+import { renderEditableBody } from './editor.js?v=18';
+import { icon } from './icons.js?v=18';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=18';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -149,11 +149,26 @@ async function boot() {
 
   if (await auth.handleRedirectReturn()) {
     await onSignedIn();
+    armHistoryTrap();
     return;
   }
   if (auth.restoreFromCache()) {
     await onSignedIn();
   }
+}
+
+// The redirect sign-in flow (see auth.js) is a real full-page navigation to Google's consent
+// screen and back, which leaves Google's own page as a genuine entry in the tab's history -
+// there's no API to delete a specific past entry, only to replace the current one or push new
+// ones. Left alone, pressing Android's back button (or any back navigation) from the freshly
+// signed-in app lands straight back on that stale, already-consumed OAuth page. Only worth
+// arming when a redirect round-trip actually just happened this session - a returning visit
+// restored from the cached token never touches Google at all, so there's nothing poisoning
+// history to guard against there.
+function armHistoryTrap() {
+  const plantAnchor = () => history.pushState({ tasky: true }, '', location.pathname + location.search);
+  plantAnchor();
+  window.addEventListener('popstate', plantAnchor);
 }
 
 signinBtn.addEventListener('click', () => {
@@ -536,6 +551,19 @@ async function triggerSave() {
     saving = false;
   }
 }
+
+// Android backgrounds tabs aggressively (switching apps, the home/back gesture, the OS reclaiming
+// memory) and throttles or fully suspends JS timers once hidden - the 10s autosave debounce may
+// simply never get to fire before the page is gone, silently losing whatever was just typed.
+// visibilitychange is the standard mobile-safe signal for this (unlike beforeunload, which mobile
+// browsers don't reliably fire just for backgrounding rather than closing): flush immediately the
+// moment the page goes hidden instead of waiting out the rest of the debounce window.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && dirty) {
+    clearTimeout(saveTimer);
+    triggerSave();
+  }
+});
 
 saveStatus.addEventListener('click', () => {
   if (!saveStatus.classList.contains('save-status-action')) return;

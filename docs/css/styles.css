@@ -271,7 +271,11 @@ a { color: var(--accent); }
 .app-body.sidebar-collapsed { grid-template-columns: 56px 320px 1fr; }
 .pane { overflow-y: auto; min-height: 0; }
 .sidebar { border-right: 1px solid var(--border); background: var(--pane-bg); padding: 8px 0; position: relative; }
-.list-pane { border-right: 1px solid var(--border); background: var(--pane-bg); display: flex; flex-direction: column; }
+/* overflow-y: hidden overrides .pane's auto - the search/filter toolbar above #task-list should
+   stay put, with only the task rows themselves scrolling (#task-list already has its own
+   overflow-y: auto). Without this, the whole pane became a second, redundant scroll container,
+   which is what a persistent scrollbar sitting above the actual list rows was really showing. */
+.list-pane { border-right: 1px solid var(--border); background: var(--pane-bg); display: flex; flex-direction: column; overflow-y: hidden; }
 .editor-pane { background: var(--bg); padding: 20px; }
 
 .sidebar-collapse-btn {
@@ -357,7 +361,7 @@ a { color: var(--accent); }
   color: var(--text);
   font-size: 0.85em;
 }
-.task-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.task-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
 .task-list li {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);

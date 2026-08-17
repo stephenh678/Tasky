@@ -8,7 +8,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <meta name="theme-color" content="#3861d6" />
-  <link rel="stylesheet" href="css/styles.css?v=8" />
+  <link rel="stylesheet" href="css/styles.css?v=9" />
 </head>
 <body>
   <!-- Signed-out gate -->
@@ -80,9 +80,10 @@
       <section id="list-pane" class="pane list-pane">
         <div class="list-toolbar">
           <input id="search-box" type="search" placeholder="Search… (tag:name)" class="search-box" />
+          <button id="filter-toggle-btn" class="icon-btn filter-toggle-btn" aria-label="Sort & filter" title="Sort & filter"></button>
         </div>
         <button id="new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)"></button>
-        <div class="list-filter-row">
+        <div id="list-filter-row" class="list-filter-row hidden">
           <select id="sort-select" class="filter-select" title="Sort by">
             <option value="modified">Sort: Modified</option>
             <option value="created">Sort: Created</option>
@@ -152,6 +153,6 @@
   </div>
 
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script type="module" src="js/app.js?v=8"></script>
+  <script type="module" src="js/app.js?v=9"></script>
 </body>
 </html>

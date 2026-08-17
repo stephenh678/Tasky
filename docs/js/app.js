@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=8';
-import * as drive from './drive.js?v=8';
+import * as auth from './auth.js?v=9';
+import * as drive from './drive.js?v=9';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=8';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=8';
-import { renderEditableBody } from './editor.js?v=8';
-import { icon } from './icons.js?v=8';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=8';
+} from './model.js?v=9';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=9';
+import { renderEditableBody } from './editor.js?v=9';
+import { icon } from './icons.js?v=9';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=9';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -31,6 +31,8 @@ const newTaskBtn = el('new-task-btn');
 const sidebarNewTaskBtn = el('sidebar-new-task-btn');
 const sortSelect = el('sort-select');
 const quickFilterSelect = el('quick-filter-select');
+const listFilterRow = el('list-filter-row');
+const filterToggleBtn = el('filter-toggle-btn');
 const editorEmpty = el('editor-empty');
 const editorContent = el('editor-content');
 const editorTitle = el('editor-title');
@@ -71,6 +73,7 @@ menuBtn.innerHTML = icon('menu');
 syncNowBtn.innerHTML = icon('sync');
 newTaskBtn.innerHTML = `${icon('plus')}<span class="sidebar-item-label">New Task</span>`;
 sidebarNewTaskBtn.innerHTML = `${icon('plus')}<span class="sidebar-item-label">New Task</span>`;
+filterToggleBtn.innerHTML = icon('filter');
 editorPinBtn.innerHTML = icon('pin');
 sidebarCollapseBtn.innerHTML = icon('chevronLeft');
 aboutCloseBtn.innerHTML = icon('x');
@@ -155,7 +158,25 @@ menuBtn.addEventListener('click', (e) => {
   closeDropdowns({ except: menuDropdown });
   menuDropdown.classList.toggle('hidden');
 });
-document.addEventListener('click', () => closeDropdowns({}));
+document.addEventListener('click', (e) => {
+  closeDropdowns({});
+  // Mobile-only popup (Sort/Filter collapsed behind one icon - see filterToggleBtn below);
+  // harmless no-op on desktop/tablet where CSS keeps it permanently visible regardless of this
+  // class. Guarded by containment, unlike closeDropdowns, because it holds interactive <select>
+  // elements - the plain "close on every click" the other dropdowns use would hide it out from
+  // under a click that was just trying to open one of those selects.
+  if (!listFilterRow.contains(e.target)) listFilterRow.classList.add('hidden');
+});
+filterToggleBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeDropdowns({});
+  const wasHidden = listFilterRow.classList.contains('hidden');
+  if (wasHidden) {
+    const rect = filterToggleBtn.getBoundingClientRect();
+    listFilterRow.style.top = `${rect.bottom + 6}px`;
+  }
+  listFilterRow.classList.toggle('hidden', !wasHidden);
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeDropdowns({});

@@ -162,6 +162,7 @@ a { color: var(--accent); }
 .icon-btn:hover { background: var(--hover); }
 .nav-back { display: none; margin-right: 4px; }
 .sidebar-drawer-btn { display: none; }
+.filter-toggle-btn { display: none; }
 
 /* Grouped icon buttons read as one toolbar control (Cloud Console style) instead of loose
    floating buttons - shared pill background, buttons themselves stay borderless inside it. */
@@ -555,9 +556,12 @@ a { color: var(--accent); }
     padding: 8px 12px;
   }
   .save-status:empty { display: none; }
-  .sidebar, .list-pane, .editor-pane { padding-bottom: calc(var(--mobile-tabbar-height) + 40px); }
+  .sidebar, .list-pane, .editor-pane { padding-bottom: var(--mobile-bottom-chrome); }
 
-  :root { --mobile-tabbar-height: calc(50px + env(safe-area-inset-bottom, 0px)); }
+  :root {
+    --mobile-tabbar-height: calc(50px + env(safe-area-inset-bottom, 0px));
+    --mobile-bottom-chrome: calc(var(--mobile-tabbar-height) + 40px);
+  }
   .mobile-tabbar {
     display: flex;
     position: fixed;
@@ -614,4 +618,48 @@ a { color: var(--accent); }
   .block-checklist-item.editable input[type="text"], .checklist-add {
     font-size: 16px;
   }
+
+  /* Standard mobile fix for a list toolbar that was eating a third of the screen: New Task
+     collapses from a full-width banner row into a floating action button (same circular
+     treatment the desktop sidebar already uses when collapsed - see .sidebar-collapsed
+     .new-task-btn), and Sort/Filter collapse from two permanently-visible dropdown pills into
+     one icon that reveals them in a small popup. Both exit normal document flow entirely
+     (position:fixed / hidden-until-opened), so the task list now starts right after the search
+     row instead of three rows down. */
+  .list-toolbar { position: relative; }
+  #list-pane > .new-task-btn {
+    position: fixed;
+    right: 16px;
+    bottom: calc(var(--mobile-bottom-chrome) + 16px);
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    z-index: 24;
+  }
+  #list-pane > .new-task-btn .sidebar-item-label { display: none; }
+
+  .filter-toggle-btn { display: flex; flex-shrink: 0; }
+  .list-filter-row {
+    position: fixed;
+    right: 10px;
+    width: 200px;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 22;
+  }
+}
+
+/* .list-filter-row starts with a "hidden" class in the markup so mobile can show/hide it as a
+   popup via JS - tablet and desktop never touch that class, so force it visible there regardless,
+   matching the always-on row this replaced only on mobile. */
+@media (min-width: 768px) {
+  .list-filter-row.hidden { display: flex !important; }
 }

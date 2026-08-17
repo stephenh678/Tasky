@@ -8,7 +8,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <meta name="theme-color" content="#3861d6" />
-  <link rel="stylesheet" href="css/styles.css?v=14" />
+  <link rel="stylesheet" href="css/styles.css?v=15" />
 </head>
 <body>
   <!-- Signed-out gate -->
@@ -61,6 +61,7 @@
         <div class="account-wrap">
           <button id="account-btn" class="account-avatar" aria-label="Account">?</button>
           <div id="account-dropdown" class="dropdown dropdown-right hidden">
+            <div id="account-name" class="dropdown-name"></div>
             <div id="account-email" class="dropdown-email">Not signed in</div>
             <div id="account-last-synced" class="dropdown-email"></div>
             <button id="account-signout-btn" class="dropdown-item">Sign out</button>
@@ -103,6 +104,9 @@
         </div>
         <div id="trash-actions-row" class="trash-actions-row hidden">
           <button id="empty-trash-btn" class="btn btn-ghost small danger">Empty Trash</button>
+        </div>
+        <div id="done-actions-row" class="trash-actions-row hidden">
+          <button id="move-all-trash-btn" class="btn btn-ghost small danger">Move All to Trash</button>
         </div>
         <ul id="task-list" class="task-list"></ul>
         <div id="list-empty" class="empty-state hidden">No tasks here.</div>
@@ -154,6 +158,6 @@
   </div>
 
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script type="module" src="js/app.js?v=14"></script>
+  <script type="module" src="js/app.js?v=15"></script>
 </body>
 </html>

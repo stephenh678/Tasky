@@ -259,7 +259,11 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  padding: 0;
 }
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dropdown-name { padding: 8px 8px 0; font-size: 0.9em; font-weight: 600; }
 
 /* Modal (About) */
 .modal-overlay {

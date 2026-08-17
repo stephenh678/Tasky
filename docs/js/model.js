@@ -96,7 +96,7 @@ export function newTaskItem({ text = '' } = {}) {
     Notes: '',
     Links: [],
     Photos: [],
-    Body: [],
+    Body: [newNoteBlock(NoteBlockType.Text, {})],
     Tags: [],
   };
 }

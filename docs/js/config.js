@@ -10,10 +10,11 @@ export const GOOGLE_CLIENT_ID = '395690152006-c3he874j1gn548j74chkju1f741opfhi.a
 export const TOKEN_EXCHANGE_URL = 'https://exchange-token-395690152006.us-central1.run.app';
 
 // drive.file: the app can only see/manage files it creates or that the user explicitly opens
-// with it - never blanket access to the user's whole Drive. userinfo.email is just so the app
-// can show "Connected as ..." - both are non-sensitive scopes (no extra Google verification).
+// with it - never blanket access to the user's whole Drive. userinfo.email/.profile are just so
+// the app can show "Connected as ..." plus the account's name and picture - all three are
+// non-sensitive scopes (no extra Google verification required).
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-export const GOOGLE_SCOPES = `${GOOGLE_DRIVE_SCOPE} https://www.googleapis.com/auth/userinfo.email`;
+export const GOOGLE_SCOPES = `${GOOGLE_DRIVE_SCOPE} https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile`;
 
 export const TASKY_FOLDER_NAME = 'Tasky';
 export const DEFAULT_DATA_FILE_NAME = 'Tasky.tasky';

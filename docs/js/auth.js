@@ -17,7 +17,7 @@
 // the token it gets back. The access token is also cached in localStorage (scoped narrowly to
 // drive.file + email, expires in under an hour - no more sensitive than a session cookie) so a
 // same-hour reload restores the session with zero network calls and zero redirects.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=14';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=15';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const STATE_KEY = 'tasky-auth-state';
@@ -36,6 +36,8 @@ const REDIRECT_URI = (window.location.origin + window.location.pathname)
 let accessToken = null;
 let tokenExpiresAt = 0;
 let accountEmail = null;
+let accountName = null;
+let accountPicture = null;
 
 function loadCachedToken() {
   try {
@@ -46,6 +48,8 @@ function loadCachedToken() {
     accessToken = cached.accessToken;
     tokenExpiresAt = cached.expiresAt;
     accountEmail = cached.accountEmail ?? null;
+    accountName = cached.accountName ?? null;
+    accountPicture = cached.accountPicture ?? null;
     return true;
   } catch {
     return false;
@@ -56,7 +60,7 @@ function persistToken() {
   try {
     localStorage.setItem(
       TOKEN_CACHE_KEY,
-      JSON.stringify({ accessToken, expiresAt: tokenExpiresAt, accountEmail })
+      JSON.stringify({ accessToken, expiresAt: tokenExpiresAt, accountEmail, accountName, accountPicture })
     );
   } catch {
     // Best-effort - a failed cache write just means the next reload needs a real reauth.
@@ -113,7 +117,7 @@ export async function handleRedirectReturn() {
     const data = await res.json();
     accessToken = data.access_token;
     tokenExpiresAt = Date.now() + (Number(data.expires_in) || 3600) * 1000;
-    await fetchAccountEmail();
+    await fetchAccountInfo();
     persistToken();
     return true;
   } catch (err) {
@@ -150,6 +154,8 @@ export function signOut() {
   accessToken = null;
   tokenExpiresAt = 0;
   accountEmail = null;
+  accountName = null;
+  accountPicture = null;
   clearCachedToken();
 }
 
@@ -159,6 +165,14 @@ export function isSignedIn() {
 
 export function getAccountEmail() {
   return accountEmail;
+}
+
+export function getAccountName() {
+  return accountName;
+}
+
+export function getAccountPicture() {
+  return accountPicture;
 }
 
 /**
@@ -172,7 +186,7 @@ export async function getAccessToken() {
   throw new Error('NOT_SIGNED_IN');
 }
 
-async function fetchAccountEmail() {
+async function fetchAccountInfo() {
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -180,6 +194,8 @@ async function fetchAccountEmail() {
     if (!res.ok) return;
     const data = await res.json();
     accountEmail = data.email ?? null;
+    accountName = data.name ?? null;
+    accountPicture = data.picture ?? null;
   } catch {
     // Cosmetic only ("Connected as ...") - never worth surfacing an error for.
   }

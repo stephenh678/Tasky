@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=14';
-import * as drive from './drive.js?v=14';
+import * as auth from './auth.js?v=15';
+import * as drive from './drive.js?v=15';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=14';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=14';
-import { renderEditableBody } from './editor.js?v=14';
-import { icon } from './icons.js?v=14';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=14';
+} from './model.js?v=15';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=15';
+import { renderEditableBody } from './editor.js?v=15';
+import { icon } from './icons.js?v=15';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=15';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -49,6 +49,7 @@ const saveStatus = el('save-status');
 const syncNowBtn = el('sync-now-btn');
 const accountBtn = el('account-btn');
 const accountDropdown = el('account-dropdown');
+const accountNameEl = el('account-name');
 const accountEmailEl = el('account-email');
 const accountLastSyncedEl = el('account-last-synced');
 const accountSignoutBtn = el('account-signout-btn');
@@ -64,6 +65,8 @@ const sidebarCollapseBtn = el('sidebar-collapse-btn');
 const navBack = el('nav-back');
 const trashActionsRow = el('trash-actions-row');
 const emptyTrashBtn = el('empty-trash-btn');
+const doneActionsRow = el('done-actions-row');
+const moveAllTrashBtn = el('move-all-trash-btn');
 const mobileTabbar = el('mobile-tabbar');
 
 const SECTION_ICONS = { all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
@@ -304,10 +307,17 @@ async function onSignedIn() {
   setStatus('Loading…');
 
   const email = auth.getAccountEmail();
-  if (email) {
+  const name = auth.getAccountName();
+  const picture = auth.getAccountPicture();
+  if (picture) {
+    accountBtn.innerHTML = `<img src="${picture}" alt="" referrerpolicy="no-referrer" />`;
+  } else if (email) {
     accountBtn.textContent = email[0].toUpperCase();
-    accountBtn.title = `Signed in as ${email}`;
-    accountEmailEl.textContent = `Signed in as ${email}`;
+  }
+  if (email) {
+    accountBtn.title = name ? `Signed in as ${name} (${email})` : `Signed in as ${email}`;
+    accountNameEl.textContent = name ?? '';
+    accountEmailEl.textContent = email;
   }
 
   try {
@@ -601,6 +611,24 @@ function emptyTrash() {
   renderList();
 }
 
+function moveAllDoneToTrash() {
+  const done = appState.Tasks.filter((t) => !t.IsClosed && t.IsDone);
+  if (done.length === 0) return;
+  if (!confirm(`Move ${done.length} completed task(s) to Trash?`)) return;
+
+  for (const task of done) {
+    task.IsClosed = true;
+    touch(task);
+  }
+  if (selectedTaskId && done.some((t) => t.Id === selectedTaskId)) {
+    selectedTaskId = null;
+    showEmptyEditor();
+  }
+  markDirty();
+  renderSidebar();
+  renderList();
+}
+
 function addTag(task, rawTag) {
   const tag = rawTag.trim().toLowerCase();
   if (!tag || task.Tags.includes(tag)) return;
@@ -684,7 +712,11 @@ function renderMobileTabbar() {
 
 function renderList() {
   const tasks = currentTasks();
+  // Creating a task always drops it into "All Tasks" (see createTask) - offering the button while
+  // looking at Completed or Trash would just be a confusing way to leave the page you're on.
+  newTaskBtn.classList.toggle('hidden', currentSection.kind === 'done' || currentSection.kind === 'trash');
   trashActionsRow.classList.toggle('hidden', currentSection.kind !== 'trash' || tasksForSection({ kind: 'trash' }).length === 0);
+  doneActionsRow.classList.toggle('hidden', currentSection.kind !== 'done' || tasksForSection({ kind: 'done' }).length === 0);
   taskListEl.innerHTML = '';
   listEmpty.classList.toggle('hidden', tasks.length > 0);
   listEmpty.textContent =
@@ -825,6 +857,7 @@ editorDeleteBtn.addEventListener('click', () => {
 newTaskBtn.addEventListener('click', createTask);
 sidebarNewTaskBtn.addEventListener('click', createTask);
 emptyTrashBtn.addEventListener('click', emptyTrash);
+moveAllTrashBtn.addEventListener('click', moveAllDoneToTrash);
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
     e.preventDefault();

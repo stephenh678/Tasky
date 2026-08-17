@@ -180,6 +180,11 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             if (tag.Length == 0) return;
             if (Task.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase))) return;
             Task.Tags.Add(tag);
+            // Same gap as Body/NoteBlock changes (see Body_CollectionChanged): Tags is a plain
+            // ObservableCollection property with no SetField wrapper, so adding/removing an entry
+            // never raises TaskItem.PropertyChanged and MainViewModel's sync merge never sees it
+            // as an edit worth keeping.
+            Task.ModifiedAt = DateTime.Now;
             _onChanged();
         });
 
@@ -191,6 +196,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             if (tag.Length == 0) return;
             if (Task.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase))) return;
             Task.Tags.Add(tag);
+            Task.ModifiedAt = DateTime.Now;
             _onChanged();
         });
 
@@ -198,11 +204,13 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         {
             if (p is not string tag) return;
             Task.Tags.Remove(tag);
+            Task.ModifiedAt = DateTime.Now;
             _onChanged();
             _pushUndo($"Remove tag \"{tag}\"", () =>
             {
                 if (!Task.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)))
                     Task.Tags.Add(tag);
+                Task.ModifiedAt = DateTime.Now;
                 _onChanged();
             });
         });
@@ -251,6 +259,15 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             foreach (NoteBlock block in e.OldItems)
                 DetachBlock(block);
 
+        // Task.PropertyChanged (which MainViewModel listens to for ModifiedAt) only fires for
+        // TaskItem's own direct properties - it never sees changes nested inside Body, since
+        // Body itself is the same ObservableCollection reference before and after a block is
+        // added or removed. Without this, a device that only edits a task's note content (no
+        // title/tag/due-date change) never bumps ModifiedAt, so Google Drive sync's "newer wins"
+        // merge treats the edit as if nothing happened and silently drops it in favor of an
+        // untouched remote copy. See Block_PropertyChanged/ChecklistItem_PropertyChanged below
+        // for the same fix applied to editing an existing block's content.
+        Task.ModifiedAt = DateTime.Now;
         OnPropertyChanged(nameof(WordCount));
     }
 
@@ -283,6 +300,11 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         if (e.PropertyName == nameof(NoteBlock.Text))
             OnPropertyChanged(nameof(WordCount));
 
+        // See the comment in Body_CollectionChanged - editing an existing block's content is
+        // exactly the same "invisible to sync" gap, just one level deeper (a property on a block
+        // inside Body, rather than Body itself changing shape).
+        Task.ModifiedAt = DateTime.Now;
+
         if (e.PropertyName is nameof(NoteBlock.Text) or nameof(NoteBlock.Rtf) or nameof(NoteBlock.PhotoPath))
             _onTypingChanged();
     }
@@ -295,6 +317,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         if (e.OldItems is not null)
             foreach (ChecklistItem item in e.OldItems)
                 DetachChecklistItem(item);
+        Task.ModifiedAt = DateTime.Now;
         _onChanged();
     }
 
@@ -304,6 +327,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
 
     private void ChecklistItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        Task.ModifiedAt = DateTime.Now;
         if (e.PropertyName == nameof(ChecklistItem.IsChecked))
             _onChanged();
         else

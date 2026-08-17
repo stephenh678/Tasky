@@ -113,6 +113,7 @@ a { color: var(--accent); }
 .signin-card h1 { margin: 0 0 4px; letter-spacing: -0.02em; }
 .signin-sub { color: var(--text-dim); margin-bottom: 22px; }
 .signin-status { color: var(--danger); font-size: 0.9em; min-height: 1.2em; }
+.signin-version { color: var(--text-dim); opacity: 0.5; font-size: 0.72em; margin-top: 18px; margin-bottom: 0; }
 
 .btn {
   border: none;
@@ -540,10 +541,7 @@ a { color: var(--accent); }
   /* The save-status text ("Loaded N task(s)", "Saving…", etc.) crowds the brand/icons in the
      header on narrow screens - relocate it to a fixed bar at the bottom instead, sitting just
      above the tab bar. position:fixed takes it out of the header's flex flow entirely regardless
-     of its DOM parent, so no markup change is needed. Always reserves the tab bar's height (even
-     on the editor view, where the tab bar itself is hidden) rather than conditionally repositioning
-     per view - a little unused space under the status text there is harmless; overlapping the tab
-     bar on every other view would not be. */
+     of its DOM parent, so no markup change is needed. */
   .save-status {
     position: fixed;
     left: 0;
@@ -576,7 +574,6 @@ a { color: var(--accent); }
     background: var(--pane-bg);
     z-index: 26;
   }
-  .app[data-view="editor"] .mobile-tabbar { display: none; }
   .mobile-tab {
     flex: 1;
     display: flex;

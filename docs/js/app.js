@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=10';
-import * as drive from './drive.js?v=10';
+import * as auth from './auth.js?v=12';
+import * as drive from './drive.js?v=12';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,11 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=10';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=10';
-import { renderEditableBody } from './editor.js?v=10';
-import { icon } from './icons.js?v=10';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=10';
+} from './model.js?v=12';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=12';
+import { renderEditableBody } from './editor.js?v=12';
+import { icon } from './icons.js?v=12';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=12';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -96,6 +96,21 @@ let dirty = false;
 let saving = false;
 let saveTimer = null;
 const SAVE_DEBOUNCE_MS = 10000;
+
+const STATUS_AUTOHIDE_MS = 3000;
+let statusHideTimer = null;
+// Transient confirmations ("Saved", "Loaded N task(s)") auto-clear so the status text isn't
+// permanently occupying space; anything the user might need to act on or that signals an
+// in-progress/error state (Saving…, Sync failed, Signed out — click to reconnect) stays put.
+function setStatus(text, { autoHide = false } = {}) {
+  clearTimeout(statusHideTimer);
+  saveStatus.textContent = text;
+  if (autoHide) {
+    statusHideTimer = setTimeout(() => {
+      if (saveStatus.textContent === text) saveStatus.textContent = '';
+    }, STATUS_AUTOHIDE_MS);
+  }
+}
 
 const SECTIONS = [
   { kind: 'all', label: 'All Tasks' },
@@ -254,14 +269,14 @@ syncNowBtn.addEventListener('click', async () => {
   }
   clearTimeout(saveTimer);
   syncNowBtn.classList.add('spinning');
-  saveStatus.textContent = 'Syncing…';
+  setStatus('Syncing…');
   try {
     dirty = false;
     await saveToDrive();
-    saveStatus.textContent = 'Saved';
+    setStatus('Saved', { autoHide: true });
     setLastSynced(new Date());
   } catch (err) {
-    saveStatus.textContent = `Sync failed: ${err.message}`;
+    setStatus(`Sync failed: ${err.message}`);
     console.error(err);
   } finally {
     syncNowBtn.classList.remove('spinning');
@@ -282,7 +297,7 @@ setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true');
 async function onSignedIn() {
   signinScreen.classList.add('hidden');
   appEl.classList.remove('hidden');
-  saveStatus.textContent = 'Loading…';
+  setStatus('Loading…');
 
   const email = auth.getAccountEmail();
   if (email) {
@@ -304,17 +319,17 @@ async function onSignedIn() {
       appState = JSON.parse(text);
       appState.Tasks ??= [];
       appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
-      saveStatus.textContent = `Loaded ${appState.Tasks.length} task(s)`;
+      setStatus(`Loaded ${appState.Tasks.length} task(s)`, { autoHide: true });
     } else {
       drive.setSyncContext(taskyFolderId, DEFAULT_DATA_FILE_NAME);
-      saveStatus.textContent = '';
+      setStatus('');
       noRemoteFileYet = true;
     }
 
     renderSidebar();
     renderList();
   } catch (err) {
-    saveStatus.textContent = `Load failed: ${err.message}`;
+    setStatus(`Load failed: ${err.message}`);
     console.error(err);
   }
 }
@@ -423,7 +438,7 @@ function touch(task) {
 
 function markDirty() {
   dirty = true;
-  saveStatus.textContent = 'Unsaved changes…';
+  setStatus('Unsaved changes…');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(triggerSave, SAVE_DEBOUNCE_MS);
 }
@@ -436,10 +451,10 @@ async function triggerSave() {
   if (!dirty) return;
   saving = true;
   dirty = false;
-  saveStatus.textContent = 'Saving…';
+  setStatus('Saving…');
   try {
     await saveToDrive();
-    saveStatus.textContent = 'Saved';
+    setStatus('Saved', { autoHide: true });
     saveStatus.classList.remove('save-status-action');
     setLastSynced(new Date());
   } catch (err) {
@@ -448,10 +463,10 @@ async function triggerSave() {
     // the same unwanted-popup problem this debounce timer isn't allowed to trigger) - surface
     // it as a click target instead, since a click IS allowed to reauth.
     if (err.message === 'NOT_SIGNED_IN') {
-      saveStatus.textContent = 'Signed out — click to reconnect';
+      setStatus('Signed out — click to reconnect');
       saveStatus.classList.add('save-status-action');
     } else {
-      saveStatus.textContent = `Save failed: ${err.message}`;
+      setStatus(`Save failed: ${err.message}`);
       console.error(err);
     }
   } finally {
@@ -638,7 +653,8 @@ function renderSidebar() {
 
 // Mobile-only bottom tab bar: the 4 fixed sections get one tap instead of open-drawer-then-pick,
 // with a "More" tab standing in for Tags (a variable-length list that can't be fixed tabs) and
-// for the sidebar screen generally. Hidden by CSS whenever the editor view is open.
+// for the sidebar screen generally. Stays visible on the editor view too, so navigation is always
+// one tap away instead of back-then-tap.
 function renderMobileTabbar() {
   mobileTabbar.innerHTML = '';
   const onSidebarView = appEl.dataset.view === 'sidebar';

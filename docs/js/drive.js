@@ -1,7 +1,7 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=9';
-import { TASKY_FOLDER_NAME } from './config.js?v=9';
+import { getAccessToken } from './auth.js?v=10';
+import { TASKY_FOLDER_NAME } from './config.js?v=10';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';

@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=9';
-import { icon } from './icons.js?v=9';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=9';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=10';
+import { icon } from './icons.js?v=10';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=10';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -229,9 +229,40 @@ function renderLinkBlock(block) {
   return p;
 }
 
+// Rebuilt fully on every render (renderEditableBody clears and re-renders the whole body on most
+// edits), so the outside-click-closes listener below is registered once at module load rather
+// than once per render - it just checks whichever bar/toggle are current at click time instead of
+// accumulating a fresh document-level listener (and matching leaked closure) on every edit.
+let activeInsertBar = null;
+let activeInsertToggle = null;
+document.addEventListener('click', (e) => {
+  if (!activeInsertBar || activeInsertBar.classList.contains('hidden')) return;
+  if (activeInsertBar.contains(e.target) || e.target === activeInsertToggle) return;
+  activeInsertBar.classList.add('hidden');
+});
+
 function renderInsertToolbar(task, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'insert-toolbar-wrap';
+
+  // Desktop has room for all four buttons in a row (unchanged, always visible - see the
+  // min-width:768px override that forces .hidden off regardless of this class). On mobile they
+  // don't fit, so this doubles as a menu trigger there: standard mobile pattern for 3+ actions
+  // that don't fit a toolbar is one trigger with an overflow menu rather than letting them spill
+  // off-screen.
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'icon-btn insert-toggle-btn';
+  toggleBtn.setAttribute('aria-label', 'Add content');
+  toggleBtn.title = 'Add content';
+  toggleBtn.innerHTML = icon('plus');
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    bar.classList.toggle('hidden');
+  });
+
   const bar = document.createElement('div');
-  bar.className = 'insert-toolbar';
+  bar.className = 'insert-toolbar hidden';
 
   const addText = document.createElement('button');
   addText.className = 'btn btn-ghost';
@@ -275,7 +306,10 @@ function renderInsertToolbar(task, onChange) {
   });
 
   bar.append(addText, addChecklist, addLink, addPhoto, photoInput);
-  return bar;
+  wrap.append(toggleBtn, bar);
+  activeInsertBar = bar;
+  activeInsertToggle = toggleBtn;
+  return wrap;
 }
 
 async function handlePhotoPick(task, file, onChange) {

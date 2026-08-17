@@ -163,6 +163,7 @@ a { color: var(--accent); }
 .nav-back { display: none; margin-right: 4px; }
 .sidebar-drawer-btn { display: none; }
 .filter-toggle-btn { display: none; }
+.insert-toggle-btn { display: none; }
 
 /* Grouped icon buttons read as one toolbar control (Cloud Console style) instead of loose
    floating buttons - shared pill background, buttons themselves stay borderless inside it. */
@@ -655,11 +656,36 @@ a { color: var(--accent); }
     box-shadow: var(--shadow-lg);
     z-index: 22;
   }
+
+  /* Insert-block toolbar (+ Text/Checklist/Link/Photo): four buttons that fit fine on desktop's
+     wider editor pane overflow a mobile-width one. Standard fix for 3+ actions that don't fit a
+     toolbar is one trigger with an overflow menu rather than letting them spill off-screen - same
+     idiom as the Sort/Filter popup above, reused here for consistency. */
+  .insert-toolbar-wrap { position: relative; display: inline-block; }
+  .insert-toggle-btn { display: flex; }
+  .insert-toolbar {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    margin: 0;
+    padding: 6px;
+    border-top: none;
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 22;
+    min-width: 170px;
+  }
+  .insert-toolbar .btn { width: 100%; text-align: left; }
 }
 
 /* .list-filter-row starts with a "hidden" class in the markup so mobile can show/hide it as a
    popup via JS - tablet and desktop never touch that class, so force it visible there regardless,
    matching the always-on row this replaced only on mobile. */
 @media (min-width: 768px) {
-  .list-filter-row.hidden { display: flex !important; }
+  .list-filter-row.hidden, .insert-toolbar.hidden { display: flex !important; }
 }

@@ -74,20 +74,9 @@ public static class ExportService
             }
             else if (block is BlockUIContainer bui && bui.Child is Border b && b.Child is Image img && img.Source is System.Windows.Media.Imaging.BitmapSource bmp)
             {
-                try
-                {
-                    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-                    encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
-                    using var ms = new MemoryStream();
-                    encoder.Save(ms);
-                    var b64 = Convert.ToBase64String(ms.ToArray());
+                var b64 = TryEncodeImageAsBase64Png(bmp);
+                if (b64 is not null)
                     sb.AppendLine($"    <img src=\"data:image/png;base64,{b64}\" alt=\"Embedded Image\"/>");
-                }
-                catch (ArgumentException ex)
-                {
-                    // Invalid image path or format
-                    System.Diagnostics.Debug.WriteLine($"Failed to load image: {ex.Message}");
-                }
             }
             else if (block is Table table)
             {
@@ -119,7 +108,7 @@ public static class ExportService
     public static void ExportToMarkdown(TaskItem task, FlowDocument document, string filePath)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# {task.Text}");
+        sb.AppendLine($"# {EscapeMarkdown(task.Text)}");
         sb.AppendLine();
         if (task.DueDate.HasValue)
             sb.AppendLine($"**Due Date:** {task.DueDate.Value:yyyy-MM-dd}  ");
@@ -139,12 +128,21 @@ public static class ExportService
                 {
                     var cb = cbContainer.Child as CheckBox;
                     var text = new TextRange(cbContainer.ElementEnd, p.ContentEnd).Text.Trim();
-                    sb.AppendLine($"- [{(cb?.IsChecked == true ? "x" : " ")}] {text}");
+                    sb.AppendLine($"- [{(cb?.IsChecked == true ? "x" : " ")}] {EscapeMarkdown(text)}");
                 }
                 else
                 {
                     var text = new TextRange(p.ContentStart, p.ContentEnd).Text.TrimEnd('\r', '\n');
-                    sb.AppendLine(text);
+                    sb.AppendLine(EscapeMarkdown(text));
+                    sb.AppendLine();
+                }
+            }
+            else if (block is BlockUIContainer bui && bui.Child is Border b && b.Child is Image img && img.Source is System.Windows.Media.Imaging.BitmapSource bmp)
+            {
+                var b64 = TryEncodeImageAsBase64Png(bmp);
+                if (b64 is not null)
+                {
+                    sb.AppendLine($"![Embedded Image](data:image/png;base64,{b64})");
                     sb.AppendLine();
                 }
             }
@@ -155,7 +153,7 @@ public static class ExportService
                     var isFirstRow = true;
                     foreach (var row in group.Rows)
                     {
-                        var cells = row.Cells.Select(c => new TextRange(c.ContentStart, c.ContentEnd).Text.Trim()).ToList();
+                        var cells = row.Cells.Select(c => EscapeMarkdown(new TextRange(c.ContentStart, c.ContentEnd).Text.Trim())).ToList();
                         sb.AppendLine("| " + string.Join(" | ", cells) + " |");
                         if (isFirstRow)
                         {
@@ -169,6 +167,27 @@ public static class ExportService
         }
 
         File.WriteAllText(filePath, sb.ToString(), Encoding.UTF8);
+    }
+
+    // Shared by ExportToHtml and ExportToMarkdown so both embed inline photos the same way -
+    // returns null (and lets the caller skip the image) rather than throwing, since one
+    // unencodable image shouldn't abort the rest of the export.
+    private static string? TryEncodeImageAsBase64Png(System.Windows.Media.Imaging.BitmapSource bmp)
+    {
+        try
+        {
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+            using var ms = new MemoryStream();
+            encoder.Save(ms);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+        catch (ArgumentException ex)
+        {
+            // Invalid image path or format
+            System.Diagnostics.Debug.WriteLine($"Failed to load image: {ex.Message}");
+            return null;
+        }
     }
 
     public static void PrintDocument(FlowDocument document, string title)
@@ -199,4 +218,23 @@ public static class ExportService
     }
 
     private static string Escape(string text) => System.Net.WebUtility.HtmlEncode(text);
+
+    // Only escapes characters that can actually be misread as Markdown syntax mid-text (emphasis,
+    // code spans, links, table delimiters) - deliberately doesn't escape every punctuation mark
+    // CommonMark technically allows escaping (e.g. '.', '-', '!'), since doing that to ordinary
+    // task text would make the exported file far noisier than the actual formatting risk warrants.
+    private static string EscapeMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        var sb = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (c is '\\' or '`' or '*' or '_' or '[' or ']' or '|')
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        // A leading '#' turns the whole line into a heading - only matters at the very start, so
+        // handle it separately rather than escaping every '#' anywhere in the text.
+        return sb.Length > 0 && sb[0] == '#' ? "\\" + sb : sb.ToString();
+    }
 }

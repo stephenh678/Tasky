@@ -589,6 +589,16 @@ public class MainViewModel : INotifyPropertyChanged
 
                 _store.RestoreBackup(picker.SelectedBackup.FilePath, _currentFilePath);
                 LoadFile(_currentFilePath);
+
+                // LoadFile just reloaded tasks carrying whatever ModifiedAt they had at backup
+                // time - almost always older than what's since accumulated on remote. Left alone,
+                // the very next Drive sync's last-write-wins merge (MergeRemoteState) would treat
+                // this restored copy as the stale side and silently overwrite it right back with
+                // the pre-restore remote state, defeating the restore the user just confirmed.
+                var restoredAt = DateTime.Now;
+                foreach (var task in AllTasks)
+                    task.ModifiedAt = restoredAt;
+                RequestDebouncedSave();
             }
             finally
             {
@@ -662,6 +672,15 @@ public class MainViewModel : INotifyPropertyChanged
                 BackupService.RestoreAttachments(attachmentFiles);
                 _store.RestoreBackup(extractedDataFile, _currentFilePath);
                 LoadFile(_currentFilePath);
+
+                // See the matching comment in RestoreBackupCommand: without this, the next Drive
+                // sync's last-write-wins merge would treat these older-timestamped imported tasks
+                // as stale and silently overwrite them with whatever's still on remote.
+                var restoredAt = DateTime.Now;
+                foreach (var task in AllTasks)
+                    task.ModifiedAt = restoredAt;
+                RequestDebouncedSave();
+
                 ThemedMessageBox.Show($"Imported {attachmentFiles.Count} attachment(s) and restored your tasks.",
                     "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
             }

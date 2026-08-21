@@ -292,6 +292,8 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkDeleteCommand { get; private set; } = null!;
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand RestoreBackupCommand { get; private set; } = null!;
+    public RelayCommand ExportBackupCommand { get; private set; } = null!;
+    public RelayCommand ImportBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
     public RelayCommand GoogleDriveCommand { get; private set; } = null!;
     public RelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
@@ -587,6 +589,86 @@ public class MainViewModel : INotifyPropertyChanged
 
                 _store.RestoreBackup(picker.SelectedBackup.FilePath, _currentFilePath);
                 LoadFile(_currentFilePath);
+            }
+            finally
+            {
+                _isRestoringBackup = false;
+            }
+        }, _ => !_isRestoringBackup);
+
+        // Export/Import Full Backup - a portable .zip of the data file plus every attachment it
+        // references, for moving everything to a new machine or just keeping an offline copy.
+        // Distinct from Save As (data only, no attachments) and Restore from Backup (data only,
+        // and only ever from this same machine's own Backups\ history).
+        ExportBackupCommand = new RelayCommand(async _ =>
+        {
+            await FlushPendingSaveAsync();
+            var dialog = new SaveFileDialog
+            {
+                Title = "Export Full Backup",
+                Filter = "Zip archive (*.zip)|*.zip",
+                FileName = $"Tasky Backup {DateTime.Now:yyyy-MM-dd}.zip"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            try
+            {
+                var (included, missing) = BackupService.Export(_currentFilePath, AllTasks, dialog.FileName);
+                var message = $"Exported {AllTasks.Count} task(s) and {included} attachment(s) to:\n{dialog.FileName}";
+                if (missing > 0)
+                    message += $"\n\n{missing} attachment(s) referenced by your tasks couldn't be found locally and were skipped.";
+                ThemedMessageBox.Show(message, "Export Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex);
+                ThemedMessageBox.Show($"Export failed: {ex.Message}", "Export Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        });
+
+        ImportBackupCommand = new RelayCommand(async _ =>
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Import Full Backup",
+                Filter = "Zip archive (*.zip)|*.zip"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            string extractedDataFile;
+            IReadOnlyList<string> attachmentFiles;
+            try
+            {
+                (extractedDataFile, attachmentFiles) = BackupService.ExtractToTemp(dialog.FileName);
+            }
+            catch (Exception ex)
+            {
+                ThemedMessageBox.Show($"Couldn't read this backup:\n{ex.Message}", "Import Full Backup",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            var confirm = ThemedMessageBox.Show(
+                $"This will replace your currently open task list with the backup's {AllTasks.Count.ToString()} " +
+                $"task(s) and restore its {attachmentFiles.Count} attachment(s).\n\n" +
+                "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
+                "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            _isRestoringBackup = true;
+            try
+            {
+                await FlushPendingSaveAsync();
+                BackupService.RestoreAttachments(attachmentFiles);
+                _store.RestoreBackup(extractedDataFile, _currentFilePath);
+                LoadFile(_currentFilePath);
+                ThemedMessageBox.Show($"Imported {attachmentFiles.Count} attachment(s) and restored your tasks.",
+                    "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex);
+                ThemedMessageBox.Show($"Import failed: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {

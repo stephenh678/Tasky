@@ -204,6 +204,9 @@
                     <MenuItem Header="Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
                     <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
                     <Separator/>
+                    <MenuItem Header="Export _Full Backup..." Command="{Binding ExportBackupCommand}"/>
+                    <MenuItem Header="_Import Full Backup..." Command="{Binding ImportBackupCommand}"/>
+                    <Separator/>
                     <MenuItem Header="_Sync Google Drive Now" Command="{Binding SyncGoogleDriveNowCommand}"/>
                     <MenuItem Header="Google Drive _Settings..." Command="{Binding GoogleDriveCommand}"/>
                     <Separator/>

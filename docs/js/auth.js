@@ -17,7 +17,7 @@
 // the token it gets back. The access token is also cached in localStorage (scoped narrowly to
 // drive.file + email, expires in under an hour - no more sensitive than a session cookie) so a
 // same-hour reload restores the session with zero network calls and zero redirects.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=19';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=21';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const STATE_KEY = 'tasky-auth-state';
@@ -88,6 +88,12 @@ export function restoreFromCache() {
  * error, e.g. the user cancelled). If so, exchanges the code for a token via the Cloud Function
  * and cleans the params out of the URL either way, so a later refresh doesn't resubmit an
  * already-used code. Call this once at boot, before restoreFromCache().
+ *
+ * Returns { status: 'none' } when this load isn't a redirect return at all (the common case -
+ * plain boot or a cache-restored session), { status: 'success' } once the token exchange
+ * completes, or { status: 'error', message } for anything that went wrong along the way - callers
+ * need to tell these apart, since only 'error' is worth surfacing to the user; 'none' happening on
+ * every normal boot would otherwise look identical to a swallowed failure.
  */
 export async function handleRedirectReturn() {
   const params = new URLSearchParams(window.location.search);
@@ -95,16 +101,21 @@ export async function handleRedirectReturn() {
   const error = params.get('error');
   const returnedState = params.get('state');
 
-  if (!code && !error) return false;
+  if (!code && !error) return { status: 'none' };
 
   window.history.replaceState(null, '', window.location.pathname);
   const expectedState = sessionStorage.getItem(STATE_KEY);
   sessionStorage.removeItem(STATE_KEY);
 
-  if (error) return false;
+  if (error) {
+    return {
+      status: 'error',
+      message: error === 'access_denied' ? 'Sign-in was cancelled.' : `Sign-in failed: ${error}`,
+    };
+  }
   if (!expectedState || returnedState !== expectedState) {
     console.error('OAuth state mismatch - discarding response.');
-    return false;
+    return { status: 'error', message: 'Sign-in failed: security check did not match. Please try again.' };
   }
 
   try {
@@ -119,10 +130,10 @@ export async function handleRedirectReturn() {
     tokenExpiresAt = Date.now() + (Number(data.expires_in) || 3600) * 1000;
     await fetchAccountInfo();
     persistToken();
-    return true;
+    return { status: 'success' };
   } catch (err) {
     console.error('Token exchange failed', err);
-    return false;
+    return { status: 'error', message: 'Sign-in failed: could not complete sign-in. Please try again.' };
   }
 }
 

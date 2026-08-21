@@ -1,7 +1,7 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=19';
-import { TASKY_FOLDER_NAME } from './config.js?v=19';
+import { getAccessToken } from './auth.js?v=21';
+import { TASKY_FOLDER_NAME } from './config.js?v=21';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -13,6 +13,14 @@ async function driveFetch(url, options = {}) {
     ...options,
     headers: { ...(options.headers ?? {}), Authorization: `Bearer ${token}` },
   });
+  if (res.status === 401) {
+    // The cached token looked valid by its local expiry (isSignedIn() only checks that clock),
+    // but Google has actually rejected it - revoked access, or an early server-side invalidation.
+    // Throw the same sentinel getAccessToken() throws for "no token at all" so every caller's
+    // existing NOT_SIGNED_IN handling ("Signed out - click to reconnect") applies here too,
+    // instead of a raw, non-actionable "Drive API 401" message with no way to recover.
+    throw new Error('NOT_SIGNED_IN');
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Drive API ${res.status} for ${url}: ${body}`);

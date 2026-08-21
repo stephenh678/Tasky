@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=19';
-import * as drive from './drive.js?v=19';
+import * as auth from './auth.js?v=21';
+import * as drive from './drive.js?v=21';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -11,16 +11,24 @@ import {
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
-} from './model.js?v=19';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=19';
-import { renderEditableBody } from './editor.js?v=19';
-import { icon } from './icons.js?v=19';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=19';
+} from './model.js?v=21';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=21';
+import { renderEditableBody } from './editor.js?v=21';
+import { icon } from './icons.js?v=21';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=21';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
 const signinBtn = el('signin-btn');
 const signinStatus = el('signin-status');
+const signinVersionEl = el('signin-version');
+// Was a separately hand-typed "Build <date>" string that had to be remembered on every release
+// alongside the real signal of whether a release actually shipped: the ?v= cache-bust suffix.
+// Deriving it from this very module's own URL means there's nothing left to forget here.
+{
+  const v = new URL(import.meta.url).searchParams.get('v');
+  signinVersionEl.textContent = v ? `Build v${v}` : '';
+}
 const appEl = el('app');
 const appBody = document.querySelector('.app-body');
 const sidebarList = el('sidebar-list');
@@ -70,6 +78,21 @@ const doneActionsRow = el('done-actions-row');
 const moveAllTrashBtn = el('move-all-trash-btn');
 const mobileTabbar = el('mobile-tabbar');
 const paneResizer = el('pane-resizer');
+const offlineBanner = el('offline-banner');
+
+// Lightweight offline awareness only (no service worker / offline launch support - the app still
+// needs network to load at all). Keeps the user from staring at a silent failure or a raw fetch
+// error when they're simply out of signal, which is the common case on mobile.
+function updateOfflineBanner() {
+  offlineBanner.classList.toggle('hidden', navigator.onLine);
+}
+window.addEventListener('online', updateOfflineBanner);
+window.addEventListener('offline', updateOfflineBanner);
+updateOfflineBanner();
+
+function friendlyErrorMessage(prefix, err) {
+  return navigator.onLine ? `${prefix}: ${err.message}` : `${prefix}: no internet connection`;
+}
 
 const SECTION_ICONS = { all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
 navBack.innerHTML = icon('back');
@@ -87,6 +110,8 @@ document.querySelector('button[data-theme-choice="dark"]').innerHTML = icon('moo
 document.querySelector('button[data-theme-choice="system"]').innerHTML = icon('monitor');
 
 let noRemoteFileYet = false;
+let loadError = null;
+let loadErrorIsAuthFailure = false;
 
 let appState = { Tasks: [], DeletedTasks: [] };
 let currentFileId = null;
@@ -148,10 +173,14 @@ async function boot() {
   signinBtn.disabled = false;
   signinBtn.textContent = 'Sign in with Google';
 
-  if (await auth.handleRedirectReturn()) {
+  const redirectResult = await auth.handleRedirectReturn();
+  if (redirectResult.status === 'success') {
     await onSignedIn();
     armHistoryTrap();
     return;
+  }
+  if (redirectResult.status === 'error') {
+    signinStatus.textContent = redirectResult.message;
   }
   if (auth.restoreFromCache()) {
     await onSignedIn();
@@ -285,24 +314,47 @@ function closeAbout() {
   aboutModal.classList.add('hidden');
 }
 
+// Reconnecting is a full-page redirect to Google and back - AppState only ever lives in memory
+// (see the "online-only" decision), so anything still unsaved at that exact moment is lost with
+// no way to recover it afterward. Warn before navigating away if there's actually something to lose.
+function confirmSignInIfDirty() {
+  if (dirty && !confirm('You have unsaved changes that will be lost when you reconnect. Continue anyway?')) {
+    return false;
+  }
+  auth.signIn();
+  return true;
+}
+
 // --- Sync now -----------------------------------------------------------------
 syncNowBtn.addEventListener('click', async () => {
   if (!auth.isSignedIn()) {
-    auth.signIn(); // redirects away and back; the resumed session syncs normally on return
+    confirmSignInIfDirty(); // redirects away and back; the resumed session syncs normally on return
     return;
   }
+  if (saving) return; // autosave (or another Sync Now) already in flight - let it finish instead of racing it
   clearTimeout(saveTimer);
   syncNowBtn.classList.add('spinning');
   setStatus('Syncing…');
+  saving = true;
+  dirty = false;
   try {
-    dirty = false;
     await saveToDrive();
     setStatus('Saved', { autoHide: true });
     setLastSynced(new Date());
   } catch (err) {
-    setStatus(`Sync failed: ${err.message}`);
-    console.error(err);
+    dirty = true; // restore so the next autosave retries instead of the edit being silently lost
+    // A token that looked valid locally can still be rejected server-side mid-sync (revoked
+    // access, early invalidation) - driveFetch() surfaces that as NOT_SIGNED_IN, same as no token
+    // at all, so it gets the same actionable reconnect prompt instead of a raw error string.
+    if (err.message === 'NOT_SIGNED_IN') {
+      setStatus('Signed out — click to reconnect');
+      saveStatus.classList.add('save-status-action');
+    } else {
+      setStatus(friendlyErrorMessage('Sync failed', err));
+      console.error(err);
+    }
   } finally {
+    saving = false;
     syncNowBtn.classList.remove('spinning');
   }
 });
@@ -385,6 +437,10 @@ async function onSignedIn() {
     accountEmailEl.textContent = email;
   }
 
+  await loadFromDriveWithRetry();
+}
+
+async function loadFromDriveWithRetry() {
   try {
     taskyFolderId = await drive.ensureTaskyFolder();
     const files = await drive.listTaskyFiles(taskyFolderId);
@@ -405,11 +461,26 @@ async function onSignedIn() {
       noRemoteFileYet = true;
     }
 
+    loadError = null;
+    loadErrorIsAuthFailure = false;
     renderSidebar();
     renderList();
   } catch (err) {
-    setStatus(`Load failed: ${err.message}`);
     console.error(err);
+    // Leaving the list pane blank here would look identical to "nothing to show," with only the
+    // easy-to-miss header status line explaining why - render an explicit error + retry instead,
+    // reusing the same empty-state slot renderList() already owns.
+    loadErrorIsAuthFailure = err.message === 'NOT_SIGNED_IN';
+    if (loadErrorIsAuthFailure) {
+      setStatus('Signed out — click to reconnect');
+      saveStatus.classList.add('save-status-action');
+      loadError = 'signed out';
+    } else {
+      setStatus(friendlyErrorMessage('Load failed', err));
+      loadError = navigator.onLine ? err.message : 'no internet connection';
+    }
+    renderSidebar();
+    renderList();
   }
 }
 
@@ -545,7 +616,7 @@ async function triggerSave() {
       setStatus('Signed out — click to reconnect');
       saveStatus.classList.add('save-status-action');
     } else {
-      setStatus(`Save failed: ${err.message}`);
+      setStatus(friendlyErrorMessage('Save failed', err));
       console.error(err);
     }
   } finally {
@@ -568,10 +639,10 @@ document.addEventListener('visibilitychange', () => {
 
 saveStatus.addEventListener('click', () => {
   if (!saveStatus.classList.contains('save-status-action')) return;
-  // Redirects away and back - any edit still unsaved at this exact moment is lost, since AppState
-  // only ever lives in memory (see the "online-only" decision). Nothing left to retry here after
-  // the redirect - the resumed session picks back up normally via boot()'s handleRedirectReturn().
-  auth.signIn();
+  // Nothing left to retry here after the redirect either way - the resumed session picks back up
+  // normally via boot()'s handleRedirectReturn(). confirmSignInIfDirty() is what stops this from
+  // silently discarding an in-flight edit (see its own comment).
+  confirmSignInIfDirty();
 });
 
 async function saveToDrive() {
@@ -752,7 +823,7 @@ function renderSidebar() {
   tagList.innerHTML = '';
   for (const tag of allTags()) {
     const li = document.createElement('li');
-    li.innerHTML = `<span>#${tag}</span>`;
+    li.innerHTML = `<span>#${escapeHtml(tag)}</span>`;
     if (currentSection.kind === 'tag' && currentSection.tag === tag) li.classList.add('active');
     li.addEventListener('click', () => selectSection({ kind: 'tag', tag }));
     tagList.appendChild(li);
@@ -796,11 +867,30 @@ function renderList() {
   trashActionsRow.classList.toggle('hidden', currentSection.kind !== 'trash' || tasksForSection({ kind: 'trash' }).length === 0);
   doneActionsRow.classList.toggle('hidden', currentSection.kind !== 'done' || tasksForSection({ kind: 'done' }).length === 0);
   taskListEl.innerHTML = '';
-  listEmpty.classList.toggle('hidden', tasks.length > 0);
-  listEmpty.textContent =
-    noRemoteFileYet && appState.Tasks.length === 0
-      ? 'No Tasky file on Drive yet — create your first task and one will be set up automatically.'
-      : 'No tasks here.';
+  listEmpty.classList.toggle('hidden', tasks.length > 0 && !loadError);
+  if (loadError) {
+    listEmpty.innerHTML = '';
+    const msg = document.createElement('p');
+    msg.textContent = `Couldn't load your tasks: ${loadError}`;
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'btn';
+    // Retrying a signed-out failure as-is would just fail the same way again - offer the actual
+    // fix (reconnect) instead of a retry that can't succeed.
+    if (loadErrorIsAuthFailure) {
+      retryBtn.textContent = 'Reconnect';
+      retryBtn.addEventListener('click', () => confirmSignInIfDirty());
+    } else {
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => loadFromDriveWithRetry());
+    }
+    listEmpty.append(msg, retryBtn);
+  } else {
+    listEmpty.textContent =
+      noRemoteFileYet && appState.Tasks.length === 0
+        ? 'No Tasky file on Drive yet — create your first task and one will be set up automatically.'
+        : 'No tasks here.';
+  }
 
   for (const task of tasks) {
     const li = document.createElement('li');
@@ -814,6 +904,14 @@ function renderList() {
       e.stopPropagation();
       toggleDone(task);
     });
+    // A <label> wrapper is the only reliably cross-browser way to grow a native checkbox's tap
+    // target without growing its visible size - unlike buttons/divs, padding on the checkbox
+    // element itself is not consistently respected for hit-testing (confirmed: computed padding
+    // stayed 0 despite matching CSS). Clicking anywhere in the label still fires the checkbox's
+    // own click handler above via the browser's native label-forwarding behavior.
+    const checkboxWrap = document.createElement('label');
+    checkboxWrap.className = 'checkbox-tap-target';
+    checkboxWrap.appendChild(checkbox);
 
     const info = document.createElement('div');
     info.className = 'task-row-info';
@@ -829,7 +927,7 @@ function renderList() {
       <div class="task-sub">${due ? `<span>${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}</div>
     `;
 
-    li.append(checkbox, info);
+    li.append(checkboxWrap, info);
     li.addEventListener('click', () => {
       selectedTaskId = task.Id;
       renderList();
@@ -867,10 +965,11 @@ function renderEditor(task) {
     editorTags.appendChild(chip);
   }
 
-  const onBodyChange = ({ rerenderBody }) => {
+  const onBodyChange = ({ rerenderBody, error }) => {
     touch(task);
     markDirty();
     renderList();
+    if (error) setStatus(error);
     if (rerenderBody) renderEditableBody(editorBody, task, onBodyChange);
   };
   renderEditableBody(editorBody, task, onBodyChange);

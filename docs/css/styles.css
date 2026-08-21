@@ -10,6 +10,11 @@
   --hover: #eef1f7;
   --selected: #e6ecfd;
   --danger: #d64545;
+  /* --danger itself fails WCAG AA (4.5:1) as *text* on --pane-bg in both themes (~4.38:1 light,
+     ~3.44:1 dark) - it was only ever contrast-checked for background/border use. --danger-text is
+     a separate, theme-tuned token for actual error text; --danger stays as-is for backgrounds and
+     borders, where the contrast math (and requirement) is different. */
+  --danger-text: #c0392b;
   --shadow: 0 4px 16px rgba(20, 24, 33, 0.08);
   --shadow-lg: 0 12px 32px rgba(20, 24, 33, 0.16);
   --radius: 12px;
@@ -29,6 +34,7 @@
     --accent-text: #202124;
     --hover: #303134;
     --selected: #37383b;
+    --danger-text: #f28b82;
     --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
   }
@@ -44,6 +50,7 @@
   --accent-text: #202124;
   --hover: #303134;
   --selected: #37383b;
+  --danger-text: #f28b82;
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
@@ -66,6 +73,22 @@ body {
   color: var(--text);
 }
 .hidden { display: none !important; }
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  /* A literal color, not var(--danger)/(--danger-text) - this is white text ON a red background,
+     which needs a darker, non-theme-varying red to stay AA-compliant regardless of app theme
+     (--danger-text is tuned the opposite way - lighter in dark mode - for the reverse case of
+     colored text on a neutral background, so it isn't safe to reuse here). */
+  background: #c0392b;
+  color: #fff;
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 0.85em;
+}
 button { font-family: inherit; }
 a { color: var(--accent); }
 .icon { width: 18px; height: 18px; display: block; }
@@ -116,7 +139,7 @@ a { color: var(--accent); }
 .signin-logo { width: 72px; height: 72px; border-radius: 18px; margin-bottom: 14px; box-shadow: var(--shadow); }
 .signin-card h1 { margin: 0 0 4px; letter-spacing: -0.02em; }
 .signin-sub { color: var(--text-dim); margin-bottom: 22px; }
-.signin-status { color: var(--danger); font-size: 0.9em; min-height: 1.2em; }
+.signin-status { color: var(--danger-text); font-size: 0.9em; min-height: 1.2em; }
 .signin-version { color: var(--text-dim); opacity: 0.5; font-size: 0.72em; margin-top: 18px; margin-bottom: 0; }
 
 .btn {
@@ -133,7 +156,7 @@ a { color: var(--accent); }
 .btn-ghost { background: none; border: 1px solid var(--border); color: var(--text); }
 .btn-ghost:hover { background: var(--hover); }
 .btn.small { padding: 4px 10px; font-size: 0.85em; }
-.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.danger { color: var(--danger-text); border-color: var(--danger); }
 
 /* App shell */
 .app { height: 100%; display: flex; flex-direction: column; }
@@ -294,6 +317,24 @@ a { color: var(--accent); }
 .about-version { font-size: 0.8em !important; }
 .modal-close { position: absolute; top: 10px; right: 10px; }
 
+/* Modal (Add Link) - reuses .modal-overlay/.modal-card, adds a vertical form layout since
+   .editor-field is a horizontal label+input pair meant for the small Due/Repeats row. */
+.link-modal-card { text-align: left; max-width: 400px; }
+.link-modal-field { display: block; font-size: 0.85em; color: var(--text-dim); margin: 12px 0 4px; }
+.link-modal-field input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  background: var(--pane-bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 1em;
+}
+.link-modal-error { color: var(--danger-text); font-size: 0.85em !important; margin: 4px 0 0; }
+.link-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
 .app-body {
   --list-pane-width: 320px;
   flex: 1;
@@ -425,7 +466,12 @@ a { color: var(--accent); }
   align-items: flex-start;
   gap: 10px;
 }
-.task-list li input[type="checkbox"] { margin-top: 3px; flex-shrink: 0; }
+/* .checkbox-tap-target is a <label> wrapping the checkbox (see app.js/editor.js) - by default it's
+   just a transparent inline wrapper matching the old unwrapped layout; the mobile media query
+   below is what actually grows the tap target, since padding on a native checkbox itself isn't
+   reliably respected for hit-testing across browsers. */
+.checkbox-tap-target { display: inline-flex; align-items: center; flex-shrink: 0; }
+.task-list li .checkbox-tap-target { margin-top: 3px; }
 .task-row-info { flex: 1; min-width: 0; }
 .task-list li:hover { background: var(--hover); }
 .task-list li.selected { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
@@ -652,8 +698,19 @@ a { color: var(--accent); }
   .tag-chip button { padding: 4px; margin: -4px; }
   .block-remove { padding: 8px; top: -6px; right: -8px; }
   .block-remove.small { padding: 6px; margin-left: 0; }
+  /* The checkbox itself stays visually 20px - .checkbox-tap-target (the <label> wrapping it) is
+     what actually grows to the app's own 44px tap-target standard. Negative margin keeps the
+     larger label from pushing the rest of the row over, same trick as .tag-chip button above,
+     just applied to the wrapper instead of the (unreliably-paddable) checkbox itself. */
   .task-list li input[type="checkbox"],
   .block-checklist-item input[type="checkbox"] { width: 20px; height: 20px; }
+  .checkbox-tap-target {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    margin: -12px;
+  }
+  .task-list li .checkbox-tap-target { margin-top: -12px; }
 
   /* iOS Safari zooms the whole page in on focus for any input/select under 16px - these all
      read the app's own (smaller, and further-shrinkable via the Small text-size setting) type

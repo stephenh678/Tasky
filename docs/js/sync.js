@@ -2,7 +2,7 @@
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate } from './model.js?v=19';
+import { parseDotNetDate } from './model.js?v=21';
 
 export function deduplicateTombstones(tombstones) {
   const byId = new Map();
@@ -22,8 +22,11 @@ function applyTaskFields(target, source) {
   target.IsPinned = source.IsPinned;
   target.DueDate = source.DueDate;
   target.Recurrence = source.Recurrence;
-  target.Tags = [...source.Tags];
-  target.Body = source.Body.map((b) => ({ ...b }));
+  // A remote task missing Tags/Body entirely (an old pre-migration desktop file, or a
+  // hand-edited/partially-written one) used to throw here, mid-merge, after some other tasks in
+  // the same pass had already been mutated in place - fall back to empty rather than crash.
+  target.Tags = Array.isArray(source.Tags) ? [...source.Tags] : [];
+  target.Body = Array.isArray(source.Body) ? source.Body.map((b) => ({ ...b })) : [];
   target.ModifiedAt = source.ModifiedAt;
 }
 

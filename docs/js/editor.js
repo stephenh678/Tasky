@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=19';
-import { icon } from './icons.js?v=19';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=19';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=21';
+import { icon } from './icons.js?v=21';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=21';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -168,6 +168,12 @@ function renderChecklistBlock(block, onChange) {
       item.IsChecked = checkbox.checked;
       onChange({ rerenderBody: false });
     });
+    // See the matching comment in app.js's task-list checkbox: a <label> wrapper is the
+    // reliable cross-browser way to grow a native checkbox's tap target without growing its
+    // visible size (padding on the checkbox itself isn't consistently respected for hit-testing).
+    const checkboxWrap = document.createElement('label');
+    checkboxWrap.className = 'checkbox-tap-target';
+    checkboxWrap.appendChild(checkbox);
 
     const text = document.createElement('input');
     text.type = 'text';
@@ -186,7 +192,7 @@ function renderChecklistBlock(block, onChange) {
       onChange({ rerenderBody: true });
     });
 
-    row.append(checkbox, text, del);
+    row.append(checkboxWrap, text, del);
     div.appendChild(row);
   });
 
@@ -306,13 +312,104 @@ function renderFileByFileName(rawFileName) {
 
 function renderLinkBlock(block) {
   const p = document.createElement('p');
-  const a = document.createElement('a');
-  a.href = block.Url;
-  a.textContent = block.LinkLabel || block.Url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  p.appendChild(a);
+  // Only http(s) is ever offered by this app's own "+ Link" flow (see promptForLink), but a
+  // block can also arrive from a hand-edited file, an old backup, or the desktop app's own Link
+  // prompt (which doesn't scheme-check) - fail closed rather than rendering a clickable
+  // javascript:/data: href from data this page doesn't fully control.
+  if (URL_RE.test(block.Url || '')) {
+    const a = document.createElement('a');
+    a.href = block.Url;
+    a.textContent = block.LinkLabel || block.Url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    p.appendChild(a);
+  } else {
+    p.textContent = `${block.LinkLabel || block.Url || '(invalid link)'} (not a valid http(s) link)`;
+  }
   return p;
+}
+
+/**
+ * Replaces the old sequential prompt()s with a small modal matching the app's own UI (the
+ * .modal-overlay/.modal-card pattern already used for the About dialog), and enforces the same
+ * http(s)-only rule renderLinkBlock renders against - so a link created here can never fail that
+ * check later. Resolves to { url, label } or null if cancelled.
+ */
+function promptForLink() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+
+    const card = document.createElement('div');
+    card.className = 'modal-card link-modal-card';
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Add Link';
+
+    const urlLabel = document.createElement('label');
+    urlLabel.className = 'link-modal-field';
+    urlLabel.textContent = 'URL';
+    const urlInput = document.createElement('input');
+    urlInput.type = 'url';
+    urlInput.placeholder = 'https://…';
+    urlLabel.appendChild(urlInput);
+
+    const errorMsg = document.createElement('p');
+    errorMsg.className = 'link-modal-error hidden';
+    errorMsg.textContent = 'Enter a valid http:// or https:// URL.';
+
+    const labelLabel = document.createElement('label');
+    labelLabel.className = 'link-modal-field';
+    labelLabel.textContent = 'Label (optional)';
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelLabel.appendChild(labelInput);
+
+    const actions = document.createElement('div');
+    actions.className = 'link-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-ghost';
+    cancelBtn.textContent = 'Cancel';
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-primary';
+    addBtn.textContent = 'Add';
+    actions.append(cancelBtn, addBtn);
+
+    card.append(heading, urlLabel, errorMsg, labelLabel, actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    urlInput.focus();
+
+    function close(result) {
+      document.removeEventListener('keydown', onKeydown);
+      overlay.remove();
+      resolve(result);
+    }
+    function submit() {
+      const url = urlInput.value.trim();
+      if (!URL_RE.test(url)) {
+        errorMsg.classList.remove('hidden');
+        urlInput.focus();
+        return;
+      }
+      close({ url, label: labelInput.value.trim() || url });
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape') close(null);
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      }
+    }
+    document.addEventListener('keydown', onKeydown);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+    cancelBtn.addEventListener('click', () => close(null));
+    addBtn.addEventListener('click', submit);
+  });
 }
 
 // Rebuilt fully on every render (renderEditableBody clears and re-renders the whole body on most
@@ -369,11 +466,10 @@ function renderInsertToolbar(task, onChange) {
   const addLink = document.createElement('button');
   addLink.className = 'btn btn-ghost';
   addLink.textContent = '+ Link';
-  addLink.addEventListener('click', () => {
-    const url = prompt('URL:');
-    if (!url) return;
-    const label = prompt('Label (optional):', url) ?? url;
-    task.Body.push(newNoteBlock(NoteBlockType.Link, { url, linkLabel: label }));
+  addLink.addEventListener('click', async () => {
+    const result = await promptForLink();
+    if (!result) return;
+    task.Body.push(newNoteBlock(NoteBlockType.Link, { url: result.url, linkLabel: result.label }));
     onChange({ rerenderBody: true });
   });
 
@@ -417,13 +513,14 @@ async function handlePhotoPick(task, file, onChange) {
     await uploadAttachmentBlob(fileName, file);
   } catch (err) {
     console.error('Tasky: photo upload failed', fileName, err);
-    alert(`Photo upload failed: ${err.message}`);
     // Roll back rather than leave a block whose FileName never actually made it to Drive - the
     // synced .tasky JSON would otherwise reference a photo that doesn't exist there.
     const idx = task.Body.indexOf(block);
     if (idx !== -1) task.Body.splice(idx, 1);
     URL.revokeObjectURL(photoUrlCache.get(fileName));
     photoUrlCache.delete(fileName);
-    onChange({ rerenderBody: true });
+    // Surfaced via the app's own status line (see onBodyChange's `error` handling) instead of a
+    // blocking native alert(), matching how every other failure in the app is reported.
+    onChange({ rerenderBody: true, error: `Photo upload failed: ${err.message}` });
   }
 }

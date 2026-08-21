@@ -514,6 +514,13 @@ a { color: var(--accent); }
 .block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); }
 .block-photo, .block-file { color: var(--text-dim); font-style: italic; }
 .block-photo-img { max-width: 100%; border-radius: 8px; display: block; }
+.block-file-link {
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.block-file-link:hover { text-decoration: underline; }
 .block-checklist-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .block-checklist-item.editable input[type="text"] {
   flex: 1;

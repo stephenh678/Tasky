@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=18';
-import * as drive from './drive.js?v=18';
+import * as auth from './auth.js?v=19';
+import * as drive from './drive.js?v=19';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,11 +10,12 @@ import {
   newTaskSyncRecord,
   spawnNextOccurrence,
   blockHasInlineImage,
-} from './model.js?v=18';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=18';
-import { renderEditableBody } from './editor.js?v=18';
-import { icon } from './icons.js?v=18';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=18';
+  blockHasInlineFile,
+} from './model.js?v=19';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=19';
+import { renderEditableBody } from './editor.js?v=19';
+import { icon } from './icons.js?v=19';
+import { DEFAULT_DATA_FILE_NAME } from './config.js?v=19';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -451,7 +452,7 @@ function applyQuickFilter(tasks) {
       case 'hasLink':
         return t.Body.some((b) => b.Type === NoteBlockType.Link);
       case 'hasAttachment':
-        return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b));
+        return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b) || blockHasInlineFile(b));
       default:
         return true;
     }
@@ -821,7 +822,7 @@ function renderList() {
     if (task.Recurrence !== RecurrenceRule.None) indicators.push(icon('repeat'));
     if (task.Body.some((b) => b.Type === NoteBlockType.Link)) indicators.push(icon('link'));
     if (task.Body.some((b) => b.Type === NoteBlockType.Photo || blockHasInlineImage(b))) indicators.push(icon('image'));
-    if (task.Body.some((b) => b.Type === NoteBlockType.File)) indicators.push(icon('paperclip'));
+    if (task.Body.some((b) => b.Type === NoteBlockType.File || blockHasInlineFile(b))) indicators.push(icon('paperclip'));
     if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
     info.innerHTML = `
       <div class="task-title ${task.IsDone ? 'done' : ''}">${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>

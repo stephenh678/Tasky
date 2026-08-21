@@ -7,9 +7,9 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=18';
-import { icon } from './icons.js?v=18';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=18';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=19';
+import { icon } from './icons.js?v=19';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=19';
 
 const URL_RE = /^https?:\/\/\S+$/i;
 
@@ -108,6 +108,15 @@ function renderTextBlock(block, task, index, onChange) {
     wrap.appendChild(renderPhotoByFileName(fileName));
   }
 
+  // Same idea for a non-image file attached via desktop's Insert File toolbar button
+  // (RichTextBoxBehavior.InsertInlineFileChip): it's embedded as a custom "file card" Grid
+  // widget rather than a separate File block, tagged with the local path it was inserted from.
+  // The bytes are just another file in this task's Attachments folder, which
+  // downloadAttachmentBlob already knows how to search.
+  for (const fileName of extractInlineFileNames(block.Rtf)) {
+    wrap.appendChild(renderFileByFileName(fileName));
+  }
+
   return wrap;
 }
 
@@ -117,6 +126,26 @@ function extractInlineImageFileNames(rtf) {
   const re = /UriSource="([^"]+)"/g;
   let m;
   while ((m = re.exec(rtf))) {
+    const parts = m[1].split(/[\\/]/);
+    const name = parts[parts.length - 1];
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+// The file card's outer Grid carries the attachment's local path as its Tag; the image
+// container uses the same Tag attribute for a fixed "ImageContainer" marker instead of a path,
+// and nested elements within a file card (the card body, the delete button) also set Tag to
+// their own fixed markers - filtering those out leaves only genuine file-card paths.
+const NON_FILE_TAG_MARKERS = new Set(['ImageContainer', 'CardBody', 'DeleteAttachmentBtn']);
+
+function extractInlineFileNames(rtf) {
+  if (!rtf) return [];
+  const names = [];
+  const re = /<Grid[^>]*\sTag="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(rtf))) {
+    if (NON_FILE_TAG_MARKERS.has(m[1])) continue;
     const parts = m[1].split(/[\\/]/);
     const name = parts[parts.length - 1];
     if (name) names.push(name);
@@ -226,6 +255,53 @@ function buildPhotoImg(url, fileName) {
   img.src = url;
   img.alt = fileName;
   return img;
+}
+
+// Same object-URL caching as photoUrlCache, kept separate since these are files, not images.
+const fileUrlCache = new Map();
+
+function renderFileByFileName(rawFileName) {
+  const fileName = rawFileName || 'file';
+  const link = document.createElement('a');
+  link.className = 'block-file-link';
+  link.href = '#';
+  link.textContent = `📎 ${fileName}`;
+
+  if (fileUrlCache.has(fileName)) {
+    link.href = fileUrlCache.get(fileName);
+    link.download = fileName;
+    return link;
+  }
+
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (fileUrlCache.has(fileName)) {
+      link.href = fileUrlCache.get(fileName);
+      link.download = fileName;
+      link.click();
+      return;
+    }
+    link.textContent = `Loading ${fileName}…`;
+    downloadAttachmentBlob(fileName)
+      .then((blob) => {
+        if (!blob) {
+          link.textContent = `📎 ${fileName} (not found on Drive)`;
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        fileUrlCache.set(fileName, url);
+        link.textContent = `📎 ${fileName}`;
+        link.href = url;
+        link.download = fileName;
+        link.click();
+      })
+      .catch((err) => {
+        link.textContent = `📎 ${fileName} (failed to load: ${err.message})`;
+        console.error('Tasky: file download failed', fileName, err);
+      });
+  });
+
+  return link;
 }
 
 function renderLinkBlock(block) {

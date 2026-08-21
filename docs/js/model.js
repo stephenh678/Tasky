@@ -153,6 +153,15 @@ export function blockHasInlineImage(block) {
   return block.Type === NoteBlockType.Text && !!block.Rtf && block.Rtf.includes('UriSource=');
 }
 
+// Same idea for a non-image file attached via desktop's Insert File toolbar button - embedded
+// inline as a custom "file card" Grid widget rather than a separate File block. Grid is also used
+// for the image container, tagged "ImageContainer" rather than a path, so that's excluded here
+// too (see editor.js's extractInlineFileNames for the exact match this mirrors).
+export function blockHasInlineFile(block) {
+  if (block.Type !== NoteBlockType.Text || !block.Rtf) return false;
+  return /<Grid[^>]*\sTag="(?!ImageContainer")/.test(block.Rtf);
+}
+
 function fileNameFromPath(path) {
   if (!path) return '';
   const parts = path.split(/[\\/]/);

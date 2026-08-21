@@ -1,7 +1,7 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=18';
-import { TASKY_FOLDER_NAME } from './config.js?v=18';
+import { getAccessToken } from './auth.js?v=19';
+import { TASKY_FOLDER_NAME } from './config.js?v=19';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -20,18 +20,35 @@ async function driveFetch(url, options = {}) {
   return res;
 }
 
+// A folder or file that was genuinely just created by another device (or this same account's
+// other tab/computer) can briefly not show up in a files.list search - Drive's search index lags
+// the write by a couple of seconds. Without retrying, a second device's first-ever connect can
+// race this and conclude nothing exists yet, creating a duplicate "Tasky" folder or duplicate
+// Tasky.tasky file instead of finding the real one - this exact bug already happened once on the
+// desktop app (see GoogleDriveService.cs's GetOrCreateFolderAsync) and is just as possible here.
+const INDEX_LAG_MAX_ATTEMPTS = 3;
+const INDEX_LAG_RETRY_DELAY_MS = 1500;
+
+async function listWithIndexLagRetry(query) {
+  for (let attempt = 1; attempt <= INDEX_LAG_MAX_ATTEMPTS; attempt++) {
+    const res = await driveFetch(`${API}/files?q=${encodeURIComponent(query)}&fields=files(id,name,modifiedTime,size)&spaces=drive`);
+    const { files } = await res.json();
+    if (files && files.length > 0) return files;
+    if (attempt < INDEX_LAG_MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, INDEX_LAG_RETRY_DELAY_MS));
+    }
+  }
+  return [];
+}
+
 /**
  * Finds the "Tasky" folder, creating it if missing. Self-healing like the desktop app: if the
  * folder was trashed/deleted out from under us, this just makes a new one rather than uploading
  * into a folder nobody can see.
  */
 export async function ensureTaskyFolder() {
-  const q = encodeURIComponent(
-    `mimeType='${FOLDER_MIME}' and name='${TASKY_FOLDER_NAME}' and trashed=false`
-  );
-  const res = await driveFetch(`${API}/files?q=${q}&fields=files(id,name)&spaces=drive`);
-  const { files } = await res.json();
-  if (files && files.length > 0) return files[0].id;
+  const files = await listWithIndexLagRetry(`mimeType='${FOLDER_MIME}' and name='${TASKY_FOLDER_NAME}' and trashed=false`);
+  if (files.length > 0) return files[0].id;
 
   const createRes = await driveFetch(`${API}/files?fields=id`, {
     method: 'POST',
@@ -44,14 +61,8 @@ export async function ensureTaskyFolder() {
 
 /** Lists .tasky files inside the given folder, newest-modified first. */
 export async function listTaskyFiles(folderId) {
-  const q = encodeURIComponent(
-    `'${folderId}' in parents and name contains '.tasky' and trashed=false`
-  );
-  const res = await driveFetch(
-    `${API}/files?q=${q}&fields=files(id,name,modifiedTime,size)&orderBy=modifiedTime desc&spaces=drive`
-  );
-  const { files } = await res.json();
-  return files ?? [];
+  const files = await listWithIndexLagRetry(`'${folderId}' in parents and name contains '.tasky' and trashed=false`);
+  return files.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
 }
 
 /** Returns the file ID for an exact name match inside the folder, or null if none exists. */

@@ -275,11 +275,28 @@ public class GoogleDriveService
     {
         if (_driveService is null) return null;
 
-        var lookupRequest = _driveService.Files.List();
-        lookupRequest.Q = $"name = '{fileName}' and '{parentFolderId}' in parents and trashed = false";
-        lookupRequest.Fields = "files(id, name)";
-        var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
-        return existingFiles is { Count: > 0 } ? existingFiles[0].Id : null;
+        // Same index-lag retry as GetOrCreateFolderAsync above, and for the same reason: a file
+        // another device (or Tasky Web) just wrote can briefly not show up in a files.list search
+        // yet, and every caller of this method is a first-connect "does remote content already
+        // exist" check - concluding "no" too early makes that caller create a duplicate
+        // Tasky.tasky instead of finding and reusing the real one.
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var lookupRequest = _driveService.Files.List();
+            lookupRequest.Q = $"name = '{fileName}' and '{parentFolderId}' in parents and trashed = false";
+            lookupRequest.Fields = "files(id, name)";
+            var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
+            if (existingFiles is { Count: > 0 }) return existingFiles[0].Id;
+
+            if (attempt < maxAttempts)
+            {
+                AppLogger.Warn("GoogleDriveService", $"File '{fileName}' not found on attempt {attempt}/{maxAttempts} - retrying in case Drive's index is still catching up.");
+                await Task.Delay(1500);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

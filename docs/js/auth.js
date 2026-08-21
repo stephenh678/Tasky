@@ -17,7 +17,7 @@
 // the token it gets back. The access token is also cached in localStorage (scoped narrowly to
 // drive.file + email, expires in under an hour - no more sensitive than a session cookie) so a
 // same-hour reload restores the session with zero network calls and zero redirects.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=25';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL } from './config.js?v=26';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const STATE_KEY = 'tasky-auth-state';

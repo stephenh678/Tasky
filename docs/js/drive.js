@@ -1,7 +1,7 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=21';
-import { TASKY_FOLDER_NAME } from './config.js?v=21';
+import { getAccessToken } from './auth.js?v=25';
+import { TASKY_FOLDER_NAME } from './config.js?v=25';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -244,19 +244,4 @@ export async function uploadFileText(fileId, name, folderId, text) {
   });
   const result = await res.json();
   return result.id;
-}
-
-/** Revision history Drive already keeps on every save - used for restore-from-backup instead of
- *  reimplementing the desktop app's separate Backups folder. */
-export async function listRevisions(fileId) {
-  const res = await driveFetch(
-    `${API}/files/${fileId}/revisions?fields=revisions(id,modifiedTime,size)`
-  );
-  const { revisions } = await res.json();
-  return (revisions ?? []).sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
-}
-
-export async function downloadRevisionText(fileId, revisionId) {
-  const res = await driveFetch(`${API}/files/${fileId}/revisions/${revisionId}?alt=media`);
-  return res.text();
 }

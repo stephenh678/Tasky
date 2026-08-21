@@ -7,11 +7,21 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=21';
-import { icon } from './icons.js?v=21';
-import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=21';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=25';
+import { icon } from './icons.js?v=25';
+import { downloadAttachmentBlob, uploadAttachmentBlob } from './drive.js?v=25';
 
 const URL_RE = /^https?:\/\/\S+$/i;
+
+// driveFetch() (in drive.js) throws the bare 'NOT_SIGNED_IN' string for a token Google rejected -
+// same sentinel whether the token was missing or just got revoked mid-session. app.js's status
+// bar special-cases it into "Signed out - click to reconnect"; the inline attachment failures
+// below have no click-to-reconnect affordance of their own (they're captions inside a note, not
+// the status bar), so this just keeps the raw sentinel from leaking to the user as-is and points
+// them at the control that DOES know how to reconnect.
+function friendlyDriveError(err) {
+  return err.message === 'NOT_SIGNED_IN' ? 'signed out - use Sync Now to reconnect' : err.message;
+}
 
 export function renderEditableBody(container, task, onChange) {
   container.innerHTML = '';
@@ -248,7 +258,7 @@ function renderPhotoByFileName(rawFileName) {
       container.appendChild(buildPhotoImg(url, fileName));
     })
     .catch((err) => {
-      container.textContent = `📷 ${fileName} (failed to load: ${err.message})`;
+      container.textContent = `📷 ${fileName} (failed to load: ${friendlyDriveError(err)})`;
       console.error('Tasky: photo download failed', fileName, err);
     });
 
@@ -302,7 +312,7 @@ function renderFileByFileName(rawFileName) {
         link.click();
       })
       .catch((err) => {
-        link.textContent = `📎 ${fileName} (failed to load: ${err.message})`;
+        link.textContent = `📎 ${fileName} (failed to load: ${friendlyDriveError(err)})`;
         console.error('Tasky: file download failed', fileName, err);
       });
   });
@@ -521,6 +531,12 @@ async function handlePhotoPick(task, file, onChange) {
     photoUrlCache.delete(fileName);
     // Surfaced via the app's own status line (see onBodyChange's `error` handling) instead of a
     // blocking native alert(), matching how every other failure in the app is reported.
-    onChange({ rerenderBody: true, error: `Photo upload failed: ${err.message}` });
+    // isAuthFailure lets onBodyChange add the same "click to reconnect" affordance the other
+    // NOT_SIGNED_IN sites in app.js already get, instead of just showing the raw sentinel text.
+    onChange({
+      rerenderBody: true,
+      error: `Photo upload failed: ${friendlyDriveError(err)}`,
+      isAuthFailure: err.message === 'NOT_SIGNED_IN',
+    });
   }
 }

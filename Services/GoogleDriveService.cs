@@ -18,6 +18,12 @@ public class GoogleDriveService
     private const string ApplicationName = "Tasky Desktop App";
     private const string FolderMimeType = "application/vnd.google-apps.folder";
 
+    // Shared by GetReferencedAttachmentFilenames and ParseBlockReferences so the set of
+    // recognized attachment extensions only has to be updated in one place.
+    private static readonly System.Text.RegularExpressions.Regex AttachmentFilenameRegex = new(
+        @"[a-zA-Z0-9_\-]{3,}\.(png|jpg|jpeg|gif|bmp|pdf|docx|xlsx|zip|txt)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     private DriveService? _driveService;
     private UserCredential? _credential;
     // Folder IDs already confirmed usable (exists, not trashed) this run - avoids re-validating
@@ -169,25 +175,8 @@ public class GoogleDriveService
         // a few times before concluding it doesn't exist; otherwise a second device's first-ever
         // connect can race this and create a duplicate "Tasky" folder instead of finding the real
         // one (observed live: 3 separate duplicate folders got created this way in one evening).
-        const int maxAttempts = 3;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            var listRequest = _driveService.Files.List();
-            listRequest.Q = q;
-            listRequest.Fields = "files(id, name)";
-            var result = await listRequest.ExecuteAsync();
-
-            if (result.Files != null && result.Files.Count > 0)
-            {
-                return result.Files[0].Id;
-            }
-
-            if (attempt < maxAttempts)
-            {
-                AppLogger.Warn("GoogleDriveService", $"Folder '{folderName}' not found on attempt {attempt}/{maxAttempts} - retrying in case Drive's index is still catching up.");
-                await Task.Delay(1500);
-            }
-        }
+        var existingId = await FindFileIdWithIndexLagRetryAsync(q, $"Folder '{folderName}'");
+        if (existingId is not null) return existingId;
 
         // Create new folder
         var folderMetadata = new Google.Apis.Drive.v3.Data.File
@@ -280,18 +269,36 @@ public class GoogleDriveService
         // yet, and every caller of this method is a first-connect "does remote content already
         // exist" check - concluding "no" too early makes that caller create a duplicate
         // Tasky.tasky instead of finding and reusing the real one.
+        var q = $"name = '{fileName}' and '{parentFolderId}' in parents and trashed = false";
+        return await FindFileIdWithIndexLagRetryAsync(q, $"File '{fileName}'");
+    }
+
+    /// <summary>
+    /// Runs a Drive files.list query with the index-lag retry policy shared by
+    /// GetOrCreateFolderAsync and FindExistingFileIdAsync: a folder/file another device (or
+    /// Tasky Web) just wrote can briefly not show up in a files.list search while Drive's search
+    /// index catches up. Returns the first matching file's ID, or null if nothing showed up
+    /// after all retries. Tasky Web's drive.js independently arrived at this same shared-helper
+    /// shape for its own port of this retry (listWithIndexLagRetry) - worth keeping the two in
+    /// sync if the retry policy itself ever changes.
+    /// </summary>
+    private async Task<string?> FindFileIdWithIndexLagRetryAsync(string query, string notFoundContext)
+    {
+        if (_driveService is null) return null;
+
         const int maxAttempts = 3;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var lookupRequest = _driveService.Files.List();
-            lookupRequest.Q = $"name = '{fileName}' and '{parentFolderId}' in parents and trashed = false";
-            lookupRequest.Fields = "files(id, name)";
-            var existingFiles = (await lookupRequest.ExecuteAsync()).Files;
-            if (existingFiles is { Count: > 0 }) return existingFiles[0].Id;
+            var listRequest = _driveService.Files.List();
+            listRequest.Q = query;
+            listRequest.Fields = "files(id, name)";
+            var result = await listRequest.ExecuteAsync();
+
+            if (result.Files is { Count: > 0 }) return result.Files[0].Id;
 
             if (attempt < maxAttempts)
             {
-                AppLogger.Warn("GoogleDriveService", $"File '{fileName}' not found on attempt {attempt}/{maxAttempts} - retrying in case Drive's index is still catching up.");
+                AppLogger.Warn("GoogleDriveService", $"{notFoundContext} not found on attempt {attempt}/{maxAttempts} - retrying in case Drive's index is still catching up.");
                 await Task.Delay(1500);
             }
         }
@@ -638,7 +645,7 @@ public class GoogleDriveService
                 }
 
                 // Scan full raw JSON text for any image GUIDs or attachment filenames
-                foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(content, @"[a-zA-Z0-9_\-]{3,}\.(png|jpg|jpeg|gif|bmp|pdf|docx|xlsx|zip|txt)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                foreach (System.Text.RegularExpressions.Match match in AttachmentFilenameRegex.Matches(content))
                 {
                     set.Add(match.Value);
                 }
@@ -666,7 +673,7 @@ public class GoogleDriveService
         if (block.TryGetProperty("Rtf", out var rtfProp) && rtfProp.ValueKind == JsonValueKind.String)
         {
             var rtf = rtfProp.GetString() ?? "";
-            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(rtf, @"[a-zA-Z0-9_\-]{3,}\.(png|jpg|jpeg|gif|bmp|pdf|docx|xlsx|zip|txt)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            foreach (System.Text.RegularExpressions.Match match in AttachmentFilenameRegex.Matches(rtf))
             {
                 set.Add(match.Value);
             }

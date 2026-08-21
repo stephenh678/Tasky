@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=21';
-import * as drive from './drive.js?v=21';
+import * as auth from './auth.js?v=25';
+import * as drive from './drive.js?v=25';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -11,23 +11,26 @@ import {
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
-} from './model.js?v=21';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=21';
-import { renderEditableBody } from './editor.js?v=21';
-import { icon } from './icons.js?v=21';
-import { DEFAULT_DATA_FILE_NAME } from './config.js?v=21';
+} from './model.js?v=25';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=25';
+import { renderEditableBody } from './editor.js?v=25';
+import { icon } from './icons.js?v=25';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=25';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
 const signinBtn = el('signin-btn');
 const signinStatus = el('signin-status');
 const signinVersionEl = el('signin-version');
-// Was a separately hand-typed "Build <date>" string that had to be remembered on every release
-// alongside the real signal of whether a release actually shipped: the ?v= cache-bust suffix.
-// Deriving it from this very module's own URL means there's nothing left to forget here.
+const aboutVersionEl = el('about-version');
+// DESKTOP_VERSION is the one hand-maintained piece (see its comment in config.js) - the build
+// number after it is derived from this very module's own URL, so it's always accurate even
+// between desktop releases without anyone having to remember to bump a second thing.
 {
-  const v = new URL(import.meta.url).searchParams.get('v');
-  signinVersionEl.textContent = v ? `Build v${v}` : '';
+  const build = new URL(import.meta.url).searchParams.get('v');
+  const versionText = build ? `v${DESKTOP_VERSION} (build ${build})` : `v${DESKTOP_VERSION}`;
+  signinVersionEl.textContent = versionText;
+  aboutVersionEl.textContent = versionText;
 }
 const appEl = el('app');
 const appBody = document.querySelector('.app-body');
@@ -83,11 +86,28 @@ const offlineBanner = el('offline-banner');
 // Lightweight offline awareness only (no service worker / offline launch support - the app still
 // needs network to load at all). Keeps the user from staring at a silent failure or a raw fetch
 // error when they're simply out of signal, which is the common case on mobile.
+//
+// The banner is position:fixed (it has to be - it's not inside .app or .signin-screen, both of
+// which exist as separate, mutually-hidden trees), so showing it doesn't push anything down on
+// its own; it would otherwise sit on top of and obscure whatever's at the top of the viewport
+// (the header's Sync/Account buttons, or the sign-in card). --offline-banner-height is measured
+// from the real element (not hardcoded) since its text can wrap to two lines on a narrow phone,
+// and CSS uses it to pad .app/.signin-screen down by exactly that much only while it's shown.
 function updateOfflineBanner() {
-  offlineBanner.classList.toggle('hidden', navigator.onLine);
+  const offline = !navigator.onLine;
+  offlineBanner.classList.toggle('hidden', !offline);
+  document.body.classList.toggle('offline-banner-visible', offline);
+  if (offline) {
+    document.documentElement.style.setProperty('--offline-banner-height', `${offlineBanner.offsetHeight}px`);
+  }
 }
 window.addEventListener('online', updateOfflineBanner);
 window.addEventListener('offline', updateOfflineBanner);
+// Re-measure if the banner's wrapped line count changes (e.g. rotating the phone) while it's
+// already shown - only matters while offline, so this is a cheap no-op the rest of the time.
+window.addEventListener('resize', () => {
+  if (!navigator.onLine) updateOfflineBanner();
+});
 updateOfflineBanner();
 
 function friendlyErrorMessage(prefix, err) {
@@ -331,32 +351,10 @@ syncNowBtn.addEventListener('click', async () => {
     confirmSignInIfDirty(); // redirects away and back; the resumed session syncs normally on return
     return;
   }
-  if (saving) return; // autosave (or another Sync Now) already in flight - let it finish instead of racing it
   clearTimeout(saveTimer);
   syncNowBtn.classList.add('spinning');
-  setStatus('Syncing…');
-  saving = true;
-  dirty = false;
-  try {
-    await saveToDrive();
-    setStatus('Saved', { autoHide: true });
-    setLastSynced(new Date());
-  } catch (err) {
-    dirty = true; // restore so the next autosave retries instead of the edit being silently lost
-    // A token that looked valid locally can still be rejected server-side mid-sync (revoked
-    // access, early invalidation) - driveFetch() surfaces that as NOT_SIGNED_IN, same as no token
-    // at all, so it gets the same actionable reconnect prompt instead of a raw error string.
-    if (err.message === 'NOT_SIGNED_IN') {
-      setStatus('Signed out — click to reconnect');
-      saveStatus.classList.add('save-status-action');
-    } else {
-      setStatus(friendlyErrorMessage('Sync failed', err));
-      console.error(err);
-    }
-  } finally {
-    saving = false;
-    syncNowBtn.classList.remove('spinning');
-  }
+  await performSave({ force: true, statusVerb: 'Sync' });
+  syncNowBtn.classList.remove('spinning');
 });
 
 // --- Sidebar collapse / drawer -------------------------------------------------
@@ -598,25 +596,42 @@ async function triggerSave() {
     saveTimer = setTimeout(triggerSave, 2000);
     return;
   }
-  if (!dirty) return;
+  await performSave({ force: false, statusVerb: 'Save' });
+}
+
+// Shared by the autosave debounce (triggerSave) and the manual Sync Now button - they used to
+// be two independent copies of this same guard/save/error-handling logic and had already drifted
+// (Sync Now cleared `dirty` unconditionally instead of checking it first, and its success path
+// never cleared the `save-status-action` reconnect-click-trap class the way triggerSave's did) -
+// see the code review that caught this. `force` is what lets Sync Now still pull+push even when
+// nothing is locally dirty; `statusVerb` only changes the wording ("Saving…"/"Save failed" vs.
+// "Syncing…"/"Sync failed") since autosave and a manual sync are the same operation underneath.
+async function performSave({ force, statusVerb }) {
+  if (saving) {
+    if (!force) saveTimer = setTimeout(triggerSave, 2000);
+    return;
+  }
+  if (!force && !dirty) return;
+  const hadLocalEdits = dirty;
   saving = true;
   dirty = false;
-  setStatus('Saving…');
+  setStatus(`${statusVerb === 'Save' ? 'Saving' : 'Syncing'}…`);
   try {
     await saveToDrive();
     setStatus('Saved', { autoHide: true });
     saveStatus.classList.remove('save-status-action');
     setLastSynced(new Date());
   } catch (err) {
-    dirty = true;
+    dirty = hadLocalEdits; // don't invent an unsaved edit that was never there (e.g. a pull-only Sync Now)
     // getAccessToken() deliberately throws instead of attempting a background reauth (that's
     // the same unwanted-popup problem this debounce timer isn't allowed to trigger) - surface
-    // it as a click target instead, since a click IS allowed to reauth.
+    // it as a click target instead, since a click IS allowed to reauth. driveFetch() throws this
+    // same sentinel for a token Google rejected mid-sync too, not just a missing one.
     if (err.message === 'NOT_SIGNED_IN') {
       setStatus('Signed out — click to reconnect');
       saveStatus.classList.add('save-status-action');
     } else {
-      setStatus(friendlyErrorMessage('Save failed', err));
+      setStatus(friendlyErrorMessage(`${statusVerb} failed`, err));
       console.error(err);
     }
   } finally {
@@ -900,17 +915,23 @@ function renderList() {
     checkbox.type = 'checkbox';
     checkbox.checked = task.IsDone;
     checkbox.title = 'Mark done';
-    checkbox.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleDone(task);
-    });
+    // change fires exactly once per real toggle no matter how it was triggered (direct click on
+    // the checkbox, or the browser's native label-forwarded click below) - using click here
+    // instead double-fired: a tap that lands on the label's padding (not the checkbox itself)
+    // produces two independent bubbling click events (the real one, target=label; a second one
+    // the browser synthesizes and dispatches on the checkbox to activate it), so a click listener
+    // on the checkbox alone would toggle correctly but couldn't stop the first (label-targeted)
+    // event from also reaching the row's own click-to-open handler below.
+    checkbox.addEventListener('change', () => toggleDone(task));
     // A <label> wrapper is the only reliably cross-browser way to grow a native checkbox's tap
     // target without growing its visible size - unlike buttons/divs, padding on the checkbox
     // element itself is not consistently respected for hit-testing (confirmed: computed padding
-    // stayed 0 despite matching CSS). Clicking anywhere in the label still fires the checkbox's
-    // own click handler above via the browser's native label-forwarding behavior.
+    // stayed 0 despite matching CSS). stopPropagation lives on the LABEL, not the checkbox, so it
+    // catches both of the click events described above (whichever one the label sees, either as
+    // the click's target or while it bubbles through as an ancestor) before either can reach `li`.
     const checkboxWrap = document.createElement('label');
     checkboxWrap.className = 'checkbox-tap-target';
+    checkboxWrap.addEventListener('click', (e) => e.stopPropagation());
     checkboxWrap.appendChild(checkbox);
 
     const info = document.createElement('div');
@@ -965,11 +986,14 @@ function renderEditor(task) {
     editorTags.appendChild(chip);
   }
 
-  const onBodyChange = ({ rerenderBody, error }) => {
+  const onBodyChange = ({ rerenderBody, error, isAuthFailure }) => {
     touch(task);
     markDirty();
     renderList();
-    if (error) setStatus(error);
+    if (error) {
+      setStatus(error);
+      saveStatus.classList.toggle('save-status-action', !!isAuthFailure);
+    }
     if (rerenderBody) renderEditableBody(editorBody, task, onBodyChange);
   };
   renderEditableBody(editorBody, task, onBodyChange);

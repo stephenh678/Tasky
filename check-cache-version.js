@@ -1,31 +1,24 @@
 #!/usr/bin/env node
 // Run before every Tasky Web release: `node check-cache-version.js`.
 //
-// Tasky Web has no build step (deliberately - see reference_tasky_web memory), so its cache-bust
-// "?v=NN" suffix is duplicated by hand across every <script>/<link>/import in docs/ instead of
-// coming from one source of truth. A missed bump on any single occurrence serves a stale cached
-// module after a release and has already caused a real bug once (a "NOT_SIGNED_IN after login"
-// failure from mismatched cache versions loaded at different times). This script doesn't remove
-// the manual step - that would need real build tooling, which this project deliberately doesn't
-// have - it just catches a miss before it ships, by checking every occurrence agrees.
+// Tasky Web has no build step (deliberately - see reference_tasky_web memory), so two things are
+// kept in sync by hand instead of by tooling: the "?v=NN" cache-bust suffix duplicated across
+// every <script>/<link>/import in docs/, and docs/js/config.js's DESKTOP_VERSION, which must
+// match TodoApp.csproj's <Version> (shown on the sign-in screen and About dialog). A missed
+// cache-bust bump has already caused a real bug once (a "NOT_SIGNED_IN after login" failure from
+// mismatched cache versions loaded at different times). This script doesn't remove either manual
+// step - that's what sync-desktop-version.js is for, for the DESKTOP_VERSION half - it just
+// catches a miss before it ships, by checking everything actually agrees.
 const fs = require('fs');
 const path = require('path');
+const { walkDocsFiles, readCsprojVersion, readConfigDesktopVersion } = require('./version-utils');
 
-const DOCS_DIR = path.join(__dirname, 'docs');
-const SCAN_EXTENSIONS = new Set(['.html', '.js', '.css']);
+let ok = true;
+
+// --- Cache-bust consistency ---------------------------------------------------
 const VERSION_RE = /\?v=(\d+)/g;
-
-function walk(dir, out = []) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, out);
-    else if (SCAN_EXTENSIONS.has(path.extname(entry.name))) out.push(full);
-  }
-  return out;
-}
-
 const found = []; // { file, line, version }
-for (const file of walk(DOCS_DIR)) {
+for (const file of walkDocsFiles()) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
   lines.forEach((lineText, i) => {
     for (const m of lineText.matchAll(VERSION_RE)) {
@@ -36,17 +29,28 @@ for (const file of walk(DOCS_DIR)) {
 
 if (found.length === 0) {
   console.error('No "?v=NN" occurrences found under docs/ - did the cache-bust scheme change? Check this script still matches reality.');
-  process.exit(1);
+  ok = false;
+} else {
+  const versions = new Set(found.map((f) => f.version));
+  if (versions.size === 1) {
+    console.log(`OK: all ${found.length} occurrence(s) of "?v=" agree on v${[...versions][0]}.`);
+  } else {
+    console.error(`MISMATCH: found ${versions.size} different cache-bust versions across ${found.length} occurrence(s):`);
+    for (const { file, line, version } of found) {
+      console.error(`  v${version}  ${file}:${line}`);
+    }
+    ok = false;
+  }
 }
 
-const versions = new Set(found.map((f) => f.version));
-if (versions.size === 1) {
-  console.log(`OK: all ${found.length} occurrence(s) of "?v=" agree on v${[...versions][0]}.`);
-  process.exit(0);
+// --- Desktop version consistency ----------------------------------------------
+const csprojVersion = readCsprojVersion();
+const configVersion = readConfigDesktopVersion();
+if (csprojVersion === configVersion) {
+  console.log(`OK: docs/js/config.js's DESKTOP_VERSION (${configVersion}) matches TodoApp.csproj.`);
+} else {
+  console.error(`MISMATCH: docs/js/config.js's DESKTOP_VERSION is "${configVersion}" but TodoApp.csproj's <Version> is "${csprojVersion}". Run: node sync-desktop-version.js`);
+  ok = false;
 }
 
-console.error(`MISMATCH: found ${versions.size} different cache-bust versions across ${found.length} occurrence(s):`);
-for (const { file, line, version } of found) {
-  console.error(`  v${version}  ${file}:${line}`);
-}
-process.exit(1);
+process.exit(ok ? 0 : 1);

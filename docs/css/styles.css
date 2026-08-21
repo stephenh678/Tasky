@@ -21,7 +21,13 @@
 }
 
 /* Dark palette leans on Google Cloud Console's flat near-black grays rather than a blue-tinted
-   dark theme - fewer distinct surface colors, borders doing more of the separation than shadows. */
+   dark theme - fewer distinct surface colors, borders doing more of the separation than shadows.
+
+   !! These same values are duplicated verbatim in the plain :root[data-theme="dark"] block right
+   below - a media query can't be combined with an attribute selector in one rule, and this
+   project deliberately has no build step/preprocessor to define the palette once and share it.
+   If you change a color here, change it there too, or "match system" and "force dark" will
+   silently drift apart. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1f1f1f;
@@ -39,6 +45,7 @@
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
   }
 }
+/* Duplicates the @media (prefers-color-scheme: dark) block above - see its comment. */
 :root[data-theme="dark"] {
   --bg: #1f1f1f;
   --pane-bg: #262629;
@@ -88,6 +95,17 @@ body {
   text-align: center;
   padding: 6px 12px;
   font-size: 0.85em;
+}
+/* .offline-banner is position:fixed (it isn't inside .app or .signin-screen - both exist as
+   separate, mutually-hidden trees, so it can't be a normal-flow sibling of either), which means
+   showing it doesn't reserve any space on its own - without this, it would render on top of and
+   obscure whatever's at the top of the viewport instead of pushing it down. --offline-banner-height
+   is set by app.js from the real element's measured height (its text can wrap to two lines on a
+   narrow phone), and only applied via this class while the banner is actually visible. */
+:root { --offline-banner-height: 0px; }
+body.offline-banner-visible .app,
+body.offline-banner-visible .signin-screen {
+  padding-top: var(--offline-banner-height);
 }
 button { font-family: inherit; }
 a { color: var(--accent); }
@@ -557,6 +575,10 @@ a { color: var(--accent); }
   padding: 4px 0;
   white-space: pre-wrap;
 }
+/* outline:none above drops the browser default with nothing replacing it - a keyboard/external-
+   keyboard user editing text had no visual cue which block currently had focus. Outline doesn't
+   take layout space, so this can't shift anything else on focus. */
+.block-text:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); }
 .block-photo, .block-file { color: var(--text-dim); font-style: italic; }
 .block-photo-img { max-width: 100%; border-radius: 8px; display: block; }
@@ -694,23 +716,29 @@ a { color: var(--accent); }
   .icon-btn, .account-avatar { min-width: 44px; min-height: 44px; }
   /* These two are small icons inside otherwise-compact rows (a tag chip, a checklist line) -
      enough padding to reach a full 44px here would visually bloat the chip/row itself, so this
-     is a smaller, safer bump rather than full compliance. Worth a look on a real phone. */
-  .tag-chip button { padding: 4px; margin: -4px; }
+     is a smaller, safer bump rather than full compliance. Only 6px separates adjacent chips
+     (.editor-tags gap) both within and between wrapped rows, which caps how far this can grow
+     before one chip's hit area starts overlapping its neighbor's - 6px/-6px is close to that
+     ceiling already. Worth a look on a real phone before pushing it any further. */
+  .tag-chip button { padding: 6px; margin: -6px; }
   .block-remove { padding: 8px; top: -6px; right: -8px; }
   .block-remove.small { padding: 6px; margin-left: 0; }
   /* The checkbox itself stays visually 20px - .checkbox-tap-target (the <label> wrapping it) is
-     what actually grows to the app's own 44px tap-target standard. Negative margin keeps the
-     larger label from pushing the rest of the row over, same trick as .tag-chip button above,
-     just applied to the wrapper instead of the (unreliably-paddable) checkbox itself. */
+     what actually grows, sized differently per context below since the two rows have very
+     different amounts of spare room around them. Negative margin keeps the larger label from
+     pushing the rest of the row over, same trick as .tag-chip button above, just applied to the
+     wrapper instead of the (unreliably-paddable) checkbox itself. */
   .task-list li input[type="checkbox"],
   .block-checklist-item input[type="checkbox"] { width: 20px; height: 20px; }
-  .checkbox-tap-target {
-    min-width: 44px;
-    min-height: 44px;
-    justify-content: center;
-    margin: -12px;
-  }
-  .task-list li .checkbox-tap-target { margin-top: -12px; }
+  .checkbox-tap-target { justify-content: center; }
+  /* .task-list li has real room to spare (padding: 10px 14px), so this reaches the app's own
+     44px tap-target standard in full. */
+  .task-list li .checkbox-tap-target { min-width: 44px; min-height: 44px; margin: -12px; }
+  /* .block-checklist-item is a much tighter row (padding: 2px 0, only 6px gap to the text input
+     and delete button) - the same -12px/44px used above would bleed well past that buffer and
+     overlap neighboring rows/controls, so this gets the same smaller, safer bump as
+     .tag-chip button rather than full compliance. Worth a look on a real phone. */
+  .block-checklist-item .checkbox-tap-target { min-width: 28px; min-height: 28px; margin: -4px; }
 
   /* iOS Safari zooms the whole page in on focus for any input/select under 16px - these all
      read the app's own (smaller, and further-shrinkable via the Small text-size setting) type

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -26,6 +27,16 @@ public partial class SettingsWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         GoogleDriveHost.Content = driveControl;
+
+        // The "Dark theme" checkbox lives on this window's own General panel, so unlike most
+        // dialogs, Settings can have the theme flip live while it's still open. MainWindow already
+        // re-paints its own OS title bar the same way when that happens (see its constructor) -
+        // without this, Settings' title bar would just stay stuck in whatever mode it was created
+        // in. Unsubscribed on Closed since, unlike MainWindow, Settings can be opened and closed
+        // many times over one app session - without it, every closed instance would stay alive,
+        // pinned by MainViewModel's PropertyChanged subscriber list.
+        viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        Closed += (_, _) => viewModel.PropertyChanged -= ViewModel_PropertyChanged;
 
         // Section switching itself is handled declaratively in XAML now (each panel's Visibility
         // binds to NavList.SelectedItem.Tag via the same EnumEqualsVisibilityConverter already
@@ -72,6 +83,12 @@ public partial class SettingsWindow : Window
     {
         if (!e.DataObject.GetDataPresent(DataFormats.Text) || !DigitsOnly.IsMatch((string)e.DataObject.GetData(DataFormats.Text)))
             e.CancelCommand();
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.IsDarkTheme))
+            ThemeService.ApplyTitleBar(this);
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();

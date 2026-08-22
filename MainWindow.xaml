@@ -17,6 +17,8 @@
         <KeyBinding Key="N" Modifiers="Control" Command="{Binding AddTaskCommand}"/>
         <KeyBinding Key="Delete" Command="{Binding DeleteSelectedCommand}"/>
         <KeyBinding Key="F11" Command="{Binding ToggleFocusModeCommand}"/>
+        <KeyBinding Key="F12" Command="{Binding ToggleCalendarViewCommand}"/>
+        <KeyBinding Key="G" Modifiers="Control+Shift" Command="{Binding SyncGoogleDriveNowCommand}"/>
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenFileCommand}"/>
         <KeyBinding Key="S" Modifiers="Control+Shift" Command="{Binding SaveFileAsCommand}"/>
         <KeyBinding Key="Z" Modifiers="Control" Command="{Binding UndoCommand}"/>
@@ -206,8 +208,9 @@
                     <Separator/>
                     <MenuItem Header="Export _Full Backup..." Command="{Binding ExportBackupCommand}"/>
                     <MenuItem Header="_Import Full Backup..." Command="{Binding ImportBackupCommand}"/>
+                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
                     <Separator/>
-                    <MenuItem Header="_Sync Google Drive Now" Command="{Binding SyncGoogleDriveNowCommand}"/>
+                    <MenuItem Header="_Sync Google Drive Now" InputGestureText="Ctrl+Shift+G" Command="{Binding SyncGoogleDriveNowCommand}"/>
                     <Separator/>
                     <MenuItem Header="_Settings..." Command="{Binding SettingsCommand}"/>
                     <Separator/>
@@ -226,6 +229,8 @@
                     <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
                     <Separator/>
                     <MenuItem Header="F_ocus Mode" InputGestureText="F11" IsCheckable="True" IsChecked="{Binding IsFocusMode}"/>
+                    <MenuItem Header="_Calendar View" InputGestureText="F12"
+                              IsCheckable="True" IsChecked="{Binding IsCalendarView, Mode=TwoWay}"/>
                 </MenuItem>
                 <MenuItem Header="_Window" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
                     <MenuItem Header="Always on _Top" IsCheckable="True" Checked="AlwaysOnTop_Checked" Unchecked="AlwaysOnTop_Unchecked"/>
@@ -285,6 +290,33 @@
             </Button>
             <Button ToolTip="Show trash" Command="{Binding ShowTrashCommand}" Padding="6,3">
                 <TextBlock Text="Trash"/>
+            </Button>
+            <Separator/>
+            <Button ToolTip="List view" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.List}" Padding="6,3">
+                <TextBlock Text="&#x1F4CB; List">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.List}">
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Button>
+            <Button ToolTip="Calendar view (F12)" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.Calendar}" Padding="6,3">
+                <TextBlock Text="&#x1F4C5; Calendar">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.Calendar}">
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </Button>
             <Separator/>
             <Button ToolTip="Focus mode (F11)" Command="{Binding ToggleFocusModeCommand}" Padding="6,3">
@@ -381,8 +413,8 @@
     <Grid Background="{DynamicResource BackgroundBrush}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="{Binding SidebarWidth}"/>
-            <ColumnDefinition Width="{Binding IsFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=340}"/>
-            <ColumnDefinition Width="{Binding IsFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=5}"/>
+            <ColumnDefinition Width="{Binding CollapseListColumnForFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=340}"/>
+            <ColumnDefinition Width="{Binding CollapseListColumnForFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=5}"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -430,7 +462,8 @@
         </Grid>
 
         <!-- Task list -->
-        <Grid Grid.Column="1" Background="{DynamicResource BackgroundBrush}">
+        <Grid Grid.Column="1" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -611,10 +644,124 @@
                        MaxWidth="180" IsHitTestVisible="False"/>
         </Grid>
 
-        <GridSplitter Grid.Column="2" Width="5" HorizontalAlignment="Stretch" Background="{DynamicResource SecondaryBrush}"/>
+        <GridSplitter Grid.Column="2" Width="5" HorizontalAlignment="Stretch" Background="{DynamicResource SecondaryBrush}"
+                      Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}"/>
+
+        <!-- Calendar view: replaces the task list + splitter + editor (columns 1-3) while active -->
+        <Grid Grid.Column="1" Grid.ColumnSpan="3" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Calendar}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="16,14,16,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="Previous month"
+                        AutomationProperties.Name="Previous month" Command="{Binding PreviousMonthCommand}">
+                    <TextBlock Text="&#x2039;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="Next month"
+                        AutomationProperties.Name="Next month" Command="{Binding NextMonthCommand}">
+                    <TextBlock Text="&#x203A;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                </Button>
+                <TextBlock Grid.Column="2" Text="{Binding CalendarMonthLabel}" FontSize="16" FontWeight="Bold"
+                           VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <Button Grid.Column="4" Content="Today" Padding="10,4" Background="Transparent"
+                        BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1"
+                        Foreground="{DynamicResource PrimaryTextBrush}" Cursor="Hand"
+                        Command="{Binding TodayCommand}"/>
+            </Grid>
+
+            <UniformGrid Grid.Row="1" Columns="7" Margin="16,0,16,4">
+                <TextBlock Text="Sun" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Mon" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Tue" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Wed" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Thu" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Fri" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Sat" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+            </UniformGrid>
+
+            <ItemsControl Grid.Row="2" ItemsSource="{Binding CalendarDays}" Margin="12,0,12,12">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="7" Rows="6"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="2" Padding="4" BorderThickness="1" BorderBrush="{DynamicResource SecondaryBrush}"
+                                Background="{DynamicResource BackgroundBrush}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsToday}" Value="True">
+                                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                            <Setter Property="BorderThickness" Value="2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Date.Day}" FontSize="12" FontWeight="Bold"
+                                           Margin="2,0,0,4">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsCurrentMonth}" Value="False">
+                                                    <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Tasks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource TagChipBrush}" CornerRadius="3"
+                                                    Margin="0,0,0,2" Padding="4,1" Cursor="Hand"
+                                                    ToolTip="{Binding Text}">
+                                                <Border.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.SelectCalendarTaskCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </Border.InputBindings>
+                                                <TextBlock Text="{Binding Text}" FontSize="10.5" TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                    <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Grid>
 
         <!-- Editor -->
-        <Grid Grid.Column="3" Background="{DynamicResource BackgroundBrush}">
+        <Grid Grid.Column="3" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}">
             <TextBlock Text="Select a task, or create a new one."
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        FontSize="14" Foreground="{DynamicResource TertiaryBrush}"

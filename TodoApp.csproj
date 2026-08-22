@@ -2,7 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- Windows-SDK-versioned TFM (rather than plain net9.0-windows) so NuGet resolves the
+         Windows10-specific asset of CommunityToolkit.WinUI.Notifications, which is the one that
+         actually has the WinRT-backed toast activation APIs (DesktopNotificationManagerCompat,
+         ToastNotificationActivatedEventArgsCompat) - the plain net5.0 asset lacks them entirely.
+         SupportedOSPlatformVersion keeps the app launchable on Windows 10 1809+ (the minimum for
+         unpackaged desktop toast notifications) while compiling against the 19041 API surface. -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -11,8 +18,19 @@
     <AssemblyTitle>Tasky</AssemblyTitle>
     <Product>Tasky</Product>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
-    <Version>1.6.5</Version>
+    <Version>1.7.0</Version>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- TodoApp.Tests lives in a subfolder of this project; without an explicit exclude its .cs
+         files leak into this project's own compile glob (and, worse, into the WPF markup
+         temp-project MSBuild generates for XAML codegen), pulling in xunit types this project
+         doesn't reference. -->
+    <Compile Remove="TodoApp.Tests\**" />
+    <EmbeddedResource Remove="TodoApp.Tests\**" />
+    <None Remove="TodoApp.Tests\**" />
+    <Page Remove="TodoApp.Tests\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\icon.ico" />
@@ -28,6 +46,7 @@
 
   <ItemGroup>
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.75.0.4218" />
+    <PackageReference Include="CommunityToolkit.WinUI.Notifications" Version="7.1.2" />
   </ItemGroup>
 
 </Project>

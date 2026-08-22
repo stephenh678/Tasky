@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -10,6 +12,103 @@ namespace TodoApp.Services;
 
 public static class ExportService
 {
+    // Exports every open, non-trashed task with a due date as a calendar event, so they can be
+    // imported as a one-time snapshot into Google Calendar/Outlook/Apple Calendar. A task whose
+    // DueDate has no time component (still midnight - the common case, since most tasks are only
+    // ever given a date) becomes an all-day event; one with an actual time (set via the
+    // QuickAddWindow "@3pm" syntax, or a future time-of-day picker) becomes a 30-minute timed
+    // event. Returns the number of events written, so the caller can tell the user if there was
+    // nothing to export.
+    public static int ExportToICalendar(IEnumerable<TaskItem> tasks, string filePath)
+    {
+        var withDueDates = tasks.Where(t => !t.IsClosed && t.DueDate.HasValue).ToList();
+
+        var sb = new StringBuilder();
+        AppendFolded(sb, "BEGIN:VCALENDAR");
+        AppendFolded(sb, "VERSION:2.0");
+        AppendFolded(sb, "PRODID:-//Tasky//Tasky Task Manager//EN");
+        AppendFolded(sb, "CALSCALE:GREGORIAN");
+
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+
+        foreach (var task in withDueDates)
+        {
+            var due = task.DueDate!.Value;
+            var isAllDay = due.TimeOfDay == TimeSpan.Zero;
+            var summary = task.IsDone ? $"[Done] {task.Text}" : task.Text;
+
+            AppendFolded(sb, "BEGIN:VEVENT");
+            // Stable across re-exports of the same task, so re-importing an updated .ics lets a
+            // calendar app that supports it treat this as an update to the same event rather than
+            // a duplicate.
+            AppendFolded(sb, $"UID:{task.Id}@tasky.app");
+            AppendFolded(sb, $"DTSTAMP:{stamp}");
+
+            if (isAllDay)
+            {
+                // All-day events use an exclusive end date one day after start, per RFC 5545 -
+                // without it, some calendar apps render a single-day all-day event as spanning
+                // zero days.
+                AppendFolded(sb, $"DTSTART;VALUE=DATE:{due:yyyyMMdd}");
+                AppendFolded(sb, $"DTEND;VALUE=DATE:{due.AddDays(1):yyyyMMdd}");
+            }
+            else
+            {
+                AppendFolded(sb, $"DTSTART:{due:yyyyMMdd'T'HHmmss}");
+                AppendFolded(sb, $"DTEND:{due.AddMinutes(30):yyyyMMdd'T'HHmmss}");
+            }
+
+            AppendFolded(sb, $"SUMMARY:{EscapeIcsText(summary)}");
+            if (task.Tags.Count > 0)
+                AppendFolded(sb, $"DESCRIPTION:{EscapeIcsText("Tags: " + string.Join(", ", task.Tags))}");
+
+            AppendFolded(sb, "END:VEVENT");
+        }
+
+        AppendFolded(sb, "END:VCALENDAR");
+
+        File.WriteAllText(filePath, sb.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return withDueDates.Count;
+    }
+
+    // RFC 5545 §3.1 requires content lines folded at 75 octets, with continuation lines starting
+    // with a single space - some calendar importers reject or mis-parse unfolded long lines (a
+    // task title near the 500-char max, in particular). Folds by character count rather than
+    // exact UTF-8 octet count: a reasonable approximation given task titles are typically ASCII,
+    // and an occasional short line for multi-byte text is a cosmetic-only deviation, not a
+    // parsing failure.
+    private static void AppendFolded(StringBuilder sb, string line)
+    {
+        const int maxLineLength = 75;
+        if (line.Length <= maxLineLength)
+        {
+            sb.Append(line).Append("\r\n");
+            return;
+        }
+
+        sb.Append(line, 0, maxLineLength).Append("\r\n");
+        var pos = maxLineLength;
+        while (pos < line.Length)
+        {
+            var chunkLength = Math.Min(maxLineLength - 1, line.Length - pos); // -1 for the leading fold space
+            sb.Append(' ').Append(line, pos, chunkLength).Append("\r\n");
+            pos += chunkLength;
+        }
+    }
+
+    // RFC 5545 §3.3.11 TEXT value escaping. Order matters - backslashes from the other
+    // replacements must not themselves get re-escaped, hence backslash first.
+    private static string EscapeIcsText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        return text
+            .Replace("\\", "\\\\")
+            .Replace(";", "\\;")
+            .Replace(",", "\\,")
+            .Replace("\r\n", "\\n")
+            .Replace("\n", "\\n");
+    }
+
     public static void ExportToHtml(TaskItem task, FlowDocument document, string filePath)
     {
         var sb = new StringBuilder();

@@ -120,6 +120,8 @@ public partial class MainWindow : Window
             Activate();
         });
         _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(Close);
+        _viewModel.Tray.TaskCompleteRequested += id => Dispatcher.Invoke(() => _viewModel.CompleteTaskById(id));
+        _viewModel.Tray.TaskSnoozeRequested += (id, duration) => Dispatcher.Invoke(() => _viewModel.SnoozeTaskById(id, duration));
 
         // Autosave now writes off the UI thread (see MainViewModel.Save), so a plain synchronous
         // flush here could let the process exit before the last edit actually lands on disk.

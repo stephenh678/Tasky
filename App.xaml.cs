@@ -24,6 +24,30 @@ public partial class App : Application
         };
     }
 
+    // Uninstall-Tasky.ps1 launches "Tasky.exe --cleanup-notifications" (and waits for it to exit)
+    // right before deleting the app's files, so the registry-based toast notification
+    // registration ToastNotificationService.Initialize() sets up on first run doesn't get left
+    // behind. Deliberately checked before base.OnStartup - StartupUri would otherwise create and
+    // show MainWindow (and its tray icon) for what's meant to be a silent, instant cleanup pass.
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        if (Array.IndexOf(e.Args, "--cleanup-notifications") >= 0)
+        {
+            try
+            {
+                ToastNotificationService.Uninstall();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("App", $"Notification cleanup failed: {ex.Message}");
+            }
+            Shutdown();
+            return;
+        }
+
+        base.OnStartup(e);
+    }
+
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         AppLogger.Error("Dispatcher", "Unhandled UI dispatcher exception", e.Exception);

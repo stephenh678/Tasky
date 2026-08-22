@@ -50,6 +50,8 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isSidebarCollapsed;
     private SortOption _currentSort = SortOption.ModifiedNewest;
     private QuickFilter _currentQuickFilter = QuickFilter.None;
+    private ViewMode _viewMode = ViewMode.List;
+    private DateTime _calendarMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private bool _isFilterPopupOpen;
     private string _saveStatusText = string.Empty;
     private Task _pendingSaveTask = Task.CompletedTask;
@@ -290,9 +292,22 @@ public class MainViewModel : INotifyPropertyChanged
         set
         {
             if (SetField(ref _isFocusMode, value))
+            {
                 OnPropertyChanged(nameof(SidebarWidth));
+                OnPropertyChanged(nameof(CollapseListColumnForFocusMode));
+            }
         }
     }
+
+    // Focus Mode collapses the task-list column to widen the editor - meaningless once Calendar
+    // view has already taken over that same column for its own grid, and collapsing it out from
+    // under the calendar would just shrink it by the 340+5px Focus Mode normally reclaims. The two
+    // ColumnDefinitions that used to bind to IsFocusMode directly bind to this instead, so turning
+    // Focus Mode on while in Calendar (or switching to Calendar while it's already on) never
+    // affects the calendar's width - ToggleFocusModeCommand's CanExecute also keeps the toolbar
+    // button/F11 from turning it on mid-Calendar-view at all, but this covers the case where it
+    // was already on in List view before switching.
+    public bool CollapseListColumnForFocusMode => IsFocusMode && ViewMode == ViewMode.List;
 
     public bool IsSidebarCollapsed
     {
@@ -320,6 +335,44 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public ViewMode ViewMode
+    {
+        get => _viewMode;
+        set
+        {
+            if (!SetField(ref _viewMode, value)) return;
+            OnPropertyChanged(nameof(IsCalendarView));
+            OnPropertyChanged(nameof(CollapseListColumnForFocusMode));
+            if (value == ViewMode.Calendar) RefreshCalendarDays();
+        }
+    }
+
+    // Bool mirror of ViewMode for the "Calendar View" checkable menu item. Settable (not just a
+    // read-only mirror) so a two-way IsChecked binding can drive it directly - a checkable
+    // MenuItem paired with a Command+fixed CommandParameter fires that same fixed parameter on
+    // every click, checking OR unchecking, so unchecking it would have kept re-selecting Calendar
+    // instead of switching back to List.
+    public bool IsCalendarView
+    {
+        get => _viewMode == ViewMode.Calendar;
+        set => ViewMode = value ? ViewMode.Calendar : ViewMode.List;
+    }
+
+    public DateTime CalendarMonth
+    {
+        get => _calendarMonth;
+        private set
+        {
+            if (!SetField(ref _calendarMonth, value)) return;
+            OnPropertyChanged(nameof(CalendarMonthLabel));
+            RefreshCalendarDays();
+        }
+    }
+
+    public string CalendarMonthLabel => _calendarMonth.ToString("MMMM yyyy");
+
+    public ObservableCollection<CalendarDay> CalendarDays { get; } = new();
+
     // private set (not the plain get-only these were before) so the constructor can delegate
     // assignment to the InitializeXCommands() groupings below instead of one 290-line body -
     // a get-only auto-property's backing field can only be assigned directly in the constructor
@@ -338,6 +391,12 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand EmptyTrashCommand { get; private set; } = null!;
     public RelayCommand SetQuickFilterCommand { get; private set; } = null!;
     public RelayCommand ToggleFilterPopupCommand { get; private set; } = null!;
+    public RelayCommand SetViewModeCommand { get; private set; } = null!;
+    public RelayCommand ToggleCalendarViewCommand { get; private set; } = null!;
+    public RelayCommand PreviousMonthCommand { get; private set; } = null!;
+    public RelayCommand NextMonthCommand { get; private set; } = null!;
+    public RelayCommand TodayCommand { get; private set; } = null!;
+    public RelayCommand SelectCalendarTaskCommand { get; private set; } = null!;
     public RelayCommand NewFileCommand { get; private set; } = null!;
     public RelayCommand OpenFileCommand { get; private set; } = null!;
     public RelayCommand SaveFileAsCommand { get; private set; } = null!;
@@ -349,6 +408,7 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand RestoreBackupCommand { get; private set; } = null!;
     public RelayCommand ExportBackupCommand { get; private set; } = null!;
+    public RelayCommand ExportCalendarCommand { get; private set; } = null!;
     public RelayCommand ImportBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
     public RelayCommand OpenDebugLogCommand { get; private set; } = null!;
@@ -380,6 +440,14 @@ public class MainViewModel : INotifyPropertyChanged
         _selectedSidebarItem = _allItem;
 
         FilteredTasksView = new ListCollectionView(AllTasks) { Filter = FilterTask, CustomSort = new TaskComparer(_currentSort) };
+
+        // Covers every way the task list itself changes (add/delete/trash/restore/undo/Drive
+        // merge/LoadFile) in one place, rather than adding a RefreshCalendarDays() call to each
+        // of those individually. A no-op while list view is active - see RefreshCalendarDays.
+        AllTasks.CollectionChanged += (_, _) =>
+        {
+            if (ViewMode == ViewMode.Calendar) RefreshCalendarDays();
+        };
 
         var initialPath = ResolveInitialFilePath();
         _attachments = new AttachmentService(initialPath);
@@ -549,7 +617,11 @@ public class MainViewModel : INotifyPropertyChanged
         ShowClosedCommand = new RelayCommand(_ => SelectedSidebarItem = _doneItem);
         ShowTrashCommand = new RelayCommand(_ => SelectedSidebarItem = _trashItem);
 
-        ToggleFocusModeCommand = new RelayCommand(_ => IsFocusMode = !IsFocusMode);
+        // Disabled while Calendar view is active - see CollapseListColumnForFocusMode. WPF's
+        // CommandManager.RequerySuggested (RelayCommand.CanExecuteChanged) re-evaluates this on
+        // the same UI input events (button clicks, key presses) that change ViewMode in the first
+        // place, so the toolbar button/F11 binding disables itself without any manual invalidation.
+        ToggleFocusModeCommand = new RelayCommand(_ => IsFocusMode = !IsFocusMode, _ => ViewMode == ViewMode.List);
         ToggleSidebarCommand = new RelayCommand(_ => IsSidebarCollapsed = !IsSidebarCollapsed);
 
         SetSortCommand = new RelayCommand(p =>
@@ -564,6 +636,25 @@ public class MainViewModel : INotifyPropertyChanged
         });
 
         ToggleFilterPopupCommand = new RelayCommand(_ => IsFilterPopupOpen = !IsFilterPopupOpen);
+
+        SetViewModeCommand = new RelayCommand(p =>
+        {
+            if (p is ViewMode mode) ViewMode = mode;
+        });
+
+        ToggleCalendarViewCommand = new RelayCommand(_ =>
+            ViewMode = ViewMode == ViewMode.Calendar ? ViewMode.List : ViewMode.Calendar);
+
+        PreviousMonthCommand = new RelayCommand(_ => CalendarMonth = _calendarMonth.AddMonths(-1));
+        NextMonthCommand = new RelayCommand(_ => CalendarMonth = _calendarMonth.AddMonths(1));
+        TodayCommand = new RelayCommand(_ => CalendarMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1));
+
+        SelectCalendarTaskCommand = new RelayCommand(p =>
+        {
+            if (p is not TaskItem task) return;
+            SelectedTask = task;
+            ViewMode = ViewMode.List;
+        });
     }
 
     // New/Open/Save As/Restore Backup - commands that swap out which .tasky file is open or
@@ -683,6 +774,31 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 App.LogException(ex);
                 ThemedMessageBox.Show($"Export failed: {ex.Message}", "Export Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        });
+
+        ExportCalendarCommand = new RelayCommand(_ =>
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "Export Due Dates to Calendar",
+                Filter = "iCalendar file (*.ics)|*.ics",
+                FileName = $"Tasky Due Dates {DateTime.Now:yyyy-MM-dd}.ics"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            try
+            {
+                var count = ExportService.ExportToICalendar(AllTasks, dialog.FileName);
+                var message = count == 0
+                    ? "No open tasks have a due date set, so nothing was exported."
+                    : $"Exported {count} due date(s) to:\n{dialog.FileName}\n\nImport this file into Google Calendar, Outlook, or Apple Calendar.";
+                ThemedMessageBox.Show(message, "Export Due Dates to Calendar", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex);
+                ThemedMessageBox.Show($"Export failed: {ex.Message}", "Export Due Dates to Calendar", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         });
 
@@ -983,7 +1099,7 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     await _googleDrive.DownloadFileAsync(remoteId, tempPath, downloadAttachments: false);
                     var remoteState = await _store.LoadAsync(tempPath);
-                    remoteState.DeletedTasks = DeduplicateTombstones(remoteState.DeletedTasks);
+                    remoteState.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(remoteState.DeletedTasks);
                     var (added, updated, removed) = MergeRemoteState(remoteState);
                     AppLogger.Info("MainViewModel", $"Google Drive merge: +{added} task(s), ~{updated} updated, -{removed} removed.");
 
@@ -1158,108 +1274,42 @@ public class MainViewModel : INotifyPropertyChanged
     // that already has one has to be cleaned up before it ever reaches that point. Keeps the
     // latest timestamp per TaskId, applied to both local (on load) and remote (right after
     // download) so neither side can be the one that crashes the merge.
-    private static List<TaskSyncRecord> DeduplicateTombstones(List<TaskSyncRecord> tombstones)
-    {
-        return tombstones
-            .GroupBy(r => r.TaskId)
-            .Select(g => g.OrderByDescending(r => r.Timestamp).First())
-            .ToList();
-    }
-
-    // Per-task merge for Google Drive sync, replacing a whole-file "which copy is newer" guess.
-    // The whole-file version couldn't tell "clean update from another device" apart from "real
-    // conflict" without misfiring (that's the story of this session's last several bug reports),
-    // because a single timestamp on the whole file conflates every task's history into one
-    // number. Per task, the picture is much clearer: a task missing from one side either belongs
-    // there (bring it in) or was deleted (a tombstone says when, so a device that's simply behind
-    // doesn't resurrect it) - and a task edited on only one side since they last agreed is always
-    // safe to adopt. The one thing this still can't fully reconcile is the same task edited on
-    // both sides in the same window - that's genuine field-level merging (CRDT territory), out of
-    // scope here, so it falls back to keeping whichever edit has the later ModifiedAt and the
-    // other edit to that specific task is lost. Narrower and rarer than losing an entire list.
+    //
+    // The decision logic itself (which tasks to add/update/remove, tombstone union) lives in
+    // TaskSyncMerge.ComputeMergePlan - a pure function with no dependency on AllTasks or WPF
+    // binding, so it's unit-testable without constructing a MainViewModel. This method is just
+    // the thin, UI-bound half: apply that plan to AllTasks/AttachTask/DetachTask/SelectedTask.
     private (int Added, int Updated, int Removed) MergeRemoteState(AppState remoteState)
     {
-        var localById = _state.Tasks.ToDictionary(t => t.Id);
-        var remoteById = remoteState.Tasks.ToDictionary(t => t.Id);
-        var localTombstones = _state.DeletedTasks.ToDictionary(r => r.TaskId, r => r.Timestamp);
-        var remoteTombstones = remoteState.DeletedTasks.ToDictionary(r => r.TaskId, r => r.Timestamp);
+        var plan = TaskSyncMerge.ComputeMergePlan(_state.Tasks, remoteState.Tasks, _state.DeletedTasks, remoteState.DeletedTasks);
 
-        var added = 0;
-        var updated = 0;
-        var removed = 0;
-
-        // Remote-only tasks: bring them in, unless this device already deleted the same ID and
-        // remote's copy predates that deletion (i.e. remote just hasn't learned about it yet).
-        foreach (var (id, remoteTask) in remoteById)
+        foreach (var remoteTask in plan.TasksToAdd)
         {
-            if (localById.ContainsKey(id)) continue;
-
-            if (localTombstones.TryGetValue(id, out var deletedAt) && remoteTask.ModifiedAt <= deletedAt)
-                continue;
-
             AllTasks.Add(remoteTask);
             AttachTask(remoteTask);
-            added++;
         }
 
-        // Local-only tasks: leave them (they'll upload as-is), unless another device already
-        // deleted the same ID and this device hasn't touched it since that deletion.
-        foreach (var (id, localTask) in localById)
+        foreach (var localTask in plan.TasksToRemove)
         {
-            if (remoteById.ContainsKey(id)) continue;
-
-            if (remoteTombstones.TryGetValue(id, out var deletedAt) && localTask.ModifiedAt <= deletedAt)
-            {
-                DetachTask(localTask);
-                AllTasks.Remove(localTask);
-                if (SelectedTask == localTask) SelectedTask = null;
-                removed++;
-            }
-        }
-
-        // Present on both sides: the newer edit to THIS task wins - detached first, since
-        // TaskItem's property setters trigger Task_PropertyChanged while attached, which would
-        // stamp ModifiedAt to "now" (clobbering the timestamp being restored here) and can spawn
-        // a recurring-task occurrence or push an undo entry - none of which belong in a sync merge.
-        foreach (var (id, remoteTask) in remoteById)
-        {
-            if (!localById.TryGetValue(id, out var localTask)) continue;
-            if (remoteTask.ModifiedAt <= localTask.ModifiedAt) continue;
-
             DetachTask(localTask);
-            ApplyTaskFields(localTask, remoteTask);
-            AttachTask(localTask);
-            updated++;
+            AllTasks.Remove(localTask);
+            if (SelectedTask == localTask) SelectedTask = null;
         }
 
-        // Tombstones union both ways, so a third device merging later learns about every
-        // deletion recorded anywhere, not just the ones this device made itself.
-        var mergedTombstoneIds = new HashSet<Guid>(_state.DeletedTasks.Select(r => r.TaskId));
-        foreach (var remoteTombstone in remoteState.DeletedTasks)
+        // Detached first, since TaskItem's property setters trigger Task_PropertyChanged while
+        // attached, which would stamp ModifiedAt to "now" (clobbering the timestamp being restored
+        // here) and can spawn a recurring-task occurrence or push an undo entry - none of which
+        // belong in a sync merge.
+        foreach (var (localTask, remoteTask) in plan.TasksToUpdate)
         {
-            if (mergedTombstoneIds.Add(remoteTombstone.TaskId))
-                _state.DeletedTasks.Add(remoteTombstone);
+            DetachTask(localTask);
+            TaskSyncMerge.ApplyTaskFields(localTask, remoteTask);
+            AttachTask(localTask);
         }
 
-        return (added, updated, removed);
-    }
+        _state.DeletedTasks.AddRange(plan.TombstonesToAdd);
 
-    private static void ApplyTaskFields(TaskItem target, TaskItem source)
-    {
-        target.Text = source.Text;
-        target.IsDone = source.IsDone;
-        target.IsClosed = source.IsClosed;
-        target.IsPinned = source.IsPinned;
-        target.DueDate = source.DueDate;
-        target.Recurrence = source.Recurrence;
-
-        target.Tags.Clear();
-        foreach (var tag in source.Tags) target.Tags.Add(tag);
-
-        target.Body.Clear();
-        foreach (var block in source.Body) target.Body.Add(block);
-
-        target.ModifiedAt = source.ModifiedAt;
+        return (plan.TasksToAdd.Count, plan.TasksToUpdate.Count, plan.TasksToRemove.Count);
     }
 
     private void CleanupTaskAttachments(TaskItem deletedTask)
@@ -1365,12 +1415,53 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // Only the QuickAddWindow path (global hotkey / tray "New Task") parses these tokens - it has
+    // a clean one-shot "commit" moment (Enter). The inline title TextBox on an existing task is
+    // two-way bound and saves on every keystroke, so there's no equivalent safe commit point:
+    // stripping a "#tag" out from under the user while they're still mid-word typing it would be
+    // actively wrong, not just unnecessary.
     public void AddQuickTask(string title)
     {
-        var task = new TaskItem { Text = title };
+        var parsed = QuickEntryParser.Parse(title);
+        var text = string.IsNullOrWhiteSpace(parsed.Text) ? title : parsed.Text;
+
+        var task = new TaskItem { Text = text, DueDate = parsed.DueDate };
+        foreach (var tag in parsed.Tags) task.Tags.Add(tag);
+
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
+    }
+
+    // Entry point for the reminder toast's "Mark Complete" button (see TrayIconService). The task
+    // stays attached the whole time (see AttachTask/DetachTask), so just setting IsDone routes
+    // through the normal Task_PropertyChanged pipeline - same undo entry and recurrence-spawn
+    // behavior as checking it off in the list.
+    public void CompleteTaskById(Guid taskId)
+    {
+        var task = AllTasks.FirstOrDefault(t => t.Id == taskId);
+        if (task is null || task.IsDone) return;
+        task.IsDone = true;
+    }
+
+    // Entry point for the reminder toast's "Snooze 15m"/"Snooze 1 Hour" buttons. Rather than
+    // changing the task's DueDate (which would be a real, saved edit the user didn't ask for),
+    // this just clears the "already notified" flag so CheckReminders will pick the task back up,
+    // and arms a one-shot timer so that happens close to the requested delay rather than waiting
+    // for the next 15-minute polling tick.
+    public void SnoozeTaskById(Guid taskId, TimeSpan duration)
+    {
+        if (AllTasks.All(t => t.Id != taskId)) return;
+
+        _notifiedTaskIds.Remove(taskId);
+
+        var timer = new DispatcherTimer { Interval = duration };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            CheckReminders();
+        };
+        timer.Start();
     }
 
     public void SaveWindowState(double left, double top, double width, double height, bool maximized)
@@ -1423,9 +1514,9 @@ public class MainViewModel : INotifyPropertyChanged
         foreach (var t in due) _notifiedTaskIds.Add(t.Id);
 
             if (due.Count == 1)
-                _tray.ShowBalloon("Task due", due[0].Text);
+                _tray.ShowReminderToast("Task due", due[0].Text, due[0]);
             else
-                _tray.ShowBalloon("Tasks due", $"{due.Count} tasks are due or overdue.");
+                _tray.ShowReminderToast("Tasks due", $"{due.Count} tasks are due or overdue.", null);
         }
         finally
         {
@@ -1506,7 +1597,7 @@ public class MainViewModel : INotifyPropertyChanged
         // by a previous session stays invisible to Google Drive's merge (which only ever
         // consults the in-memory _state.DeletedTasks), letting a deleted task get silently
         // resurrected on the next sync.
-        _state.DeletedTasks = DeduplicateTombstones(loaded.DeletedTasks);
+        _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
 
@@ -1601,6 +1692,20 @@ public class MainViewModel : INotifyPropertyChanged
     private static bool Contains(string haystack, string needle)
         => haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
 
+    // Rebuilds the full 6-week (42-day) grid around CalendarMonth from scratch. Called whenever
+    // the visible month changes, whenever ViewMode switches to Calendar, and (see the
+    // AllTasks.CollectionChanged and Task_PropertyChanged hooks) whenever something that could
+    // change a day's task membership happens while already in Calendar view. The actual grid math
+    // lives in CalendarGridBuilder (pure, unit-tested); this just replaces CalendarDays wholesale
+    // with its result rather than patching incrementally - simple and correct, and 42 cells is
+    // cheap regardless.
+    private void RefreshCalendarDays()
+    {
+        CalendarDays.Clear();
+        foreach (var day in CalendarGridBuilder.BuildMonthGrid(_calendarMonth, AllTasks, DateTime.Now))
+            CalendarDays.Add(day);
+    }
+
     private void AttachTask(TaskItem task) => task.PropertyChanged += Task_PropertyChanged;
 
     private void DetachTask(TaskItem task) => task.PropertyChanged -= Task_PropertyChanged;
@@ -1610,6 +1715,12 @@ public class MainViewModel : INotifyPropertyChanged
         if (e.PropertyName == nameof(TaskItem.ModifiedAt)) return;
         if (sender is not TaskItem task) return;
         task.ModifiedAt = DateTime.Now;
+
+        // Only these two actually change which day (or whether at all) a task shows up on the
+        // calendar grid - anything else (Text, Tags, ...) is already live via the pill's own
+        // direct binding to this same TaskItem instance, so no rebuild is needed for those.
+        if (ViewMode == ViewMode.Calendar && e.PropertyName is nameof(TaskItem.DueDate) or nameof(TaskItem.IsClosed))
+            RefreshCalendarDays();
 
         if (e.PropertyName == nameof(TaskItem.IsDone) && !_isExecutingUndo)
         {

@@ -62,6 +62,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Margin="0,4">
@@ -98,6 +99,15 @@
                 <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
                     <Border Style="{StaticResource KeyBadgeStyle}"><TextBlock Text="F11" Style="{StaticResource KeyTextStyle}"/></Border>
                     <TextBlock Text="Toggle Focus Mode" Style="{StaticResource DescTextStyle}"/>
+                </StackPanel>
+
+                <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Margin="0,4">
+                    <Border Style="{StaticResource KeyBadgeStyle}"><TextBlock Text="F12" Style="{StaticResource KeyTextStyle}"/></Border>
+                    <TextBlock Text="Toggle Calendar View" Style="{StaticResource DescTextStyle}"/>
+                </StackPanel>
+                <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                    <Border Style="{StaticResource KeyBadgeStyle}"><TextBlock Text="Ctrl + Shift + G" Style="{StaticResource KeyTextStyle}"/></Border>
+                    <TextBlock Text="Sync Google Drive Now" Style="{StaticResource DescTextStyle}"/>
                 </StackPanel>
             </Grid>
         </GroupBox>

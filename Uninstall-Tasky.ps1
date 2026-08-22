@@ -173,6 +173,22 @@ try {
     Write-Host ""
     Read-Host "Press Enter to remove the application files and finish"
 
+    # --- Clean up toast notification registration -----------------------------------------
+    # Tasky registers some registry-based COM/AUMID plumbing the first time it shows a reminder
+    # notification (see ToastNotificationService.Initialize) - ask it to reverse that before its
+    # exe is gone. Best-effort: failing here shouldn't block the rest of the uninstall.
+
+    $TaskyExePath = Join-Path $AppFolder "Tasky.exe"
+    if (Test-Path -LiteralPath $TaskyExePath) {
+        Write-Section "Cleaning up notification registration..."
+        try {
+            Start-Process -FilePath $TaskyExePath -ArgumentList "--cleanup-notifications" -Wait -WindowStyle Hidden
+            Write-Host "  Done"
+        } catch {
+            Write-Host "  Could not clean up notification registration ($($_.Exception.Message)) - harmless, skipping." -ForegroundColor Yellow
+        }
+    }
+
     # --- Remove the known application files (including this script itself) ---------------
     # A running .ps1 can delete its own file directly - PowerShell parses the whole script
     # into memory before executing it, so it doesn't hold the file open the way a compiled

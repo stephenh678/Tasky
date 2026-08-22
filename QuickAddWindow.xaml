@@ -33,7 +33,7 @@
                 </ContextMenu>
             </TextBox.ContextMenu>
         </TextBox>
-        <TextBlock Grid.Row="1" Text="Enter to save · Esc to cancel" FontSize="10.5"
+        <TextBlock Grid.Row="1" Text="Enter · Esc · #tag !due:day @time" FontSize="10.5"
                    Foreground="{DynamicResource TertiaryBrush}" Margin="0,6,0,0"/>
     </Grid>
 </Window>

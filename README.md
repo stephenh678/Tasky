@@ -42,6 +42,17 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 - **Markdown** — checklists become `- [ ]`/`- [x]` items, tables become Markdown tables
 - **Print** — opens the standard Windows print dialog
 
+### Reminders & calendar
+- **Native toast notifications** — reminders for due/overdue tasks show as real Windows 10/11
+  toast notifications (not old-style balloon tips), with **Mark Complete**, **Snooze 15m**, and
+  **Snooze 1 Hour** buttons right on the notification
+- **Calendar view** — toggle to a month-grid view showing tasks by due date, via the toolbar's
+  List/Calendar buttons, `F12`, or **View → Calendar View**; click a task to jump to it in the
+  editor
+- **Export Due Dates to Calendar (.ics)** — **File → Export Due Dates to Calendar...** writes
+  every open task's due date as a calendar file you can import into Google Calendar, Outlook, or
+  Apple Calendar
+
 ### Data safety
 - Auto-save (debounced, so it doesn't hammer the disk while you type), with a small status
   indicator ("Saving…" / "Saved") and a clear failure message if a write doesn't go through
@@ -57,6 +68,10 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 ### Quick capture
 - Global hotkey **Ctrl+Alt+T** and a system tray icon open a small always-on-top box to jot down
   a task from anywhere, without switching to the main window
+- Type `#tag`, `!due:day`, and `@time` right into the quick-add box to set tags and a due
+  date/time as you type the title — e.g. `Submit report !due:tue @3pm #finance`. Unrecognized
+  tokens (like a stray `@` in an email address) are left alone in the title rather than silently
+  eaten
 - Ctrl+N / the toolbar "+" for a new task inline
 
 ### Multiple files
@@ -92,6 +107,16 @@ dotnet run
 ```bash
 dotnet build
 ```
+
+## Test it
+
+```bash
+dotnet test TodoApp.Tests/TodoApp.Tests.csproj
+```
+
+Covers file persistence (save/load, atomic writes, backup rotation), sorting, task/note
+validation, quick-add parsing, iCal export, calendar-grid math, and Google Drive's per-task sync
+merge.
 
 ## Produce a standalone build
 
@@ -167,8 +192,10 @@ that too.
 | `Ctrl+O` | Open data file |
 | `Ctrl+Shift+S` | Save data file as |
 | `F11` | Toggle Focus Mode |
+| `F12` | Toggle Calendar View |
 | `Ctrl+Alt+T` | Global quick-add (works even when Tasky isn't focused) |
 | `Ctrl+E` | Export / print the selected task's note |
+| `Ctrl+Shift+G` | Sync Google Drive now |
 | `Ctrl+Shift+P` | Insert a photo inline at the cursor |
 | `Ctrl+Shift+L` | Insert a link inline at the cursor |
 | `Ctrl+Shift+F` | Insert a file inline at the cursor |

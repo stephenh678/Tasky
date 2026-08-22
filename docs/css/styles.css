@@ -423,6 +423,15 @@ a { color: var(--accent); }
 #list-pane > .new-task-btn { width: calc(100% - 20px); margin: 0 10px 10px; }
 .sidebar-collapsed .new-task-btn { width: 40px; height: 40px; padding: 0; margin: 0 auto 12px; border-radius: 50%; }
 .sidebar-collapsed .new-task-btn .sidebar-item-label { display: none; }
+/* Desktop only (see the tablet/mobile blocks further down - below 1024px the sidebar is a
+   drawer that's hidden by default, so #list-pane's copy is the only reachable "new task" button
+   there and stays). At >=1024px the sidebar is permanently visible alongside the list pane, so
+   showing both was just the same action offered twice in the same view. The quick-add row above
+   this button covers fast text-only capture on desktop; the sidebar button remains for opening
+   straight into the full editor. */
+@media (min-width: 1024px) {
+  #list-pane > .new-task-btn { display: none; }
+}
 
 .sidebar-list { list-style: none; margin: 0; padding: 0 8px; }
 .sidebar-section-label {
@@ -455,34 +464,78 @@ a { color: var(--accent); }
 .sidebar-collapsed .sidebar-list li { justify-content: center; padding: 10px; }
 
 .list-toolbar { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.search-box-wrap { position: relative; flex: 1; display: flex; }
 .search-box {
   flex: 1;
-  padding: 8px 14px;
+  padding: 8px 30px 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
 }
-.list-filter-row { display: flex; gap: 8px; padding: 0 10px 10px; border-bottom: 1px solid var(--border); }
+.search-clear-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 50%;
+  display: flex;
+}
+.search-clear-btn:hover { background: var(--hover); color: var(--text); }
+.search-clear-btn .icon { width: 14px; height: 14px; }
+
+.quick-add-row { padding: 0 10px 10px; }
+.quick-add-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.92em;
+}
+.quick-add-input:focus { outline: none; border-style: solid; border-color: var(--accent); }
+.quick-add-input::placeholder { color: var(--text-dim); }
+
+.list-filter-row { display: flex; flex-direction: column; gap: 10px; padding: 10px; border-bottom: 1px solid var(--border); }
+.chip-group-label {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.chip-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.82em;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.chip:hover { background: var(--hover); }
+.chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .trash-actions-row { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .trash-actions-row .btn { width: 100%; }
-.filter-select {
-  flex: 1;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 0.85em;
-}
-.task-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.task-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0; }
 .task-list li {
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+  margin: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
   cursor: pointer;
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 /* .checkbox-tap-target is a <label> wrapping the checkbox (see app.js/editor.js) - by default it's
    just a transparent inline wrapper matching the old unwrapped layout; the mobile media query
@@ -492,17 +545,99 @@ a { color: var(--accent); }
 .task-list li .checkbox-tap-target { margin-top: 3px; }
 .task-row-info { flex: 1; min-width: 0; }
 .task-list li:hover { background: var(--hover); }
-.task-list li.selected { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
+.task-list li.selected { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); border-color: transparent; }
+.task-list li.pinned:not(.selected) { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .task-title { font-weight: 500; }
 .task-title .icon.pin-inline { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; color: var(--accent); display: inline-block; }
 .tag-chip button .icon { width: 10px; height: 10px; }
 .sidebar-list li .icon { width: 17px; height: 17px; }
 .task-title.done { text-decoration: line-through; color: var(--text-dim); }
 .task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.task-due-overdue { color: var(--danger-text); font-weight: 600; }
 .task-indicators { display: flex; align-items: center; gap: 4px; }
 .task-indicators .icon { width: 12px; height: 12px; }
 
 .empty-state { color: var(--text-dim); text-align: center; padding: 40px 16px; }
+
+.editor-empty-dashboard { max-width: 360px; margin: 0 auto; }
+.empty-dashboard-cards { display: flex; gap: 10px; margin-bottom: 24px; }
+.empty-dashboard-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 8px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.empty-dashboard-count { font-size: 1.6em; font-weight: 700; color: var(--accent); }
+.empty-dashboard-count.overdue { color: var(--danger-text); }
+.empty-dashboard-label { font-size: 0.75em; color: var(--text-dim); }
+.empty-dashboard-hint { margin-bottom: 20px; }
+.empty-dashboard-shortcuts {
+  text-align: left;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+}
+.shortcut-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 0.88em; }
+.shortcut-row + .shortcut-row { border-top: 1px solid var(--border); }
+.shortcut-row span:last-child { color: var(--text-dim); }
+.shortcut-keys { flex-shrink: 0; min-width: 72px; }
+.shortcut-row-link {
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.shortcut-row-link:hover span:last-child { color: var(--accent); text-decoration: underline; }
+kbd {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.shortcuts-modal-card { text-align: left; max-width: 420px; }
+.shortcuts-modal-card h2 { text-align: center; }
+.shortcuts-list { margin: 16px 0; }
+.shortcuts-hint { font-size: 0.85em !important; }
+.shortcuts-hint code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.95em;
+}
+
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--pane-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-lg);
+  padding: 8px 8px 8px 18px;
+  font-size: 0.9em;
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+}
+.undo-toast-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undo-toast .btn { color: var(--accent); font-weight: 600; flex-shrink: 0; }
 
 .editor-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .editor-done-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.9em; }
@@ -528,6 +663,8 @@ a { color: var(--accent); }
   border-radius: 6px;
   padding: 4px 6px;
 }
+.editor-field.overdue { color: var(--danger-text); }
+.editor-field.overdue input { border-color: var(--danger-text); color: var(--danger-text); }
 .editor-tags-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .editor-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag-chip {
@@ -745,7 +882,7 @@ a { color: var(--accent); }
      scale rather than the page base size. A hard 16px floor beats fighting that zoom on every
      field tap; the resulting mismatch with the text-size preference is deliberate and minor for
      these specific compact controls. */
-  .search-box, .filter-select, .tag-input, .editor-field input, .editor-field select,
+  .search-box, .quick-add-input, .tag-input, .editor-field input, .editor-field select,
   .block-checklist-item.editable input[type="text"], .checklist-add {
     font-size: 16px;
   }
@@ -770,6 +907,8 @@ a { color: var(--accent); }
     z-index: 24;
   }
   #list-pane > .new-task-btn .sidebar-item-label { display: none; }
+
+  .undo-toast { bottom: calc(var(--mobile-tabbar-height) + 12px); }
 
   .filter-toggle-btn { display: flex; flex-shrink: 0; }
   .list-filter-row {

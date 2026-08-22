@@ -181,6 +181,32 @@ sign-in cache signs Tasky out on this computer but doesn't revoke access on Goog
 that at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) if you want
 that too.
 
+## Tasky Web
+
+A mobile-friendly companion PWA at [stephenh678.github.io/Tasky](https://stephenh678.github.io/Tasky)
+— view and edit your tasks from a phone or any browser, synced through the same Google Drive
+per-task-merge sync and `.tasky` file the desktop app uses (no separate data store). Install it to
+your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
+
+It shares most of the desktop feature set — recurring tasks, tags, due dates, quick filters,
+photo/file attachments, inline rich note editing — plus:
+- **Quick-add syntax** — the list pane's "+ Add a task…" row parses `#tag`, `!due:day`, and
+  `@time` tokens exactly like the desktop quick-add box (e.g. `Submit report !due:tue @3pm
+  #finance`); unrecognized tokens are left alone in the title rather than silently eaten
+- **Undo** — `Ctrl+Z`, or the Undo snackbar that appears after the action, reverts marking a task
+  complete/incomplete or moving a task to Trash — same scope as desktop, including cleaning up a
+  recurring task's auto-spawned next occurrence
+- **Keyboard shortcuts help** — `F1` or `Ctrl+/`, or Menu → Keyboard Shortcuts
+- **Welcome dashboard** in the editor pane when no task is selected — Due Today/Overdue/Completed
+  counts plus a shortcuts cheat sheet
+- Themed sort/filter chips in place of native dropdowns, a clear-search button, and card-style
+  task rows with a distinct look for pinned tasks and overdue due dates
+
+Source lives in `docs/` and deploys automatically via GitHub Pages on push to `master`. Signing in
+depends on a small, separately-deployed Cloud Function (see
+[functions/exchange-token/](functions/exchange-token/)) that holds the OAuth client secret needed
+to complete Google's code exchange — the static site itself has no other backend.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |

@@ -8,7 +8,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <meta name="theme-color" content="#3861d6" />
-  <link rel="stylesheet" href="css/styles.css?v=28" />
+  <link rel="stylesheet" href="css/styles.css?v=29" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -47,6 +47,7 @@
               <button data-font-size="medium" title="Medium">A</button>
               <button data-font-size="large" title="Large">A</button>
             </div>
+            <button id="shortcuts-btn" class="dropdown-item">Keyboard Shortcuts</button>
             <button id="about-btn" class="dropdown-item">About Tasky Web</button>
           </div>
         </div>
@@ -83,26 +84,38 @@
 
       <section id="list-pane" class="pane list-pane">
         <div class="list-toolbar">
-          <input id="search-box" type="search" placeholder="Search… (tag:name)" class="search-box" />
+          <div class="search-box-wrap">
+            <input id="search-box" type="search" placeholder="Search… (tag:name)" class="search-box" />
+            <button id="search-clear-btn" class="search-clear-btn hidden" aria-label="Clear search" title="Clear search"></button>
+          </div>
           <button id="filter-toggle-btn" class="icon-btn filter-toggle-btn" aria-label="Sort & filter" title="Sort & filter"></button>
+        </div>
+        <div class="quick-add-row">
+          <input id="quick-add-input" type="text" class="quick-add-input" placeholder="+ Add a task…" title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
         </div>
         <button id="new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)"></button>
         <div id="list-filter-row" class="list-filter-row hidden">
-          <select id="sort-select" class="filter-select" title="Sort by">
-            <option value="modified">Sort: Modified</option>
-            <option value="created">Sort: Created</option>
-            <option value="name">Sort: Name</option>
-            <option value="due">Sort: Due date</option>
-          </select>
-          <select id="quick-filter-select" class="filter-select" title="Quick filter">
-            <option value="">All</option>
-            <option value="overdue">Overdue</option>
-            <option value="dueToday">Due Today</option>
-            <option value="noDueDate">No Due Date</option>
-            <option value="recurring">Recurring</option>
-            <option value="hasLink">With Link</option>
-            <option value="hasAttachment">With Attachment</option>
-          </select>
+          <div class="chip-group-block">
+            <div class="chip-group-label">Sort</div>
+            <div id="sort-chip-group" class="chip-group" role="group" aria-label="Sort by">
+              <button type="button" class="chip active" data-sort="modified">Modified</button>
+              <button type="button" class="chip" data-sort="created">Created</button>
+              <button type="button" class="chip" data-sort="name">Name</button>
+              <button type="button" class="chip" data-sort="due">Due date</button>
+            </div>
+          </div>
+          <div class="chip-group-block">
+            <div class="chip-group-label">Filter</div>
+            <div id="filter-chip-group" class="chip-group" role="group" aria-label="Quick filter">
+              <button type="button" class="chip active" data-filter="">All</button>
+              <button type="button" class="chip" data-filter="overdue">Overdue</button>
+              <button type="button" class="chip" data-filter="dueToday">Due Today</button>
+              <button type="button" class="chip" data-filter="noDueDate">No Due Date</button>
+              <button type="button" class="chip" data-filter="recurring">Recurring</button>
+              <button type="button" class="chip" data-filter="hasLink">With Link</button>
+              <button type="button" class="chip" data-filter="hasAttachment">With Attachment</button>
+            </div>
+          </div>
         </div>
         <div id="trash-actions-row" class="trash-actions-row hidden">
           <button id="empty-trash-btn" class="btn btn-ghost small danger">Empty Trash</button>
@@ -117,7 +130,28 @@
       <div id="pane-resizer" class="pane-resizer" role="separator" aria-orientation="vertical" aria-label="Resize task list"></div>
 
       <section id="editor-pane" class="pane editor-pane">
-        <div id="editor-empty" class="empty-state">Select a task to view it, or create a new one.</div>
+        <div id="editor-empty" class="empty-state editor-empty-dashboard">
+          <div class="empty-dashboard-cards">
+            <div class="empty-dashboard-card">
+              <span id="empty-due-today-count" class="empty-dashboard-count">0</span>
+              <span class="empty-dashboard-label">Due Today</span>
+            </div>
+            <div class="empty-dashboard-card">
+              <span id="empty-overdue-count" class="empty-dashboard-count overdue">0</span>
+              <span class="empty-dashboard-label">Overdue</span>
+            </div>
+            <div class="empty-dashboard-card">
+              <span id="empty-completed-count" class="empty-dashboard-count">0</span>
+              <span class="empty-dashboard-label">Completed</span>
+            </div>
+          </div>
+          <p class="empty-dashboard-hint">Select a task to view it, or create a new one.</p>
+          <div class="empty-dashboard-shortcuts">
+            <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span>New task</span></div>
+            <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo last action</span></div>
+            <button id="empty-shortcuts-btn" type="button" class="shortcut-row shortcut-row-link"><span class="shortcut-keys"><kbd>F1</kbd></span><span>All shortcuts…</span></button>
+          </div>
+        </div>
         <div id="editor-content" class="editor-content hidden">
           <div class="editor-actions">
             <label class="editor-done-toggle"><input type="checkbox" id="editor-done" /> Done</label>
@@ -150,6 +184,26 @@
     <nav id="mobile-tabbar" class="mobile-tabbar"></nav>
   </div>
 
+  <div id="undo-toast" class="undo-toast hidden" role="status">
+    <span id="undo-toast-text" class="undo-toast-text"></span>
+    <button id="undo-toast-btn" type="button" class="btn btn-ghost small"></button>
+  </div>
+
+  <div id="shortcuts-modal" class="modal-overlay hidden">
+    <div class="modal-card shortcuts-modal-card">
+      <button id="shortcuts-close-btn" class="icon-btn modal-close" aria-label="Close"></button>
+      <h2>Keyboard Shortcuts</h2>
+      <div class="shortcuts-list">
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span>New task</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo last action</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>Add task from the quick-add box</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Close dialogs and menus</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>F1</kbd> or <kbd>Ctrl</kbd>+<kbd>/</kbd></span><span>Show this help</span></div>
+      </div>
+      <p class="shortcuts-hint">Quick-add syntax: <code>#tag</code> · <code>!due:tue</code> (or today/tomorrow/a date) · <code>@3pm</code></p>
+    </div>
+  </div>
+
   <div id="about-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <button id="about-close-btn" class="icon-btn modal-close" aria-label="Close"></button>
@@ -163,6 +217,6 @@
   </div>
 
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script type="module" src="js/app.js?v=28"></script>
+  <script type="module" src="js/app.js?v=29"></script>
 </body>
 </html>

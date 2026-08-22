@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=28';
-import * as drive from './drive.js?v=28';
+import * as auth from './auth.js?v=29';
+import * as drive from './drive.js?v=29';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -11,11 +11,12 @@ import {
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
-} from './model.js?v=28';
-import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=28';
-import { renderEditableBody } from './editor.js?v=28';
-import { icon } from './icons.js?v=28';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=28';
+  parseQuickAdd,
+} from './model.js?v=29';
+import { deduplicateTombstones, mergeRemoteState } from './sync.js?v=29';
+import { renderEditableBody } from './editor.js?v=29';
+import { icon } from './icons.js?v=29';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=29';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -39,13 +40,20 @@ const tagList = el('tag-list');
 const taskListEl = el('task-list');
 const listEmpty = el('list-empty');
 const searchBox = el('search-box');
+const searchClearBtn = el('search-clear-btn');
+const quickAddInput = el('quick-add-input');
+const quickAddRow = document.querySelector('.quick-add-row');
 const newTaskBtn = el('new-task-btn');
 const sidebarNewTaskBtn = el('sidebar-new-task-btn');
-const sortSelect = el('sort-select');
-const quickFilterSelect = el('quick-filter-select');
+const sortChipGroup = el('sort-chip-group');
+const filterChipGroup = el('filter-chip-group');
 const listFilterRow = el('list-filter-row');
 const filterToggleBtn = el('filter-toggle-btn');
 const editorEmpty = el('editor-empty');
+const emptyDueTodayCount = el('empty-due-today-count');
+const emptyOverdueCount = el('empty-overdue-count');
+const emptyCompletedCount = el('empty-completed-count');
+const emptyShortcutsBtn = el('empty-shortcuts-btn');
 const editorContent = el('editor-content');
 const editorTitle = el('editor-title');
 const editorDue = el('editor-due');
@@ -72,6 +80,12 @@ const fontSizeSwitch = el('font-size-switch');
 const aboutBtn = el('about-btn');
 const aboutModal = el('about-modal');
 const aboutCloseBtn = el('about-close-btn');
+const shortcutsBtn = el('shortcuts-btn');
+const shortcutsModal = el('shortcuts-modal');
+const shortcutsCloseBtn = el('shortcuts-close-btn');
+const undoToast = el('undo-toast');
+const undoToastText = el('undo-toast-text');
+const undoToastBtn = el('undo-toast-btn');
 const sidebarDrawerBtn = el('sidebar-drawer-btn');
 const sidebarCollapseBtn = el('sidebar-collapse-btn');
 const navBack = el('nav-back');
@@ -125,6 +139,9 @@ filterToggleBtn.innerHTML = icon('filter');
 editorPinBtn.innerHTML = icon('pin');
 sidebarCollapseBtn.innerHTML = icon('chevronLeft');
 aboutCloseBtn.innerHTML = icon('x');
+shortcutsCloseBtn.innerHTML = icon('x');
+searchClearBtn.innerHTML = icon('x');
+undoToastBtn.innerHTML = 'Undo';
 document.querySelector('button[data-theme-choice="light"]').innerHTML = icon('sun');
 document.querySelector('button[data-theme-choice="dark"]').innerHTML = icon('moon');
 document.querySelector('button[data-theme-choice="system"]').innerHTML = icon('monitor');
@@ -165,6 +182,60 @@ function setStatus(text, { autoHide = false } = {}) {
     }, STATUS_AUTOHIDE_MS);
   }
 }
+
+// --- Undo (mirrors the desktop app's Ctrl+Z stack) ---------------------------
+// Scope matches the desktop app exactly (see MainViewModel.cs's PushUndo call sites): marking a
+// task complete/incomplete, and moving a single task to Trash. Restoring from Trash and
+// permanent delete are deliberately NOT undoable there either - restoring is already the "undo"
+// of trashing, and permanent delete already has its own confirm() dialog.
+const undoStack = [];
+const MAX_UNDO_DEPTH = 25;
+const UNDO_TOAST_MS = 6000;
+let undoToastTimer = null;
+
+function pushUndo(description, undo) {
+  undoStack.push({ description, undo });
+  if (undoStack.length > MAX_UNDO_DEPTH) undoStack.shift();
+  showUndoToast(description);
+}
+
+function popUndo() {
+  const entry = undoStack.pop();
+  if (!entry) return;
+  entry.undo();
+  hideUndoToast();
+  markDirty();
+  renderSidebar();
+  renderList();
+  const task = selectedTaskId ? findTask(selectedTaskId) : null;
+  if (task) renderEditor(task);
+  else showEmptyEditor();
+}
+
+function showUndoToast(description) {
+  clearTimeout(undoToastTimer);
+  undoToastText.textContent = description;
+  undoToast.classList.remove('hidden');
+  undoToastTimer = setTimeout(hideUndoToast, UNDO_TOAST_MS);
+}
+
+function hideUndoToast() {
+  clearTimeout(undoToastTimer);
+  undoToast.classList.add('hidden');
+}
+
+undoToastBtn.addEventListener('click', popUndo);
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+  // Don't hijack the browser's native text-field undo (e.g. correcting a typo in the title or an
+  // editor-body block, both real text-editing contexts) - only handle Ctrl+Z as an app-level
+  // action outside one of those.
+  const target = document.activeElement;
+  const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  if (isEditable) return;
+  e.preventDefault();
+  popUndo();
+});
 
 const SECTIONS = [
   { kind: 'all', label: 'All Tasks' },
@@ -269,6 +340,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeDropdowns({});
     closeAbout();
+    closeShortcuts();
   }
 });
 function closeDropdowns({ except }) {
@@ -504,6 +576,13 @@ function isSameDate(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+function isTaskOverdue(task) {
+  if (!task.DueDate || task.IsDone) return false;
+  const due = parseDotNetDate(task.DueDate);
+  const today = new Date();
+  return due < today && !isSameDate(due, today);
+}
+
 function applyQuickFilter(tasks) {
   if (!quickFilter) return tasks;
   const today = new Date();
@@ -511,7 +590,7 @@ function applyQuickFilter(tasks) {
     const due = t.DueDate ? parseDotNetDate(t.DueDate) : null;
     switch (quickFilter) {
       case 'overdue':
-        return due && due < today && !isSameDate(due, today) && !t.IsDone;
+        return isTaskOverdue(t);
       case 'dueToday':
         return due && isSameDate(due, today);
       case 'noDueDate':
@@ -704,18 +783,48 @@ function createTask() {
   editorTitle.focus();
 }
 
+// Rapid capture from the list pane's quick-add row - unlike createTask(), this never opens the
+// full editor or switches mobile views, so the input stays focused and ready for the next task.
+function createQuickTask(raw) {
+  const parsed = parseQuickAdd(raw);
+  const task = newTaskItem({ text: parsed.text || raw.trim() });
+  task.DueDate = parsed.dueDate;
+  for (const tag of parsed.tags) {
+    const lower = tag.toLowerCase(); // matches addTag()'s own normalization - tags are always lowercase
+    if (!task.Tags.includes(lower)) task.Tags.push(lower);
+  }
+  appState.Tasks.push(task);
+  if (currentSection.kind !== 'all') currentSection = { kind: 'all' };
+  markDirty();
+  renderSidebar();
+  renderList();
+}
+
 function toggleDone(task) {
   const wasDone = task.IsDone;
   task.IsDone = !wasDone;
   touch(task);
 
+  let spawned = null;
   if (task.IsDone && task.Recurrence !== RecurrenceRule.None) {
-    const next = spawnNextOccurrence(task);
-    appState.Tasks.push(next);
+    spawned = spawnNextOccurrence(task);
+    appState.Tasks.push(spawned);
   }
   markDirty();
   renderSidebar();
   renderList();
+
+  const label = task.Text || '(untitled)';
+  const description = task.IsDone
+    ? spawned
+      ? `Completed "${label}" — next occurrence created`
+      : `Completed "${label}"`
+    : `Marked "${label}" incomplete`;
+  pushUndo(description, () => {
+    task.IsDone = wasDone;
+    touch(task);
+    if (spawned) appState.Tasks = appState.Tasks.filter((t) => t.Id !== spawned.Id);
+  });
 }
 
 function togglePin(task) {
@@ -728,12 +837,22 @@ function togglePin(task) {
 }
 
 function toggleTrash(task) {
-  task.IsClosed = !task.IsClosed;
+  const wasClosed = task.IsClosed;
+  task.IsClosed = !wasClosed;
   touch(task);
   markDirty();
   renderSidebar();
   renderList();
   renderEditor(task);
+
+  // Matches the desktop app: only moving TO Trash is undoable. Restoring from Trash is already
+  // the "undo" of trashing, so it doesn't get its own undo entry.
+  if (!wasClosed) {
+    pushUndo(`Moved "${task.Text || '(untitled)'}" to Trash`, () => {
+      task.IsClosed = false;
+      touch(task);
+    });
+  }
 }
 
 function recordTombstone(taskId) {
@@ -876,9 +995,12 @@ function renderMobileTabbar() {
 
 function renderList() {
   const tasks = currentTasks();
-  // Creating a task always drops it into "All Tasks" (see createTask) - offering the button while
-  // looking at Completed or Trash would just be a confusing way to leave the page you're on.
-  newTaskBtn.classList.toggle('hidden', currentSection.kind === 'done' || currentSection.kind === 'trash');
+  // Creating a task always drops it into "All Tasks" (see createTask/createQuickTask) - offering
+  // either input while looking at Completed or Trash would just be a confusing way to leave the
+  // page you're on.
+  const hideAdd = currentSection.kind === 'done' || currentSection.kind === 'trash';
+  newTaskBtn.classList.toggle('hidden', hideAdd);
+  quickAddRow.classList.toggle('hidden', hideAdd);
   trashActionsRow.classList.toggle('hidden', currentSection.kind !== 'trash' || tasksForSection({ kind: 'trash' }).length === 0);
   doneActionsRow.classList.toggle('hidden', currentSection.kind !== 'done' || tasksForSection({ kind: 'done' }).length === 0);
   taskListEl.innerHTML = '';
@@ -910,6 +1032,7 @@ function renderList() {
   for (const task of tasks) {
     const li = document.createElement('li');
     if (task.Id === selectedTaskId) li.classList.add('selected');
+    if (task.IsPinned) li.classList.add('pinned');
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -937,6 +1060,7 @@ function renderList() {
     const info = document.createElement('div');
     info.className = 'task-row-info';
     const due = task.DueDate ? formatDate(parseDotNetDate(task.DueDate)) : '';
+    const overdue = isTaskOverdue(task);
     const indicators = [];
     if (task.Recurrence !== RecurrenceRule.None) indicators.push(icon('repeat'));
     if (task.Body.some((b) => b.Type === NoteBlockType.Link)) indicators.push(icon('link'));
@@ -945,7 +1069,7 @@ function renderList() {
     if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
     info.innerHTML = `
       <div class="task-title ${task.IsDone ? 'done' : ''}">${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>
-      <div class="task-sub">${due ? `<span>${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}</div>
+      <div class="task-sub">${due ? `<span class="${overdue ? 'task-due-overdue' : ''}">${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}</div>
     `;
 
     li.append(checkboxWrap, info);
@@ -957,6 +1081,32 @@ function renderList() {
     });
     taskListEl.appendChild(li);
   }
+
+  updateEmptyDashboard();
+}
+
+// Backs the editor pane's welcome dashboard (shown whenever no task is selected) - refreshed
+// every renderList() since a task can be checked off directly from the list without the editor
+// ever opening, and the dashboard needs to reflect that live.
+function updateEmptyDashboard() {
+  const today = new Date();
+  let dueToday = 0;
+  let overdue = 0;
+  let completed = 0;
+  for (const t of appState.Tasks) {
+    if (t.IsClosed) continue;
+    if (t.IsDone) {
+      completed++;
+      continue;
+    }
+    if (!t.DueDate) continue;
+    const due = parseDotNetDate(t.DueDate);
+    if (isSameDate(due, today)) dueToday++;
+    else if (isTaskOverdue(t)) overdue++;
+  }
+  emptyDueTodayCount.textContent = String(dueToday);
+  emptyOverdueCount.textContent = String(overdue);
+  emptyCompletedCount.textContent = String(completed);
 }
 
 function showEmptyEditor() {
@@ -975,6 +1125,7 @@ function renderEditor(task) {
 
   editorTitle.value = task.Text;
   editorDue.value = task.DueDate ? toDateInputValue(parseDotNetDate(task.DueDate)) : '';
+  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
   editorRecurrence.value = String(task.Recurrence);
 
   editorTags.innerHTML = '';
@@ -1016,6 +1167,7 @@ editorDue.addEventListener('change', () => {
   touch(task);
   markDirty();
   renderList();
+  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
 });
 
 editorRecurrence.addEventListener('change', () => {
@@ -1049,7 +1201,9 @@ editorTagInput.addEventListener('input', (e) => {
 
 editorDone.addEventListener('change', () => {
   const task = findTask(selectedTaskId);
-  if (task) toggleDone(task);
+  if (!task) return;
+  toggleDone(task);
+  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
 });
 
 editorPinBtn.addEventListener('click', () => {
@@ -1080,15 +1234,70 @@ document.addEventListener('keydown', (e) => {
 
 searchBox.addEventListener('input', () => {
   searchQuery = searchBox.value;
+  searchClearBtn.classList.toggle('hidden', !searchQuery);
   renderList();
 });
-sortSelect.addEventListener('change', () => {
-  sortKey = sortSelect.value;
+searchClearBtn.addEventListener('click', () => {
+  searchBox.value = '';
+  searchQuery = '';
+  searchClearBtn.classList.add('hidden');
+  renderList();
+  searchBox.focus();
+});
+
+sortChipGroup.addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  sortKey = btn.dataset.sort;
+  for (const chip of sortChipGroup.querySelectorAll('.chip')) chip.classList.toggle('active', chip === btn);
   renderList();
 });
-quickFilterSelect.addEventListener('change', () => {
-  quickFilter = quickFilterSelect.value;
+filterChipGroup.addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  quickFilter = btn.dataset.filter;
+  for (const chip of filterChipGroup.querySelectorAll('.chip')) chip.classList.toggle('active', chip === btn);
   renderList();
+});
+
+// --- Inline quick-add (list pane) ---------------------------------------------
+// Deliberately a one-shot parse at the Enter/commit moment, not applied to editorTitle (see
+// parseQuickAdd's home in model.js) - editorTitle is two-way bound and saves on every keystroke,
+// so there's no safe commit point to strip a "#tag" out from under someone still mid-word typing
+// it. This input has a clean commit moment (Enter), same as the desktop QuickAddWindow.
+function commitQuickAdd() {
+  if (!quickAddInput.value.trim()) return;
+  createQuickTask(quickAddInput.value);
+  quickAddInput.value = '';
+}
+quickAddInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') commitQuickAdd();
+});
+// Same Android/Gboard "insertLineBreak" fallback as editorTagInput above - some on-screen
+// keyboards never fire a real keydown for Enter/Done, only this input event.
+quickAddInput.addEventListener('input', (e) => {
+  if (e.inputType === 'insertLineBreak') commitQuickAdd();
+});
+
+// --- Keyboard shortcuts modal --------------------------------------------------
+function openShortcuts() {
+  closeDropdowns({});
+  shortcutsModal.classList.remove('hidden');
+}
+function closeShortcuts() {
+  shortcutsModal.classList.add('hidden');
+}
+shortcutsBtn.addEventListener('click', openShortcuts);
+emptyShortcutsBtn.addEventListener('click', openShortcuts);
+shortcutsCloseBtn.addEventListener('click', closeShortcuts);
+shortcutsModal.addEventListener('click', (e) => {
+  if (e.target === shortcutsModal) closeShortcuts();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F1' || ((e.ctrlKey || e.metaKey) && e.key === '/')) {
+    e.preventDefault();
+    openShortcuts();
+  }
 });
 
 // --- Mobile / tablet navigation ---------------------------------------------

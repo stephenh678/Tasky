@@ -167,3 +167,114 @@ function fileNameFromPath(path) {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] ?? '';
 }
+
+// Mirrors Services/QuickEntryParser.cs exactly (see its comment for the "why a fixed token
+// syntax, not full NLP" rationale) - #tag, !due:<value>, @<time> parsed out of quick-add text.
+// A token is only ever consumed when it actually matches one of these forms, so an unrecognized
+// "!due:whenever" or an email-address-shaped "@" is left untouched in the title instead of
+// silently mangled.
+const QUICK_ADD_TAG_RE = /(?<!\S)#([\w-]+)/g;
+const QUICK_ADD_DUE_RE = /(?<!\S)!due:(\S+)/gi;
+const QUICK_ADD_TIME_RE = /(?<!\S)@(\S+)/g;
+const QUICK_ADD_TIME_TOKEN_RE = /^(\d{1,2})(?::(\d{2}))?(am|pm)$|^(\d{1,2}):(\d{2})$/i;
+const QUICK_ADD_WEEKDAYS = {
+  sun: 0, sunday: 0,
+  mon: 1, monday: 1,
+  tue: 2, tues: 2, tuesday: 2,
+  wed: 3, weds: 3, wednesday: 3,
+  thu: 4, thur: 4, thurs: 4, thursday: 4,
+  fri: 5, friday: 5,
+  sat: 6, saturday: 6,
+};
+// Applied when !due: is given without an @ time - e.g. "!due:tomorrow" alone due for 9 AM
+// rather than midnight, so it doesn't look overdue the instant the day starts.
+const QUICK_ADD_DEFAULT_DUE_HOUR = 9;
+
+export function parseQuickAdd(input, now = new Date()) {
+  let text = input ?? '';
+
+  const tags = [];
+  text = text.replace(QUICK_ADD_TAG_RE, (m, tag) => {
+    if (!tags.some((t) => t.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+    return '';
+  });
+
+  let datePart = null;
+  text = text.replace(QUICK_ADD_DUE_RE, (m, token) => {
+    const parsed = parseQuickAddDueToken(token, now);
+    if (!parsed) return m; // unrecognized - leave it in the title rather than silently eating it
+    datePart = parsed;
+    return '';
+  });
+
+  let timePart = null;
+  text = text.replace(QUICK_ADD_TIME_RE, (m, token) => {
+    const parsed = parseQuickAddTimeToken(token);
+    if (!parsed) return m;
+    timePart = parsed;
+    return '';
+  });
+
+  let dueDate = null;
+  if (datePart) {
+    const d = new Date(datePart);
+    d.setHours(timePart ? timePart.hour : QUICK_ADD_DEFAULT_DUE_HOUR, timePart ? timePart.minute : 0, 0, 0);
+    dueDate = formatDotNetDate(d);
+  } else if (timePart) {
+    const d = new Date(now);
+    d.setHours(timePart.hour, timePart.minute, 0, 0);
+    dueDate = formatDotNetDate(d);
+  }
+
+  text = text.replace(/\s{2,}/g, ' ').trim();
+  return { text, dueDate, tags };
+}
+
+function parseQuickAddDueToken(token, reference) {
+  const lower = token.toLowerCase();
+  if (lower === 'today') return startOfDay(reference);
+  if (lower === 'tomorrow') return startOfDay(addDays(reference, 1));
+  if (lower in QUICK_ADD_WEEKDAYS) {
+    const target = QUICK_ADD_WEEKDAYS[lower];
+    const today = startOfDay(reference);
+    // Nearest occurrence of that weekday, counting today as valid (so "!due:tue" typed on a
+    // Tuesday means today, not a week out).
+    const offset = (target - today.getDay() + 7) % 7;
+    return addDays(today, offset);
+  }
+  // A literal yyyy-mm-dd date - built from parts rather than `new Date(token)` since that form
+  // is parsed as UTC midnight by spec, which can land on the wrong local day near a timezone
+  // boundary. Any other shape falls back to the native parser (e.g. "8/25/2026").
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(token);
+  if (iso) {
+    const [, y, mo, d] = iso;
+    return new Date(Number(y), Number(mo) - 1, Number(d));
+  }
+  const d = new Date(token);
+  return isNaN(d.getTime()) ? null : startOfDay(d);
+}
+
+function parseQuickAddTimeToken(token) {
+  const m = QUICK_ADD_TIME_TOKEN_RE.exec(token);
+  if (!m) return null;
+  if (m[3]) {
+    const hour12 = Number(m[1]);
+    const minute = m[2] ? Number(m[2]) : 0;
+    if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return null;
+    const isPm = m[3].toLowerCase() === 'pm';
+    return { hour: (hour12 % 12) + (isPm ? 12 : 0), minute };
+  }
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function startOfDay(d) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}

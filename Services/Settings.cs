@@ -13,6 +13,16 @@ public class Settings
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
     public bool IsVerboseLogging { get; set; } = false;
+    // Automatic Backups\ snapshots (see TodoStore.BackupExistingFile) - originally fired on every
+    // single save, which during active editing meant a new snapshot every ~700ms and only a
+    // shallow few-minutes window once the fixed 10-backup cap pruned the rest. Interval-gated and
+    // age-retained instead, so backups actually cover a meaningful stretch of time. Daily by
+    // default per explicit user preference - note this does mean up to ~24h of edits can sit
+    // between snapshots with no fresh recovery point if something goes wrong; a shorter interval
+    // is available in Settings > Backup for anyone who wants a tighter safety margin instead.
+    public bool AutoBackupEnabled { get; set; } = true;
+    public int AutoBackupIntervalMinutes { get; set; } = 1440; // Daily
+    public int AutoBackupRetentionDays { get; set; } = 30;
     public bool IsGoogleDriveEnabled { get; set; } = false;
     // Superseded by GoogleDriveFileIdsByFile - kept only so upgrading installs can migrate
     // their one cached ID forward instead of losing it. No longer written to.

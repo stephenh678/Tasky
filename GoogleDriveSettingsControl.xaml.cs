@@ -4,12 +4,17 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using TodoApp.Services;
 
 namespace TodoApp;
 
-public partial class GoogleDriveWindow : Window
+// Was GoogleDriveWindow (a standalone dialog) - now embedded as one section of the unified
+// SettingsWindow instead of its own separate window. Behavior is unchanged from that version;
+// only Window-specific bits (title bar theming, the old Close button, Owner=this for the file
+// picker) were adapted for living inside another window's content instead of being one itself.
+public partial class GoogleDriveSettingsControl : UserControl
 {
     private readonly GoogleDriveService _driveService;
     private readonly Settings _settings;
@@ -18,12 +23,11 @@ public partial class GoogleDriveWindow : Window
     private readonly Func<string, string, Task<bool>> _onAttachExistingRemoteFile;
     private readonly Func<bool> _onCreateNewLocalFile;
 
-    public GoogleDriveWindow(
+    public GoogleDriveSettingsControl(
         GoogleDriveService driveService, Settings settings, SettingsStore settingsStore, Func<Task> onSyncRequested,
         Func<string, string, Task<bool>> onAttachExistingRemoteFile, Func<bool> onCreateNewLocalFile)
     {
         InitializeComponent();
-        ThemeService.ApplyTitleBar(this);
         _driveService = driveService;
         _settings = settings;
         _settingsStore = settingsStore;
@@ -92,6 +96,15 @@ public partial class GoogleDriveWindow : Window
                 _settings.GoogleDriveAccountEmail = email;
                 _settingsStore.Save(_settings);
 
+                // This control is constructed fresh every time Settings is opened, never cached -
+                // if the user closes the Settings window while the interactive browser auth above
+                // was still in flight, this control is no longer hosted in any visible window by
+                // the time we get here. IsLoaded goes false once a control's window closes. The
+                // settings just persisted above are real and should stick regardless; what this
+                // guards is only the UI updates and the file-picker/sync flow below, which need a
+                // live window and would otherwise run silently against a detached control.
+                if (!IsLoaded) return;
+
                 UpdateConnectionStatusUI();
 
                 // First-ever connect on this device is exactly the moment ambiguity matters most:
@@ -126,7 +139,7 @@ public partial class GoogleDriveWindow : Window
         catch (Exception ex)
         {
             ProgressStatusText.Text = $"Authentication error: {ex.Message}";
-            AppLogger.Error("GoogleDriveWindow", "Connect error", ex);
+            AppLogger.Error("GoogleDriveSettingsControl", "Connect error", ex);
         }
         finally
         {
@@ -168,7 +181,7 @@ public partial class GoogleDriveWindow : Window
         catch (Exception ex)
         {
             ProgressStatusText.Text = $"Sync failed: {ex.Message}";
-            AppLogger.Error("GoogleDriveWindow", "SyncNow error", ex);
+            AppLogger.Error("GoogleDriveSettingsControl", "SyncNow error", ex);
         }
         finally
         {
@@ -193,7 +206,7 @@ public partial class GoogleDriveWindow : Window
         catch (Exception ex)
         {
             ProgressStatusText.Text = $"Sync failed: {ex.Message}";
-            AppLogger.Error("GoogleDriveWindow", "ChooseFile error", ex);
+            AppLogger.Error("GoogleDriveSettingsControl", "ChooseFile error", ex);
         }
         finally
         {
@@ -221,7 +234,7 @@ public partial class GoogleDriveWindow : Window
             return true;
         }
 
-        var picker = new SelectGoogleDriveFileWindow(remoteFiles) { Owner = this };
+        var picker = new SelectGoogleDriveFileWindow(remoteFiles) { Owner = Window.GetWindow(this) };
         if (picker.ShowDialog() != true) return false;
 
         if (picker.Result == GoogleDriveFilePickerResult.UseExisting
@@ -292,9 +305,7 @@ public partial class GoogleDriveWindow : Window
         }
         catch (Exception ex)
         {
-            AppLogger.Error("GoogleDriveWindow", "Failed to open Google Cloud Console link", ex);
+            AppLogger.Error("GoogleDriveSettingsControl", "Failed to open Google Cloud Console link", ex);
         }
     }
-
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 }

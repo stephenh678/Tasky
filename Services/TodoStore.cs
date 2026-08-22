@@ -13,8 +13,15 @@ namespace TodoApp.Services;
 /// </summary>
 public class TodoStore
 {
-    private const int MaxBackups = 10;
     private readonly SemaphoreSlim _saveLock = new(1, 1);
+
+    // Mirrors Settings.AutoBackup* - MainViewModel applies the loaded/edited settings here rather
+    // than this class reading Settings directly, so TodoStore (a plain file-IO service used well
+    // below the ViewModel layer) doesn't need to know the Settings type at all. Defaults match
+    // Settings.cs's own defaults for a TodoStore used standalone (e.g. in a future test).
+    public bool AutoBackupEnabled { get; set; } = true;
+    public int AutoBackupIntervalMinutes { get; set; } = 1440;
+    public int AutoBackupRetentionDays { get; set; } = 30;
 
     public static string GetDefaultDataFilePath()
     {
@@ -177,7 +184,7 @@ public class TodoStore
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            if (File.Exists(path))
+            if (File.Exists(path) && AutoBackupEnabled)
                 await Task.Run(() => BackupExistingFile(path));
 
             var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
@@ -250,15 +257,30 @@ public class TodoStore
     /// <param name="dataFilePath">The path to the data file to restore to</param>
     public void RestoreBackup(string backupFilePath, string dataFilePath)
     {
+        // force: true - restoring is a deliberate, risky action the confirmation dialog promises
+        // is itself undoable by backing up first. That guarantee has to hold even if the user has
+        // auto-backup turned off, or the last periodic snapshot was recent enough that the normal
+        // interval gate below would otherwise skip it.
         if (File.Exists(dataFilePath))
-            BackupExistingFile(dataFilePath);
+            BackupExistingFile(dataFilePath, force: true);
         File.Copy(backupFilePath, dataFilePath, overwrite: true);
     }
 
-    // Snapshots the file as it was right before each overwrite, so a bad edit or a crash mid-write
+    // A generous ceiling independent of AutoBackupRetentionDays - age-based retention alone has no
+    // upper bound on file COUNT (a short interval + a long retention could otherwise accumulate
+    // thousands of snapshots), so this caps it regardless of how those two settings are combined.
+    // Far above what any reasonable interval/retention combination should normally reach, so it's
+    // a safety net, not a replacement for age-based pruning.
+    private const int MaxBackupSafetyCount = 500;
+
+    // Snapshots the file as it was right before an overwrite, so a bad edit or a crash mid-write
     // is recoverable by hand from Backups\ next to the data file. Best-effort: a backup failure
-    // must never block the actual save.
-    private static void BackupExistingFile(string path)
+    // must never block the actual save. Interval-gated (skip if the newest existing snapshot is
+    // still within AutoBackupIntervalMinutes) and age-retained (prune anything older than
+    // AutoBackupRetentionDays) rather than a fixed "keep the last N" count - what "10" means
+    // shifts with the interval itself, so a duration is the only definition that stays meaningful
+    // regardless of how often backups actually run.
+    private void BackupExistingFile(string path, bool force = false)
     {
         try
         {
@@ -268,14 +290,39 @@ public class TodoStore
 
             var name = Path.GetFileNameWithoutExtension(path);
             var ext = Path.GetExtension(path);
+            var pattern = new System.Text.RegularExpressions.Regex($@"^{System.Text.RegularExpressions.Regex.Escape(name)}_(\d{{8}}_\d{{6}}_\d{{3}}){System.Text.RegularExpressions.Regex.Escape(ext)}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            // Each backup's own creation time is parsed from its filename rather than read via
+            // File.GetLastWriteTime: File.Copy below preserves the SOURCE file's timestamp on the
+            // copy instead of stamping "now" onto it, and this method runs before `path` is
+            // overwritten - so the filesystem mtime a freshly-created backup gets is actually the
+            // PREVIOUS save's write time, one full cycle stale. That staleness made the interval
+            // gate below compare against a timestamp that was always ~2 cycles old, which defeats
+            // it entirely (confirmed: it degrades to creating a new backup on nearly every save,
+            // regardless of AutoBackupIntervalMinutes). The filename's own {yyyyMMdd_HHmmss_fff},
+            // captured fresh each time a backup is actually made, has no such staleness problem.
+            var existing = Directory.GetFiles(backupsDir, $"{name}_*{ext}")
+                .Select(f =>
+                {
+                    var match = pattern.Match(Path.GetFileName(f));
+                    return match.Success && DateTime.TryParseExact(match.Groups[1].Value, "yyyyMMdd_HHmmss_fff",
+                        System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var ts)
+                        ? (Path: f, Timestamp: ts)
+                        : default;
+                })
+                .Where(x => x.Path is not null)
+                .OrderByDescending(x => x.Timestamp)
+                .ToList();
+
+            if (!force && existing.Count > 0 && DateTime.Now - existing[0].Timestamp < TimeSpan.FromMinutes(AutoBackupIntervalMinutes))
+                return;
+
             var backupPath = Path.Combine(backupsDir, $"{name}_{DateTime.Now:yyyyMMdd_HHmmss_fff}{ext}");
             File.Copy(path, backupPath, overwrite: false);
 
-            var pattern = new System.Text.RegularExpressions.Regex($@"^{System.Text.RegularExpressions.Regex.Escape(name)}_\d{{8}}_\d{{6}}_\d{{3}}{System.Text.RegularExpressions.Regex.Escape(ext)}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            var stale = Directory.GetFiles(backupsDir, $"{name}_*{ext}")
-                .Where(f => pattern.IsMatch(Path.GetFileName(f)))
-                .OrderByDescending(f => f, StringComparer.Ordinal)
-                .Skip(MaxBackups);
+            var cutoff = DateTime.Now.AddDays(-AutoBackupRetentionDays);
+            var stale = existing.Where(x => x.Timestamp < cutoff).Select(x => x.Path)
+                .Union(existing.Skip(MaxBackupSafetyCount).Select(x => x.Path));
             foreach (var old in stale)
             {
                 try { File.Delete(old); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

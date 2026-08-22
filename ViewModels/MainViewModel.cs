@@ -228,6 +228,62 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // Mirrors TodoStore's own AutoBackup* properties - kept in sync on every set (not just once at
+    // startup) so a change made in the Settings window while the app is running takes effect on
+    // the very next save, not just after a restart. All three setters push through the same
+    // ApplyBackupSettingsToStore() the startup path already uses, rather than each one duplicating
+    // its own single-field copy to _store - one shared place for "how Settings reaches TodoStore".
+    public bool AutoBackupEnabled
+    {
+        get => _settings.AutoBackupEnabled;
+        set
+        {
+            if (_settings.AutoBackupEnabled == value) return;
+            _settings.AutoBackupEnabled = value;
+            ApplyBackupSettingsToStore();
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public int AutoBackupIntervalMinutes
+    {
+        get => _settings.AutoBackupIntervalMinutes;
+        set
+        {
+            if (_settings.AutoBackupIntervalMinutes == value) return;
+            _settings.AutoBackupIntervalMinutes = value;
+            ApplyBackupSettingsToStore();
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public int AutoBackupRetentionDays
+    {
+        get => _settings.AutoBackupRetentionDays;
+        set
+        {
+            // A zero/negative value would mean "retain nothing" - every backup just made would
+            // immediately qualify for pruning on the very next save, which isn't a meaningful
+            // setting anyone would actually want, so floor it rather than accept it as entered.
+            var requested = value;
+            if (value < 1) value = 1;
+            if (_settings.AutoBackupRetentionDays == value)
+            {
+                // The clamp changed what was typed (e.g. "0" -> 1) even though the stored setting
+                // itself didn't move - still notify, or the TextBox keeps showing the un-clamped
+                // text the user typed instead of the value that's actually in effect.
+                if (requested != value) OnPropertyChanged();
+                return;
+            }
+            _settings.AutoBackupRetentionDays = value;
+            ApplyBackupSettingsToStore();
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
     public bool IsFocusMode
     {
         get => _isFocusMode;
@@ -295,7 +351,9 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand ExportBackupCommand { get; private set; } = null!;
     public RelayCommand ImportBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
+    public RelayCommand OpenDebugLogCommand { get; private set; } = null!;
     public RelayCommand GoogleDriveCommand { get; private set; } = null!;
+    public RelayCommand SettingsCommand { get; private set; } = null!;
     public RelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
 
     public bool IsGoogleDriveConnected => _googleDrive.IsAuthenticated;
@@ -309,6 +367,7 @@ public class MainViewModel : INotifyPropertyChanged
     public MainViewModel()
     {
         _settings = _settingsStore.Load();
+        ApplyBackupSettingsToStore();
         _isDarkTheme = _settings.Theme == "Dark";
         _isSidebarCollapsed = _settings.SidebarCollapsed;
         ThemeService.Apply(_settings.Theme);
@@ -638,9 +697,15 @@ public class MainViewModel : INotifyPropertyChanged
 
             string extractedDataFile;
             IReadOnlyList<string> attachmentFiles;
+            int backupTaskCount;
             try
             {
                 (extractedDataFile, attachmentFiles) = BackupService.ExtractToTemp(dialog.FileName);
+                // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
+                // the backup's - reading the extracted backup itself is the only way to show its
+                // real count here, same as how the Drive sync merge peeks at a downloaded remote
+                // file. Kept in this same try/catch since a corrupt backup can fail either step.
+                backupTaskCount = _store.Load(extractedDataFile).Tasks.Count;
             }
             catch (Exception ex)
             {
@@ -648,9 +713,8 @@ public class MainViewModel : INotifyPropertyChanged
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-
             var confirm = ThemedMessageBox.Show(
-                $"This will replace your currently open task list with the backup's {AllTasks.Count.ToString()} " +
+                $"This will replace your currently open task list with the backup's {backupTaskCount} " +
                 $"task(s) and restore its {attachmentFiles.Count} attachment(s).\n\n" +
                 "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
                 "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
@@ -690,16 +754,36 @@ public class MainViewModel : INotifyPropertyChanged
             ThemedMessageBox.Show("Debug log file has been cleared.", "Debug Log", MessageBoxButton.OK, MessageBoxImage.Information);
         });
 
-        GoogleDriveCommand = new RelayCommand(_ => OpenGoogleDriveWindow());
+        OpenDebugLogCommand = new RelayCommand(_ =>
+        {
+            AppLogger.Info("MainViewModel", "User requested to open debug log file");
+            AppLogger.OpenLogFile();
+        });
+
+        GoogleDriveCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.GoogleDrive));
 
         SyncGoogleDriveNowCommand = new RelayCommand(async _ => await PerformGoogleDriveSyncAsync());
+
+        SettingsCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.General));
     }
 
-    private void OpenGoogleDriveWindow()
+    // Applies loaded Settings to TodoStore once at startup - AutoBackupEnabled/IntervalMinutes/
+    // RetentionDays above keep them in sync on every subsequent change, but the initial load
+    // doesn't go through those property setters (nothing "changed" yet), so this covers that.
+    private void ApplyBackupSettingsToStore()
     {
-        var window = new GoogleDriveWindow(
+        _store.AutoBackupEnabled = _settings.AutoBackupEnabled;
+        _store.AutoBackupIntervalMinutes = _settings.AutoBackupIntervalMinutes;
+        _store.AutoBackupRetentionDays = _settings.AutoBackupRetentionDays;
+    }
+
+    private void OpenSettingsWindow(SettingsSection initialSection)
+    {
+        var driveControl = new GoogleDriveSettingsControl(
             _googleDrive, _settings, _settingsStore, () => PerformGoogleDriveSyncAsync(),
-            AttachExistingGoogleDriveFileAsync, CreateNewLocalFileForSync)
+            AttachExistingGoogleDriveFileAsync, CreateNewLocalFileForSync);
+
+        var window = new SettingsWindow(this, driveControl, initialSection)
         {
             Owner = Application.Current?.MainWindow
         };
@@ -814,7 +898,7 @@ public class MainViewModel : INotifyPropertyChanged
     {
         if (!_googleDrive.IsAuthenticated)
         {
-            if (!isSilentOnExit) OpenGoogleDriveWindow();
+            if (!isSilentOnExit) OpenSettingsWindow(SettingsSection.GoogleDrive);
             return;
         }
 
@@ -917,6 +1001,23 @@ public class MainViewModel : INotifyPropertyChanged
                 catch (InvalidDataException ex)
                 {
                     AppLogger.Warn("MainViewModel", $"Remote Google Drive file '{remoteId}' isn't readable ({ex.Message}) - skipping merge and uploading local state as-is.");
+                }
+                catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // The cached remote file ID no longer exists on Drive - the user deleted the
+                    // Tasky folder (or just this file), or Settings.json still remembers a file
+                    // from before a disconnect/reconnect. Same "stale cache, not a real failure"
+                    // situation EnsureUsableTaskyFolderAsync already handles for a stale FOLDER
+                    // ID (falls back to creating a fresh one); this is the missing counterpart for
+                    // a stale FILE ID - DownloadFileAsync has no try/catch of its own around the
+                    // actual Files.Get/download call, so this 404 would otherwise bubble all the
+                    // way up past the catch above (InvalidDataException doesn't match a
+                    // GoogleApiException) into the generic handler and surface as a scary "Google
+                    // Drive sync failed" dialog on what should just be a self-healing first sync.
+                    AppLogger.Warn("MainViewModel", $"Cached Google Drive file '{remoteId}' no longer exists (404) - clearing the stale reference and uploading local state as a new file.");
+                    _settings.GoogleDriveFileIdsByFile.Remove(fileKey);
+                    if (_settings.GoogleDriveFileId == remoteId) _settings.GoogleDriveFileId = null;
+                    remoteId = null; // so the upload below creates a new file instead of retrying the dead one
                 }
                 finally
                 {

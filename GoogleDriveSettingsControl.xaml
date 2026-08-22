@@ -1,13 +1,8 @@
-<Window x:Class="TodoApp.GoogleDriveWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Google Drive Cloud Sync Setup" Width="480" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
-        Icon="Assets/icon.ico"
-        Background="{DynamicResource BackgroundBrush}">
-    <Grid Margin="20">
+<UserControl x:Class="TodoApp.GoogleDriveSettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -99,8 +94,5 @@
                 </StackPanel>
             </Border>
         </Expander>
-
-        <!-- Close Button -->
-        <Button Grid.Row="5" Content="Close" Padding="16,6" HorizontalAlignment="Right" IsCancel="True" Click="Close_Click"/>
     </Grid>
-</Window>
+</UserControl>

@@ -1275,12 +1275,6 @@ public partial class MainWindow : Window
         _activeEditor.Selection.ApplyPropertyValue(TextElement.BackgroundProperty, ToBrush(hex));
     }
 
-    private void OpenDebugLog_Click(object sender, RoutedEventArgs e)
-    {
-        AppLogger.Info("MainWindow", "User requested to open debug log file");
-        AppLogger.OpenLogFile();
-    }
-
     private static Brush ToBrush(string hex)
         => hex == "Transparent" ? Brushes.Transparent : (Brush)new BrushConverter().ConvertFromString(hex)!;
 }

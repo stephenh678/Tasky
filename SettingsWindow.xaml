@@ -1,0 +1,126 @@
+<Window x:Class="TodoApp.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:TodoApp.Converters"
+        Title="Settings" Width="620" Height="480" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Icon="Assets/icon.ico"
+        Background="{DynamicResource BackgroundBrush}">
+    <Window.Resources>
+        <conv:EnumEqualsVisibilityConverter x:Key="EnumEqualsVis"/>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="150"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Section nav -->
+        <ListBox x:Name="NavList" Grid.Row="0" Grid.Column="0"
+                 Background="{DynamicResource SidebarBackgroundBrush}"
+                 BorderThickness="0,0,1,0" BorderBrush="{DynamicResource SecondaryBrush}"
+                 Padding="6">
+            <ListBoxItem Content="General" Tag="General" Padding="10,8" FontSize="13"/>
+            <ListBoxItem Content="Backup" Tag="Backup" Padding="10,8" FontSize="13"/>
+            <ListBoxItem Content="Google Drive" Tag="GoogleDrive" Padding="10,8" FontSize="13"/>
+            <ListBoxItem Content="Advanced" Tag="Advanced" Padding="10,8" FontSize="13"/>
+        </ListBox>
+
+        <!-- Section content -->
+        <Grid Grid.Row="0" Grid.Column="1" Margin="24">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- General -->
+                    <StackPanel x:Name="GeneralPanel"
+                                Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=General}">
+                        <TextBlock Text="General" FontSize="18" FontWeight="Bold" Margin="0,0,0,16"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"/>
+                        <CheckBox Content="Dark theme" FontSize="13" Margin="0,0,0,12"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding IsDarkTheme}"/>
+                        <CheckBox Content="Enable reminders" FontSize="13"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding RemindersEnabled}"/>
+                    </StackPanel>
+
+                    <!-- Backup -->
+                    <StackPanel x:Name="BackupPanel"
+                                Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Backup}">
+                        <TextBlock Text="Backup" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"/>
+                        <TextBlock Text="A snapshot of your data file is kept in a Backups folder next to it, so a bad edit or accidental change is always recoverable (see File &gt; Restore from Backup)."
+                                   FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
+
+                        <CheckBox x:Name="AutoBackupCheckBox" Content="Enable automatic backups" FontWeight="SemiBold"
+                                  FontSize="13" Margin="0,0,0,14" Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding AutoBackupEnabled}"/>
+
+                        <StackPanel x:Name="BackupOptionsPanel" IsEnabled="{Binding IsChecked, ElementName=AutoBackupCheckBox}">
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="140"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Back up every" VerticalAlignment="Center"
+                                           FontSize="13" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                <ComboBox x:Name="IntervalCombo" Grid.Column="1"
+                                          SelectionChanged="IntervalCombo_SelectionChanged">
+                                    <ComboBoxItem Tag="60" Content="Hour"/>
+                                    <ComboBoxItem Tag="1440" Content="Day"/>
+                                    <ComboBoxItem Tag="10080" Content="Week"/>
+                                </ComboBox>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="140"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Keep backups for (days)" VerticalAlignment="Center"
+                                           FontSize="13" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                <TextBox x:Name="RetentionDaysTextBox" Grid.Column="1" Padding="5,3"
+                                         Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource PrimaryTextBrush}"
+                                         PreviewTextInput="RetentionDaysTextBox_PreviewTextInput"
+                                         DataObject.Pasting="RetentionDaysTextBox_Pasting"
+                                         Text="{Binding AutoBackupRetentionDays, UpdateSourceTrigger=PropertyChanged}"/>
+                            </Grid>
+                        </StackPanel>
+
+                        <TextBlock Text="A backup only happens the next time something is actually saved - turning this off (or a long interval) doesn't delete backups already on disk, it just stops new ones and stops pruning old ones."
+                                   FontSize="11" Margin="0,14,0,0" TextWrapping="Wrap" FontStyle="Italic"
+                                   Foreground="{DynamicResource TertiaryBrush}"/>
+                    </StackPanel>
+
+                    <!-- Google Drive: content is the GoogleDriveSettingsControl instance passed in -->
+                    <ContentControl x:Name="GoogleDriveHost"
+                                     Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=GoogleDrive}"/>
+
+                    <!-- Advanced -->
+                    <StackPanel x:Name="AdvancedPanel"
+                                Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Advanced}">
+                        <TextBlock Text="Advanced" FontSize="18" FontWeight="Bold" Margin="0,0,0,16"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"/>
+                        <CheckBox Content="Verbose logging" FontSize="13" Margin="0,0,0,16"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding IsVerboseLogging}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Open Debug Log File..." Padding="10,6"
+                                    Command="{Binding OpenDebugLogCommand}"/>
+                            <Button Content="Clear Debug Log File..." Padding="10,6" Margin="8,0,0,0"
+                                    Command="{Binding ClearDebugLogCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Close -->
+        <Button Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Content="Close" Padding="16,6"
+                Margin="16" HorizontalAlignment="Right" IsCancel="True" IsDefault="True" Click="Close_Click"/>
+    </Grid>
+</Window>

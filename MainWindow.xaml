@@ -147,7 +147,7 @@
                            Width="18" TextAlignment="Center" Foreground="{DynamicResource PrimaryTextBrush}"/>
                 <TextBlock Text="{Binding Label}" FontSize="13.5" Margin="8,0,0,0"
                            Foreground="{DynamicResource PrimaryTextBrush}"
-                           Visibility="{Binding DataContext.IsSidebarCollapsed, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBoolToVis}}"/>
+                           Visibility="{Binding DataContext.IsSidebarShowingIconsOnly, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBoolToVis}}"/>
                 <!-- Selection is driven by this MouseBinding, not by SelectedItem's TwoWay binding
                      below (the ListBox still declares SelectedItem for keyboard/arrow-key nav and
                      screen-reader semantics, but that binding alone proved unreliable as the ONLY
@@ -489,9 +489,13 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
                            Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
-                           Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+                           Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
+                <!-- Hidden in Focus Mode: the sidebar's icon-rail width there is forced (see
+                     SidebarWidth), not a persisted choice, so there's nothing for this toggle to
+                     do until Focus Mode ends. -->
                 <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar">
+                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar"
+                        Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}">
                     <TextBlock Text="&#x2630;" Style="{StaticResource IconGlyph}"/>
                 </Button>
             </Grid>
@@ -506,7 +510,7 @@
 
             <TextBlock Grid.Row="3" Text="TAGS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
-                       Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
 
             <ListBox x:Name="TagListBox" Grid.Row="4" Background="Transparent" BorderThickness="0"
                       ItemsSource="{Binding TagItems}" SelectedItem="{Binding SelectedSidebarItem}"
@@ -518,7 +522,7 @@
 
             <TextBlock Grid.Row="6" Text="VIEWS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
-                       Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
 
             <ListBox x:Name="ViewListBox" Grid.Row="7" Background="Transparent" BorderThickness="0"
                       ItemsSource="{Binding ViewItems}" SelectedItem="{Binding SelectedSidebarItem}"
@@ -1030,6 +1034,7 @@
                              Text="{Binding Task.Text, UpdateSourceTrigger=PropertyChanged}"
                              IsReadOnly="{Binding IsReadOnly}"
                              FontSize="28" FontWeight="Bold" Padding="0" Margin="0,20,0,0"
+                             TextWrapping="Wrap" AcceptsReturn="False"
                              Foreground="{DynamicResource PrimaryTextBrush}"
                              BorderThickness="0" Background="Transparent"
                              SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
@@ -1176,7 +1181,7 @@
                         </ItemsControl>
 
                         <!-- Unified note body: single continuous inline Word-like document canvas -->
-                        <Grid x:Name="NoteBody" Background="Transparent" MinHeight="500" Margin="0,12,0,0"
+                        <Grid x:Name="NoteBody" Background="Transparent" MinHeight="200" Margin="0,12,0,0"
                               AllowDrop="True"
                               DragEnter="NoteBody_DragEnter"
                               DragOver="NoteBody_DragOver"
@@ -1185,7 +1190,7 @@
                             <RichTextBox x:Name="NoteEditor"
                                          DataContext="{Binding PrimaryBlock}"
                                          Padding="0" VerticalContentAlignment="Top"
-                                         MinHeight="500"
+                                         MinHeight="200"
                                          Foreground="{DynamicResource PrimaryTextBrush}" FontSize="14"
                                          AcceptsReturn="True" AcceptsTab="True"
                                          GotFocus="RichTextBox_GotFocus"

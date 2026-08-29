@@ -459,6 +459,7 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 OnPropertyChanged(nameof(SidebarWidth));
                 OnPropertyChanged(nameof(CollapseListColumnForFocusMode));
+                OnPropertyChanged(nameof(IsSidebarShowingIconsOnly));
             }
         }
     }
@@ -480,14 +481,26 @@ public class MainViewModel : INotifyPropertyChanged
         {
             if (!SetField(ref _isSidebarCollapsed, value)) return;
             OnPropertyChanged(nameof(SidebarWidth));
+            OnPropertyChanged(nameof(IsSidebarShowingIconsOnly));
             _settings.SidebarCollapsed = value;
             _settingsStore.Save(_settings);
         }
     }
 
-    public GridLength SidebarWidth => IsFocusMode
-        ? new GridLength(0)
-        : new GridLength(IsSidebarCollapsed ? 46 : 220);
+    // Focus Mode used to hide the sidebar entirely (width 0) - now it shows the same compact
+    // icon-only rail the manual collapse toggle produces instead, so All Tasks/Tags/etc. stay one
+    // click away without dragging the full 220px sidebar back in. The manual toggle (see
+    // IsSidebarCollapsed) still tracks its own persisted state underneath; Focus Mode only forces
+    // the icon-rail width while it's active and reverts to whatever that state was once it ends.
+    public GridLength SidebarWidth => (IsFocusMode || IsSidebarCollapsed)
+        ? new GridLength(46)
+        : new GridLength(220);
+
+    // Drives every "hide the label, icon only" binding in the sidebar (see SidebarItemTemplate,
+    // and the TASKY/TAGS/VIEWS section headers in MainWindow.xaml) - true whenever the sidebar is
+    // rendered at the 46px icon-rail width, whether that's from the user's own collapse toggle or
+    // from Focus Mode forcing it.
+    public bool IsSidebarShowingIconsOnly => IsFocusMode || IsSidebarCollapsed;
 
     public bool HasSeenWelcomeTour
     {

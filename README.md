@@ -251,3 +251,10 @@ to complete Google's code exchange — the static site itself has no other backe
 | `Ctrl+Shift+F` | Insert a file inline at the cursor |
 | `Ctrl+Shift+C` | Insert a checklist item inline at the cursor |
 | `Ctrl+Shift+K` | Insert a table inline at the cursor |
+
+## Disclaimer
+
+Tasky is provided as-is with no warranty — see [LICENSE](LICENSE) for the full MIT terms,
+including the liability disclaimer. Auto-save, rolling backups, and Google Drive sync (see
+**Data safety** and **Cloud Sync & Backup** above) are all there to protect your tasks, but
+nothing is guaranteed: keep independent backups of anything you can't afford to lose.

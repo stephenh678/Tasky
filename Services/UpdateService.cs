@@ -173,6 +173,18 @@ $deadline = (Get-Date).AddSeconds(20)
 $applied = $false
 while ((Get-Date) -lt $deadline -and -not $applied) {
     try {
+        # Mirror, not just overwrite: remove any file already in the install folder that isn't
+        # part of this release before copying the new ones in. Otherwise a file a past release
+        # shipped but this one doesn't (e.g. the loose dependency DLLs from before Tasky switched
+        # to a single-file build) silently survives every update forever instead of going away
+        # once the release that stops shipping it is applied.
+        $newFiles = Get-ChildItem -LiteralPath '{{ExtractedDir}}' -Recurse -File |
+            ForEach-Object { $_.FullName.Substring('{{ExtractedDir}}'.Length + 1) }
+        Get-ChildItem -LiteralPath '{{installDir}}' -Recurse -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $rel = $_.FullName.Substring('{{installDir}}'.Length + 1)
+                if ($newFiles -notcontains $rel) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
         Copy-Item -Path '{{ExtractedDir}}\*' -Destination '{{installDir}}' -Recurse -Force -ErrorAction Stop
         $applied = $true
     } catch {

@@ -26,7 +26,7 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=83';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=10';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';

@@ -19,6 +19,12 @@
     <Product>Tasky</Product>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <Version>1.1.0</Version>
+    <!-- Baked in rather than left as CLI-only flags in README.md's publish command - a publish
+         that forgets `-p:SelfContained=true -p:PublishSingleFile=true` silently produces a
+         framework-dependent build with every dependency loose alongside Tasky.exe instead of
+         bundled into it, which Uninstall-Tasky.ps1's known-files list doesn't expect. -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
   </PropertyGroup>
 
   <ItemGroup>

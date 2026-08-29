@@ -28,6 +28,13 @@ $AppFolder = $PSScriptRoot
 $AppDataFolder = Join-Path $env:APPDATA "Tasky"
 $SettingsPath = Join-Path $AppDataFolder "settings.json"
 $DocumentsFolder = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)) "Tasky"
+# Self-update staging cache (Services/UpdateService.cs) - a previously-downloaded/extracted
+# update can leave a near-full second copy of the app here, distinct from %APPDATA%\Tasky above.
+$LocalAppDataFolder = Join-Path $env:LOCALAPPDATA "Tasky"
+# "Start with Windows" toggle (Services/StartupService.cs) - app registration, not user data,
+# so like $AppDataFolder this is removed unconditionally rather than gated on $keepData.
+$RunKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$RunValueName = "Tasky"
 
 # Exact files the release zip ships (Tasky.exe + its native DLLs, and this uninstaller). Named
 # explicitly rather than wiping $AppFolder wholesale - this can only ever remove files it
@@ -69,9 +76,18 @@ if (-not $isAdmin -and -not (Test-CanWrite $AppFolder)) {
     # command line (e.g. "C:\Program Files\Tasky\..."), so an unquoted path here gets silently
     # truncated at the space and the relaunch fails instantly with no visible error.
     $quotedScriptPath = '"' + $PSCommandPath + '"'
-    Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $quotedScriptPath
-    ) -Verb RunAs
+    try {
+        Start-Process -FilePath "powershell.exe" -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $quotedScriptPath
+        ) -Verb RunAs -ErrorAction Stop
+    } catch {
+        # Most commonly: the user clicked "No" on the UAC prompt. Without this, the exception
+        # would go uncaught and this window (launched via Uninstall Tasky.bat, which has no
+        # trailing pause) would just vanish with no explanation and nothing removed.
+        Write-Host ""
+        Write-Host "Elevation was cancelled or failed, so nothing was removed." -ForegroundColor Yellow
+        Read-Host "Press Enter to close"
+    }
     exit
 }
 
@@ -138,6 +154,40 @@ try {
         Write-Host "  Nothing found at $AppDataFolder"
     }
 
+    # --- Remove self-update staging cache -----------------------------------------
+    # A staged-but-not-yet-applied update (or a stale one from a prior version) leaves a
+    # near-full second copy of the app here - app-owned cache, unconditional like the settings
+    # folder above rather than gated on $keepData.
+
+    Write-Section "Removing self-update staging cache..."
+    if (Test-Path $LocalAppDataFolder) {
+        try {
+            Remove-Item -LiteralPath $LocalAppDataFolder -Recurse -Force
+            Write-Host "  Removed $LocalAppDataFolder"
+        } catch {
+            Write-Host "  Could not remove $LocalAppDataFolder ($($_.Exception.Message)) - you may need to delete it manually." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  Nothing found at $LocalAppDataFolder"
+    }
+
+    # --- Remove "Start with Windows" registry entry --------------------------------
+    # Settings.cs has no backing field for this - the Run key itself is the source of truth
+    # (see StartupService.cs) - so if it was ever turned on, this is the only place it lives.
+
+    Write-Section "Removing 'Start with Windows' registry entry..."
+    try {
+        $runKey = Get-Item -LiteralPath $RunKeyPath -ErrorAction SilentlyContinue
+        if ($runKey -and $runKey.GetValue($RunValueName)) {
+            Remove-ItemProperty -LiteralPath $RunKeyPath -Name $RunValueName -Force
+            Write-Host "  Removed $RunKeyPath\$RunValueName"
+        } else {
+            Write-Host "  Nothing found at $RunKeyPath\$RunValueName"
+        }
+    } catch {
+        Write-Host "  Could not remove $RunKeyPath\$RunValueName ($($_.Exception.Message)) - you may need to remove it manually via Task Manager's Startup tab." -ForegroundColor Yellow
+    }
+
     # --- Remove (or keep) task data -------------------------------------------------
 
     if ($keepData) {
@@ -166,7 +216,8 @@ try {
 
     if ($externalFilePath) {
         Write-Host ""
-        Write-Host "Your last-used data file was outside the default Tasky folder, so it was left alone:" -ForegroundColor Yellow
+        Write-Host "Your last-used data file was outside the default Tasky folder, so it (and its" -ForegroundColor Yellow
+        Write-Host "Attachments/InlineImages folders alongside it, if any) was left alone:" -ForegroundColor Yellow
         Write-Host "  $externalFilePath"
     }
 

@@ -1,0 +1,42 @@
+<Window x:Class="TodoApp.QuickAddWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Quick Add Task" Height="98" Width="380"
+        Icon="Assets/icon.ico"
+        WindowStyle="ToolWindow" ResizeMode="NoResize"
+        Topmost="True" ShowInTaskbar="False"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource BackgroundBrush}"
+        Deactivated="Window_Deactivated">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBox x:Name="TitleBox" Grid.Row="0" FontSize="14" Padding="6"
+                 Foreground="{DynamicResource PrimaryTextBrush}"
+                 Background="{DynamicResource BackgroundBrush}"
+                 BorderBrush="{DynamicResource SecondaryBrush}"
+                 SpellCheck.IsEnabled="True"
+                 KeyDown="TitleBox_KeyDown"
+                 TextChanged="TitleBox_TextChanged"
+                 PreviewMouseRightButtonDown="TitleBox_PreviewMouseRightButtonDown"
+                 ContextMenuOpening="TitleBox_ContextMenuOpening">
+            <!-- No custom ContextMenu here would fall back to WPF's own auto-generated
+                 Cut/Copy/Paste(/spelling) menu, which - like every other native WPF chrome piece
+                 in this app - doesn't pick up the dark theme and renders as an unthemed white box.
+                 Spelling suggestions are merged in via ContextMenuOpening below. -->
+            <TextBox.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Cu_t" Command="Cut"/>
+                    <MenuItem Header="_Copy" Command="Copy"/>
+                    <MenuItem Header="_Paste" Command="Paste"/>
+                </ContextMenu>
+            </TextBox.ContextMenu>
+        </TextBox>
+        <!-- ROADMAP.md #135: live preview of what #tag/!due:/@time will actually parse to, replacing
+             the static hint text once something's typed - see TitleBox_TextChanged. -->
+        <TextBlock x:Name="PreviewText" Grid.Row="1" Text="Enter · Esc · #tag !due:day @time" FontSize="10.5"
+                   Foreground="{DynamicResource TertiaryBrush}" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+    </Grid>
+</Window>

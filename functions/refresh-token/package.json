@@ -1,0 +1,12 @@
+{
+  "name": "tasky-refresh-token",
+  "version": "1.0.0",
+  "description": "Silently refreshes a Tasky Web access token from a server-held Google refresh token, and revokes it on sign-out.",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/firestore": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

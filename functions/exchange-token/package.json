@@ -1,0 +1,12 @@
+{
+  "name": "tasky-exchange-token",
+  "version": "1.0.0",
+  "description": "Exchanges a Google OAuth authorization code for an access token, so the client_secret stays server-side.",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/firestore": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

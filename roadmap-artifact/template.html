@@ -1,0 +1,603 @@
+<title>Tasky Roadmap</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #f5f6fa;
+    --surface: #ffffff;
+    --surface-2: #edeff5;
+    --border: #dfe2ea;
+    --border-strong: #c9cdd8;
+    --text: #191c23;
+    --text-dim: #656b78;
+    --text-faint: #9297a3;
+    --accent: #3861d6;
+    --accent-2: #5b7ff0;
+    --accent-soft: #e8edfc;
+    --on-accent: #ffffff;
+
+    --status-active: #5b6472;
+    --status-active-soft: #eceef2;
+    --status-done: #1f8a52;
+    --status-done-soft: #e2f5ea;
+    --status-deferred: #b4650a;
+    --status-deferred-soft: #fbead4;
+    --status-resolved: #7c3aed;
+    --status-resolved-soft: #f0e8fd;
+
+    --shadow: 0 1px 2px rgba(20, 24, 40, 0.06), 0 8px 24px rgba(20, 24, 40, 0.06);
+    --radius: 10px;
+    --font-display: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --font-body: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1c1d20;
+      --surface: #26282c;
+      --surface-2: #2d2f34;
+      --border: #3c3f46;
+      --border-strong: #4c4f58;
+      --text: #ecedf0;
+      --text-dim: #a3a8b3;
+      --text-faint: #797f8c;
+      --accent: #8ab4f8;
+      --accent-2: #a9c8ff;
+      --accent-soft: #2a3550;
+      --on-accent: #12213d;
+
+      --status-active: #a3a8b3;
+      --status-active-soft: #33353b;
+      --status-done: #6fd39a;
+      --status-done-soft: #1f3b2c;
+      --status-deferred: #f2b155;
+      --status-deferred-soft: #3d301a;
+      --status-resolved: #c9a8fb;
+      --status-resolved-soft: #352a4a;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1c1d20;
+    --surface: #26282c;
+    --surface-2: #2d2f34;
+    --border: #3c3f46;
+    --border-strong: #4c4f58;
+    --text: #ecedf0;
+    --text-dim: #a3a8b3;
+    --text-faint: #797f8c;
+    --accent: #8ab4f8;
+    --accent-2: #a9c8ff;
+    --accent-soft: #2a3550;
+    --on-accent: #12213d;
+
+    --status-active: #a3a8b3;
+    --status-active-soft: #33353b;
+    --status-done: #6fd39a;
+    --status-done-soft: #1f3b2c;
+    --status-deferred: #f2b155;
+    --status-deferred-soft: #3d301a;
+    --status-resolved: #c9a8fb;
+    --status-resolved-soft: #352a4a;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  code {
+    font-family: var(--font-display);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.05em 0.35em;
+  }
+  a { color: var(--accent); }
+  ::selection { background: var(--accent-soft); }
+
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 28px 20px 80px;
+  }
+
+  header.masthead {
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(1.6rem, 4vw, 2.2rem);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 6px 0 8px;
+    text-wrap: balance;
+  }
+  .masthead p.sub { color: var(--text-dim); margin: 0; max-width: 60ch; }
+  .masthead p.sub code { font-size: 0.86em; }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 20px 0 4px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    color: inherit;
+    transition: border-color 0.12s ease, transform 0.06s ease;
+  }
+  .stat:hover { border-color: var(--border-strong); }
+  .stat:active { transform: scale(0.98); }
+  .stat .n {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.3rem;
+    font-weight: 600;
+    display: block;
+  }
+  .stat .l { font-size: 0.74rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat.total .n { color: var(--text); }
+  .stat.active .n { color: var(--status-active); }
+  .stat.done .n { color: var(--status-done); }
+  .stat.deferred .n { color: var(--status-deferred); }
+  .stat.resolved .n { color: var(--status-resolved); }
+  .stat.stat-selected { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
+
+  details.gating {
+    margin: 22px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 16px;
+  }
+  details.gating summary {
+    cursor: pointer;
+    padding: 12px 0;
+    font-weight: 600;
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    list-style: none;
+  }
+  details.gating summary::-webkit-details-marker { display: none; }
+  details.gating summary::after {
+    content: '+';
+    font-family: var(--font-display);
+    color: var(--text-dim);
+    font-size: 1.1rem;
+  }
+  details.gating[open] summary::after { content: '−'; }
+  .gating ol { margin: 0 0 14px; padding-left: 20px; color: var(--text-dim); font-size: 0.9rem; }
+  .gating ol li { margin-bottom: 10px; }
+  .gating ol strong { color: var(--text); }
+
+  .toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    padding: 14px 0 12px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .search-wrap { position: relative; margin-bottom: 10px; }
+  .search-wrap input {
+    width: 100%;
+    font: inherit;
+    font-size: 0.94rem;
+    padding: 10px 14px 10px 36px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .search-wrap input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .search-wrap svg {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    color: var(--text-faint);
+    pointer-events: none;
+  }
+  .filter-groups { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-start; }
+  .filter-group { display: flex; flex-direction: column; gap: 6px; }
+  .filter-group .fg-label {
+    font-family: var(--font-display);
+    font-size: 0.66rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: inherit;
+    font-size: 0.82rem;
+    font-family: var(--font-display);
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.1s ease;
+  }
+  .chip:hover { border-color: var(--border-strong); color: var(--text); }
+  .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .chip[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+  }
+  .result-count {
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    margin-left: auto;
+    align-self: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ul.items { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  li.item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .item-head {
+    display: grid;
+    grid-template-columns: 40px 1fr auto;
+    align-items: start;
+    gap: 12px;
+    padding: 12px 14px;
+    cursor: pointer;
+  }
+  .item-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .rank {
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    padding-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .item-main { min-width: 0; }
+  .item-title { font-weight: 600; font-size: 0.96rem; margin: 0 0 6px; text-wrap: balance; }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .tag {
+    font-family: var(--font-display);
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .tag.pri { font-weight: 600; }
+  .tag.pri-P0, .tag.pri-P0\.5 { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  .tag.flag { background: var(--status-deferred-soft); color: var(--status-deferred); border-color: transparent; }
+  .tag.category { color: var(--text-faint); }
+
+  .status-pill {
+    justify-self: end;
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .status-pill.Active { background: var(--status-active-soft); color: var(--status-active); }
+  .status-pill.Done { background: var(--status-done-soft); color: var(--status-done); }
+  .status-pill.Deferred { background: var(--status-deferred-soft); color: var(--status-deferred); }
+  .status-pill.Resolved { background: var(--status-resolved-soft); color: var(--status-resolved); }
+
+  .item-body {
+    display: none;
+    padding: 0 14px 16px 66px;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    max-width: 74ch;
+  }
+  li.item.expanded .item-body { display: block; }
+  li.item.expanded .item-head { border-bottom: 1px solid var(--border); }
+  .item-body code { font-size: 0.85em; }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-faint);
+    font-size: 0.9rem;
+  }
+
+  footer.colophon {
+    margin-top: 40px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 0.78rem;
+    line-height: 1.7;
+  }
+
+  @media (max-width: 640px) {
+    .stat-row { grid-template-columns: repeat(3, 1fr); }
+    .stat:nth-child(4), .stat:nth-child(5) { grid-column: span 1; }
+    .item-head { grid-template-columns: 28px 1fr; }
+    .status-pill { grid-column: 1 / -1; justify-self: start; margin-top: 4px; }
+    .item-body { padding-left: 14px; }
+    .result-count { margin-left: 0; width: 100%; order: 99; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow"><span class="dot"></span>Tasky Ecosystem</div>
+    <h1>Roadmap Status</h1>
+    <p class="sub">117 recommendations across Tasky Desktop (WPF/.NET 9) and Tasky Web (PWA), reconciled from an independent Claude review against a parallel Gemini/Antigravity review. Numbering is stable — <code>#rank</code> is a permanent handle, not a sort order.</p>
+  </header>
+
+  <nav class="stat-row" aria-label="Filter by status">
+    <button class="stat total" data-status-filter="" aria-pressed="false">
+      <span class="n" id="stat-total">0</span><span class="l">Total</span>
+    </button>
+    <button class="stat active" data-status-filter="Active" aria-pressed="false">
+      <span class="n" id="stat-active">0</span><span class="l">Active</span>
+    </button>
+    <button class="stat done" data-status-filter="Done" aria-pressed="false">
+      <span class="n" id="stat-done">0</span><span class="l">Done</span>
+    </button>
+    <button class="stat deferred" data-status-filter="Deferred" aria-pressed="false">
+      <span class="n" id="stat-deferred">0</span><span class="l">Deferred</span>
+    </button>
+    <button class="stat resolved" data-status-filter="Resolved" aria-pressed="false">
+      <span class="n" id="stat-resolved">0</span><span class="l">Resolved</span>
+    </button>
+  </nav>
+
+  <details class="gating">
+    <summary>The four gating decisions (all resolved)</summary>
+    <ol>
+      <li><strong>#12 Product positioning — Resolved: personal, single-user application.</strong> Not a team product, at least for now. #107 (team workspaces) deferred accordingly.</li>
+      <li><strong>#11 Monetization model — Deferred.</strong> Focus stays on building the product first, not pricing it. #87 (licensing/entitlement engine) deferred accordingly.</li>
+      <li><strong>#10 Platform architecture — Resolved: no framework migration.</strong> Desktop stays WPF, Web stays vanilla JS/PWA. #98 (native mobile apps) deferred accordingly. #51 (Mica/Acrylic theming) stays unblocked — WPF can get it via DWM interop.</li>
+      <li><strong>Offline PWA support — Deferred (2026-08-24).</strong> Tasky Web does not need to work offline; Drive is treated as always-reachable. #6, #7, #41, #106 deferred accordingly. #37 (install banner) stays active. #70 (thumbnail caching) stays active but builds its own IndexedDB usage.</li>
+    </ol>
+  </details>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      <input id="search" type="search" placeholder="Search recommendations, categories, context…" aria-label="Search roadmap items" />
+    </div>
+    <div class="filter-groups">
+      <div class="filter-group">
+        <span class="fg-label">Platform</span>
+        <div class="chip-row" id="platform-chips"></div>
+      </div>
+      <div class="filter-group">
+        <span class="fg-label">Priority</span>
+        <div class="chip-row" id="priority-chips"></div>
+      </div>
+      <span class="result-count" id="result-count"></span>
+    </div>
+  </div>
+
+  <ul class="items" id="items"></ul>
+  <p class="empty-state hidden" id="empty-state">No items match these filters.</p>
+
+  <footer class="colophon">
+    <p>Built from an independent Claude review of the Tasky codebase (architecture read via the project's <code>graphify-out/</code> knowledge graph, then parallel deep-dive agents for Desktop and Web), reconciled against a parallel Gemini/Antigravity review across several rounds. Items confirmed already implemented were removed; several were re-scoped to match what the code actually needed.</p>
+    <p>Source of truth: <code>ROADMAP.md</code> in the Tasky repository. This page is generated from that file — if the two ever disagree, the file wins.</p>
+  </footer>
+</div>
+
+<script>
+  const DATA = __ROADMAP_DATA__;
+
+  const STATUS_ORDER = ['Active', 'Done', 'Deferred', 'Resolved'];
+  const PLATFORMS = ['Desktop', 'Web', 'Both'];
+  const PRIORITIES = ['P0', 'P0.5', 'P1', 'P2', 'P3'];
+
+  const state = { status: new Set(), platform: new Set(), priority: new Set(), q: '' };
+
+  function mdLite(str) {
+    const esc = document.createElement('div');
+    esc.textContent = str;
+    let html = esc.innerHTML;
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return html;
+  }
+
+  function buildChips(containerId, values, stateKey) {
+    const el = document.getElementById(containerId);
+    for (const v of values) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.textContent = v;
+      btn.setAttribute('aria-pressed', 'false');
+      btn.addEventListener('click', () => {
+        if (state[stateKey].has(v)) state[stateKey].delete(v);
+        else state[stateKey].add(v);
+        btn.setAttribute('aria-pressed', String(state[stateKey].has(v)));
+        render();
+      });
+      el.appendChild(btn);
+    }
+  }
+  buildChips('platform-chips', PLATFORMS, 'platform');
+  buildChips('priority-chips', PRIORITIES, 'priority');
+
+  const statButtons = Array.from(document.querySelectorAll('.stat'));
+  for (const btn of statButtons) {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.statusFilter;
+      if (val === '') {
+        state.status.clear();
+      } else if (state.status.has(val) && state.status.size === 1) {
+        state.status.clear();
+      } else {
+        state.status.clear();
+        state.status.add(val);
+      }
+      render();
+    });
+  }
+
+  const searchInput = document.getElementById('search');
+  searchInput.addEventListener('input', () => {
+    state.q = searchInput.value.trim().toLowerCase();
+    render();
+  });
+
+  const itemsEl = document.getElementById('items');
+  const emptyEl = document.getElementById('empty-state');
+  const countEl = document.getElementById('result-count');
+
+  // Pre-render every row's DOM once; render() only toggles visibility + expanded state,
+  // so filtering never re-parses markdown or rebuilds 117 subtrees on every keystroke.
+  const rowEls = new Map();
+  for (const row of DATA) {
+    const li = document.createElement('li');
+    li.className = 'item';
+
+    const head = document.createElement('div');
+    head.className = 'item-head';
+    head.tabIndex = 0;
+    head.setAttribute('role', 'button');
+    head.setAttribute('aria-expanded', 'false');
+
+    const rank = document.createElement('div');
+    rank.className = 'rank';
+    rank.textContent = '#' + row.rank;
+
+    const main = document.createElement('div');
+    main.className = 'item-main';
+    const title = document.createElement('p');
+    title.className = 'item-title';
+    title.innerHTML = mdLite(row.rec);
+    const tagRow = document.createElement('div');
+    tagRow.className = 'tag-row';
+    const platTag = document.createElement('span');
+    platTag.className = 'tag platform';
+    platTag.textContent = row.platform;
+    const priTag = document.createElement('span');
+    priTag.className = 'tag pri pri-' + row.pri;
+    priTag.textContent = row.pri;
+    const effortTag = document.createElement('span');
+    effortTag.className = 'tag effort';
+    effortTag.textContent = row.effort;
+    const catTag = document.createElement('span');
+    catTag.className = 'tag category';
+    catTag.textContent = row.category;
+    tagRow.append(platTag, priTag, effortTag, catTag);
+    if (row.flag) {
+      const flagTag = document.createElement('span');
+      flagTag.className = 'tag flag';
+      flagTag.textContent = '⚡ strategic';
+      tagRow.appendChild(flagTag);
+    }
+    main.append(title, tagRow);
+
+    const pill = document.createElement('span');
+    pill.className = 'status-pill ' + row.status;
+    pill.textContent = row.status;
+
+    head.append(rank, main, pill);
+
+    const body = document.createElement('div');
+    body.className = 'item-body';
+    body.innerHTML = mdLite(row.context);
+
+    function toggle() {
+      const willExpand = !li.classList.contains('expanded');
+      li.classList.toggle('expanded', willExpand);
+      head.setAttribute('aria-expanded', String(willExpand));
+    }
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+
+    li.append(head, body);
+    itemsEl.appendChild(li);
+    rowEls.set(row.rank, li);
+  }
+
+  function matches(row) {
+    if (state.status.size && !state.status.has(row.status)) return false;
+    if (state.platform.size && !state.platform.has(row.platform)) return false;
+    if (state.priority.size && !state.priority.has(row.pri)) return false;
+    if (state.q) {
+      const hay = (row.rec + ' ' + row.category + ' ' + row.context).toLowerCase();
+      if (!hay.includes(state.q)) return false;
+    }
+    return true;
+  }
+
+  function render() {
+    let visible = 0;
+    for (const row of DATA) {
+      const el = rowEls.get(row.rank);
+      const show = matches(row);
+      el.style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+    emptyEl.classList.toggle('hidden', visible > 0);
+    countEl.textContent = visible === DATA.length ? (visible + ' items') : (visible + ' of ' + DATA.length);
+
+    for (const btn of statButtons) {
+      const val = btn.dataset.statusFilter;
+      const pressed = val === '' ? state.status.size === 0 : state.status.has(val);
+      btn.setAttribute('aria-pressed', String(pressed));
+      btn.classList.toggle('stat-selected', pressed && val !== '');
+    }
+  }
+
+  document.getElementById('stat-total').textContent = DATA.length;
+  document.getElementById('stat-active').textContent = DATA.filter(r => r.status === 'Active').length;
+  document.getElementById('stat-done').textContent = DATA.filter(r => r.status === 'Done').length;
+  document.getElementById('stat-deferred').textContent = DATA.filter(r => r.status === 'Deferred').length;
+  document.getElementById('stat-resolved').textContent = DATA.filter(r => r.status === 'Resolved').length;
+
+  render();
+</script>

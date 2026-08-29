@@ -1,0 +1,74 @@
+<Window x:Class="TodoApp.WelcomeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Welcome to Tasky" Width="460" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Icon="Assets/icon.ico"
+        Background="{DynamicResource BackgroundBrush}">
+    <Window.Resources>
+        <Style x:Key="CalloutText" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+        <Style x:Key="CodeRun" TargetType="Run">
+            <Setter Property="FontFamily" Value="Consolas, Segoe UI, sans-serif"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,16">
+            <Image Source="Assets/icon.ico" Width="32" Height="32" Margin="0,0,12,0" VerticalAlignment="Center"/>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Welcome to Tasky" FontSize="18" FontWeight="Bold"
+                           Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <TextBlock Text="A few things worth knowing before you dive in." FontSize="12"
+                           Margin="0,2,0,0" Foreground="{DynamicResource ForegroundBrush}"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Feature callouts -->
+        <StackPanel Grid.Row="1">
+            <TextBlock Style="{StaticResource CalloutText}">
+                <Run Text="Quick Add a task, then tag or schedule it inline:"/>
+                <LineBreak/>
+                <Run Style="{StaticResource CodeRun}" Text="Buy milk #errands !due:tomorrow @9am"/>
+            </TextBlock>
+            <TextBlock Style="{StaticResource CalloutText}"
+                       Text="Reach Quick Add from anywhere with Ctrl+Alt+T, the tray icon, or the toolbar's Quick Add button - no need to switch to the main window first"/>
+            <TextBlock Style="{StaticResource CalloutText}">
+                <Run Text="Search operators find anything fast:"/>
+                <Run Style="{StaticResource CodeRun}" Text="tag:urgent"/>
+                <Run Text=","/>
+                <Run Style="{StaticResource CodeRun}" Text="is:overdue"/>
+                <Run Text=","/>
+                <Run Style="{StaticResource CodeRun}" Text="has:link"/>
+                <Run Text="- see Keyboard Shortcuts (F1) for the full list"/>
+            </TextBlock>
+            <TextBlock Style="{StaticResource CalloutText}">
+                <Run Text="Turn on Google Drive sync in Settings to keep tasks in step with"/>
+                <Hyperlink NavigateUri="https://stephenh678.github.io/Tasky/"
+                           RequestNavigate="Hyperlink_RequestNavigate"
+                           Foreground="{DynamicResource AccentBrush}">Tasky Web</Hyperlink>
+                <Run Text="on your phone or another computer"/>
+            </TextBlock>
+        </StackPanel>
+
+        <CheckBox Grid.Row="2" x:Name="AddSamplesCheck" Content="Add 4 sample tasks to try it out"
+                   IsChecked="True" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,4,0,18"/>
+
+        <Button Grid.Row="3" Content="Get Started" Padding="16,7" HorizontalAlignment="Right"
+                IsDefault="True" IsCancel="True" Click="GetStarted_Click"/>
+    </Grid>
+</Window>

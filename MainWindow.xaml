@@ -1,0 +1,1289 @@
+<Window x:Class="TodoApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:TodoApp"
+        xmlns:conv="clr-namespace:TodoApp.Converters"
+        xmlns:beh="clr-namespace:TodoApp.Behaviors"
+        xmlns:docs="clr-namespace:System.Windows.Documents;assembly=PresentationFramework"
+        xmlns:vm="clr-namespace:TodoApp.ViewModels"
+        mc:Ignorable="d"
+        Title="{Binding WindowTitle}" Height="740" Width="1180" MinHeight="520" MinWidth="860"
+        Icon="Assets/icon.ico"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.InputBindings>
+        <KeyBinding Key="N" Modifiers="Control" Command="{Binding AddTaskCommand}"/>
+        <KeyBinding Key="Delete" Command="{Binding DeleteSelectedCommand}"/>
+        <KeyBinding Key="F11" Command="{Binding ToggleFocusModeCommand}"/>
+        <KeyBinding Key="F12" Command="{Binding ToggleCalendarViewCommand}"/>
+        <KeyBinding Key="G" Modifiers="Control+Shift" Command="{Binding SyncGoogleDriveNowCommand}"/>
+        <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenFileCommand}"/>
+        <KeyBinding Key="S" Modifiers="Control+Shift" Command="{Binding SaveFileAsCommand}"/>
+        <KeyBinding Key="Z" Modifiers="Control" Command="{Binding UndoCommand}"/>
+        <!-- Ctrl+Shift+P/L/C/K/F and Ctrl+E are handled in Window_PreviewKeyDown instead of as
+             KeyBindings here - they call the same AddPhoto_Click/AddLink_Click/AddChecklist_Click/
+             AddTable_Click/AddFile_Click/ExportNote_Click handlers the toolbar buttons use, which
+             insert inline into NoteEditor. The KeyBindings that used to live here instead called
+             SelectedTaskDetail.Add*BlockCommand, which add to the now-unrendered Task.Body block
+             list from the old per-block editor - removed as dead/misleading now that
+             Window_PreviewKeyDown's e.Handled=true pre-empts them anyway. -->
+    </Window.InputBindings>
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:DueDateToStringConverter x:Key="DueDateToString"/>
+        <conv:DueDateColorConverter x:Key="DueDateColor"/>
+        <conv:PriorityColorConverter x:Key="PriorityColor"/>
+        <conv:NullToVisibilityConverter x:Key="NullToVis"/>
+        <conv:InverseNullToVisibilityConverter x:Key="InverseNullToVis"/>
+        <conv:CloseReopenLabelConverter x:Key="CloseReopenLabel"/>
+        <conv:CloseReopenIconConverter x:Key="CloseReopenIcon"/>
+        <conv:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis"/>
+        <conv:EnumEqualsVisibilityConverter x:Key="EnumEqualsVis"/>
+        <conv:EnumNotEqualsVisibilityConverter x:Key="EnumNotEqualsVis"/>
+        <conv:PinLabelConverter x:Key="PinLabel"/>
+        <conv:BoolToGridLengthConverter x:Key="BoolToGridLength"/>
+        <conv:HasAttachmentConverter x:Key="HasAttachmentToVis"/>
+        <conv:AnyItemToVisibilityConverter x:Key="AnyItemToVis"/>
+        <conv:HasBlockTypeConverter x:Key="HasBlockTypeToVis"/>
+        <conv:EmptyStringToVisibilityConverter x:Key="EmptyStringToVis"/>
+        <conv:MarkCompletedVisibilityConverter x:Key="MarkCompletedVis"/>
+        <conv:InverseBooleanConverter x:Key="InverseBool"/>
+        <conv:BoolToStatusBrushConverter x:Key="BoolToStatusBrush"/>
+        <conv:NoteBlockToPhotoSourceConverter x:Key="NoteBlockToPhotoSource"/>
+        <conv:QuickFilterActiveConverter x:Key="QuickFilterActive"/>
+        <conv:QuickFilterLabelConverter x:Key="QuickFilterLabel"/>
+
+        <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
+             auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
+             native WPF chrome in this app, doesn't pick up the app's dark theme on its own and
+             renders as an unthemed white box. Giving each one this explicit menu instead routes
+             it through the same themed MenuItem/ContextMenu styles as everywhere else; spelling
+             suggestions are merged in via TextBox_ContextMenuOpening, same approach as the note
+             editor's RichTextBox. Shared across every plain TextBox in this window (safe - only
+             one can be open at a time), separate from the RichTextBox's own formatting menu. -->
+        <ContextMenu x:Key="TextEditContextMenu">
+            <MenuItem Header="Cu_t" Command="Cut"/>
+            <MenuItem Header="_Copy" Command="Copy"/>
+            <MenuItem Header="_Paste" Command="Paste"/>
+        </ContextMenu>
+
+        <ContextMenu x:Key="TextEditorContextMenu">
+            <MenuItem Header="Cu_t" Command="Cut"/>
+            <MenuItem Header="_Copy" Command="Copy"/>
+            <MenuItem Header="_Paste" Command="Paste"/>
+            <Separator/>
+            <MenuItem Header="Bold" FontWeight="Bold" Click="Bold_Click"/>
+            <MenuItem Header="Italic" FontStyle="Italic" Click="Italic_Click"/>
+            <MenuItem Click="Underline_Click">
+                <MenuItem.Header>
+                    <TextBlock Text="Underline" TextDecorations="Underline"/>
+                </MenuItem.Header>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Font Size">
+                <MenuItem Header="10" Tag="10" Click="FontSize_Click"/>
+                <MenuItem Header="12" Tag="12" Click="FontSize_Click"/>
+                <MenuItem Header="14" Tag="14" Click="FontSize_Click"/>
+                <MenuItem Header="16" Tag="16" Click="FontSize_Click"/>
+                <MenuItem Header="18" Tag="18" Click="FontSize_Click"/>
+                <MenuItem Header="24" Tag="24" Click="FontSize_Click"/>
+                <MenuItem Header="32" Tag="32" Click="FontSize_Click"/>
+            </MenuItem>
+            <MenuItem Header="Text Color">
+                <MenuItem Header="Black" Tag="#2C3338" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#2C3338" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Red" Tag="#D63638" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#D63638" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Orange" Tag="#E68A00" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#E68A00" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Green" Tag="#00A32A" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#00A32A" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Blue" Tag="#3361CC" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#3361CC" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Purple" Tag="#8C4FE0" Click="TextColor_Click">
+                    <MenuItem.Icon><Border Background="#8C4FE0" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+            <MenuItem Header="Highlight">
+                <MenuItem Header="None" Tag="Transparent" Click="HighlightColor_Click"/>
+                <MenuItem Header="Yellow" Tag="#FFF3B0" Click="HighlightColor_Click">
+                    <MenuItem.Icon><Border Background="#FFF3B0" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Green" Tag="#C8F0C8" Click="HighlightColor_Click">
+                    <MenuItem.Icon><Border Background="#C8F0C8" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Blue" Tag="#CEE0FA" Click="HighlightColor_Click">
+                    <MenuItem.Icon><Border Background="#CEE0FA" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Pink" Tag="#FAD1E0" Click="HighlightColor_Click">
+                    <MenuItem.Icon><Border Background="#FAD1E0" Width="12" Height="12"/></MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Bulleted List" Click="Bullets_Click"/>
+            <MenuItem Header="Numbered List" Click="Numbering_Click"/>
+            <Separator/>
+            <MenuItem Header="Insert Photo..." Click="AddPhoto_Click"/>
+            <MenuItem Header="Insert Link..." Click="AddLink_Click"/>
+            <MenuItem Header="Insert Checklist Item" Click="AddChecklist_Click"/>
+            <MenuItem Header="Insert Table..." Click="AddTable_Click"/>
+            <MenuItem Header="Insert File..." Click="AddFile_Click"/>
+            <Separator/>
+            <MenuItem Header="Export / Print Note..." Click="ExportNote_Click"/>
+        </ContextMenu>
+
+        <DataTemplate x:Key="SidebarItemTemplate">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Background="Transparent"
+                        ToolTip="{Binding Label}"
+                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <TextBlock Text="{Binding Icon}" FontFamily="{StaticResource IconFont}" FontSize="13"
+                           Width="18" TextAlignment="Center" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <TextBlock Text="{Binding Label}" FontSize="13.5" Margin="8,0,0,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}"
+                           Visibility="{Binding DataContext.IsSidebarCollapsed, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBoolToVis}}"/>
+                <!-- Selection is driven by this MouseBinding, not by SelectedItem's TwoWay binding
+                     below (the ListBox still declares SelectedItem for keyboard/arrow-key nav and
+                     screen-reader semantics, but that binding alone proved unreliable as the ONLY
+                     path in - see MainViewModel.SelectSidebarItemCommand's own comment for the full
+                     story). A MouseBinding fires on every real click unconditionally, independent of
+                     whatever the ListBox's own internal (and, per that history, occasionally stale)
+                     notion of "already selected" is - so a click here is guaranteed to reach the VM
+                     even in the exact state that previously made re-clicking silently do nothing. -->
+                <StackPanel.InputBindings>
+                    <MouseBinding MouseAction="LeftClick"
+                                  Command="{Binding DataContext.SelectSidebarItemCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  CommandParameter="{Binding}"/>
+                </StackPanel.InputBindings>
+
+                <!-- ContextMenu opens in its own popup, disconnected from the main visual tree, so
+                     RelativeSource AncestorType=Window can't find the ancestor from in here. Instead,
+                     the MainViewModel was stashed on the StackPanel's Tag above (where AncestorType=Window
+                     still works), and each item reaches it via ContextMenu.PlacementTarget.Tag. -->
+                <StackPanel.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="SORT BY" IsEnabled="False" FontSize="11" FontWeight="Bold"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"/>
+                        <MenuItem Header="Name (A-Z)"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.NameAZ}"/>
+                        <MenuItem Header="Name (Z-A)"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.NameZA}"/>
+                        <MenuItem Header="Due Date"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.DueDateSoonest}"/>
+                        <MenuItem Header="Priority"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.PriorityHighest}"/>
+                        <MenuItem Header="Date Modified"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.ModifiedNewest}"/>
+                        <MenuItem Header="Date Created"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.CreatedNewest}"/>
+                        <Separator Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"/>
+                        <MenuItem Header="Move All to Trash"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Done}"
+                                  Command="{Binding PlacementTarget.Tag.TrashAllClosedCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Empty Trash"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.EmptyTrashCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Delete View"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=View}"
+                                  Command="{Binding PlacementTarget.Tag.DeleteViewCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding}"/>
+                        <MenuItem Header="Delete Tag"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Tag}"
+                                  Command="{Binding PlacementTarget.Tag.DeleteTagCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding}"/>
+                    </ContextMenu>
+                </StackPanel.ContextMenu>
+            </StackPanel>
+        </DataTemplate>
+
+    </Window.Resources>
+
+    <DockPanel>
+        <Grid DockPanel.Dock="Top" Background="{DynamicResource SidebarBackgroundBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Menu Grid.Column="0" Background="{DynamicResource SidebarBackgroundBrush}"
+                  BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,0,0,1">
+                <MenuItem Header="_File" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_New Task" InputGestureText="Ctrl+N" Command="{Binding AddTaskCommand}"/>
+                    <MenuItem Header="_Quick Add..." InputGestureText="Ctrl+Alt+T" Click="QuickAdd_Click"/>
+                    <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
+                    <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
+                    <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
+                    <MenuItem Header="_Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
+                    <MenuItem Header="Export All _Tasks..." Command="{Binding ExportAllTasksCommand}"/>
+                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Export _Full Backup..." Command="{Binding ExportBackupCommand}"/>
+                    <MenuItem Header="_Import Full Backup..." Command="{Binding ImportBackupCommand}"/>
+                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Sync _Google Drive Now" InputGestureText="Ctrl+Shift+G" Command="{Binding SyncGoogleDriveNowCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="_Settings" Command="{Binding SettingsCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="E_xit" Click="Exit_Click"/>
+                </MenuItem>
+                <MenuItem Header="_Edit" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="{Binding UndoMenuLabel}" InputGestureText="Ctrl+Z" Command="{Binding UndoCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Cu_t" Command="Cut"/>
+                    <MenuItem Header="_Copy" Command="Copy"/>
+                    <MenuItem Header="_Paste" Command="Paste"/>
+                </MenuItem>
+                <MenuItem Header="_View" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_All Tasks" Command="{Binding ShowAllCommand}"/>
+                    <MenuItem Header="_Completed" Command="{Binding ShowClosedCommand}"/>
+                    <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="F_ocus Mode" InputGestureText="F11" IsCheckable="True" IsChecked="{Binding IsFocusMode}"/>
+                    <MenuItem Header="Ca_lendar View" InputGestureText="F12"
+                              IsCheckable="True" IsChecked="{Binding IsCalendarView, Mode=TwoWay}"/>
+                </MenuItem>
+                <MenuItem Header="_Window" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="Always on _Top" IsCheckable="True" Checked="AlwaysOnTop_Checked" Unchecked="AlwaysOnTop_Unchecked"/>
+                </MenuItem>
+                <MenuItem Header="_Help" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_Keyboard Shortcuts" InputGestureText="F1" Click="ShowShortcuts_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Check for _Updates" Click="CheckForUpdates_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_About Tasky" Click="About_Click"/>
+                </MenuItem>
+            </Menu>
+
+            <!-- Prominent Google Drive Status Icon Button -->
+            <Button Grid.Column="1" Command="{Binding SyncGoogleDriveNowCommand}"
+                    ToolTip="{Binding GoogleDriveStatusTooltip}"
+                    AutomationProperties.Name="{Binding GoogleDriveStatusTooltip}"
+                    Padding="10,4" Margin="0,0,10,0" VerticalAlignment="Center"
+                    Background="Transparent" BorderThickness="0" Cursor="Hand">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Sync Google Drive Now" Command="{Binding SyncGoogleDriveNowCommand}"/>
+                        <MenuItem Header="Google Drive Settings" Command="{Binding GoogleDriveCommand}"/>
+                    </ContextMenu>
+                </Button.ContextMenu>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                        <Canvas Width="87.3" Height="78">
+                            <Path Fill="#FFD04B" Data="M 6,52 L 21.5,78 L 81.3,78 L 65.8,52 Z"/>
+                            <Path Fill="#0F9D58" Data="M 65.8,52 L 81.3,78 L 51.7,26 L 36.2,0 Z"/>
+                            <Path Fill="#4285F4" Data="M 36.2,0 L 6,52 L 21.5,78 L 51.7,26 Z"/>
+                        </Canvas>
+                    </Viewbox>
+                    <Ellipse Width="8" Height="8" Margin="6,0,0,0" VerticalAlignment="Center"
+                             Fill="{Binding IsGoogleDriveConnected, Converter={StaticResource BoolToStatusBrush}}"/>
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <ToolBar DockPanel.Dock="Top" ToolBarTray.IsLocked="True"
+                 Background="{DynamicResource SidebarBackgroundBrush}">
+            <Button ToolTip="New Task (Ctrl+N)" Command="{Binding AddTaskCommand}" Padding="6,3">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x2795;" FontSize="12" Margin="0,0,5,0"/>
+                    <TextBlock Text="New"/>
+                </StackPanel>
+            </Button>
+            <Button ToolTip="Quick Add (Ctrl+Alt+T) - jot down a task in a small floating box, without leaving what you're doing"
+                    Click="QuickAdd_Click" Padding="6,3">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x26A1;" FontSize="12" Margin="0,0,5,0"/>
+                    <TextBlock Text="Quick Add"/>
+                </StackPanel>
+            </Button>
+            <Button ToolTip="Delete Task (Del)" Command="{Binding DeleteSelectedCommand}" Padding="6,3">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#x1F5D1;" FontSize="12" Margin="0,0,5,0"/>
+                    <TextBlock Text="Delete"/>
+                </StackPanel>
+            </Button>
+            <Separator/>
+            <Button ToolTip="Show all open tasks" Command="{Binding ShowAllCommand}" Padding="6,3">
+                <TextBlock Text="All Tasks"/>
+            </Button>
+            <Button ToolTip="Show completed tasks" Command="{Binding ShowClosedCommand}" Padding="6,3">
+                <TextBlock Text="Completed"/>
+            </Button>
+            <Button ToolTip="Show trash" Command="{Binding ShowTrashCommand}" Padding="6,3">
+                <TextBlock Text="Trash"/>
+            </Button>
+            <Separator/>
+            <Button ToolTip="List view" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.List}" Padding="6,3">
+                <TextBlock Text="&#x1F4CB; List">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.List}">
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Button>
+            <Button ToolTip="Calendar view (F12)" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.Calendar}" Padding="6,3">
+                <TextBlock Text="&#x1F4C5; Calendar">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.Calendar}">
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Button>
+            <Separator/>
+            <Button ToolTip="Focus mode (F11)" Command="{Binding ToggleFocusModeCommand}" Padding="6,3">
+                <TextBlock Text="&#x26F6; Focus"/>
+            </Button>
+            <Separator x:Name="FormattingGroupSeparator" Visibility="Collapsed"/>
+            <!-- Only meaningful while a text block's RichTextBox has focus - starts disabled and
+                 is toggled from code-behind (RichTextBox_GotFocus/LostFocus, and reset whenever
+                 the selected task changes) since _activeEditor is code-behind state, not a bound
+                 view-model property.
+
+                 ToolBar normally auto-applies its flat ToolBar.*StyleKey styles to its DIRECT
+                 Items automatically (see ControlStyles.xaml) - but that only walks ToolBar.Items
+                 itself, not descendants nested inside a child panel. Now that this StackPanel is
+                 the direct item instead of these controls, each one needs that style applied
+                 explicitly or it'd silently fall back to the app-wide bordered Button/ComboBox
+                 style instead of the flat toolbar look. -->
+            <StackPanel x:Name="FormattingGroup" Orientation="Horizontal" IsEnabled="False" Visibility="Collapsed">
+                <ComboBox x:Name="FontFamilyCombo" Width="115" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
+                    <ComboBoxItem>Segoe UI</ComboBoxItem>
+                    <ComboBoxItem>Calibri</ComboBoxItem>
+                    <ComboBoxItem>Arial</ComboBoxItem>
+                    <ComboBoxItem>Georgia</ComboBoxItem>
+                    <ComboBoxItem>Times New Roman</ComboBoxItem>
+                    <ComboBoxItem>Consolas</ComboBoxItem>
+                </ComboBox>
+                <ComboBox Width="55" Margin="4,0,0,0" SelectedIndex="2"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="FontSizeCombo_SelectionChanged" ToolTip="Font size">
+                    <ComboBoxItem>10</ComboBoxItem>
+                    <ComboBoxItem>12</ComboBoxItem>
+                    <ComboBoxItem>13.5</ComboBoxItem>
+                    <ComboBoxItem>16</ComboBoxItem>
+                    <ComboBoxItem>18</ComboBoxItem>
+                    <ComboBoxItem>24</ComboBoxItem>
+                    <ComboBoxItem>32</ComboBoxItem>
+                </ComboBox>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <Button x:Name="BoldButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Bold_Click" ToolTip="Bold (applies to the last text block you clicked into)" Padding="7,3">
+                    <TextBlock Text="B" FontWeight="Bold" FontSize="13"/>
+                </Button>
+                <Button x:Name="ItalicButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Italic_Click" ToolTip="Italic" Padding="7,3">
+                    <TextBlock Text="I" FontStyle="Italic" FontSize="13"/>
+                </Button>
+                <Button x:Name="UnderlineButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                        Click="Underline_Click" ToolTip="Underline" Padding="7,3">
+                    <TextBlock Text="U" TextDecorations="Underline" FontSize="13"/>
+                </Button>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <TextBlock Text="A" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="2,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Text color"/>
+                <ComboBox Width="46" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="TextColorCombo_SelectionChanged" ToolTip="Text color">
+                    <ComboBoxItem Tag="#2C3338"><Border Background="#2C3338" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#D63638"><Border Background="#D63638" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#E68A00"><Border Background="#E68A00" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#00A32A"><Border Background="#00A32A" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#3361CC"><Border Background="#3361CC" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#8C4FE0"><Border Background="#8C4FE0" Width="16" Height="16"/></ComboBoxItem>
+                </ComboBox>
+                <TextBlock Text="&#x1F58D;" FontFamily="{StaticResource IconFont}" FontSize="13" VerticalAlignment="Center" Margin="8,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Highlight"/>
+                <ComboBox Width="50" SelectedIndex="0"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="HighlightCombo_SelectionChanged" ToolTip="Highlight">
+                    <ComboBoxItem Tag="Transparent"><TextBlock Text="None" FontSize="10"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#FFF3B0"><Border Background="#FFF3B0" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#C8F0C8"><Border Background="#C8F0C8" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#CEE0FA"><Border Background="#CEE0FA" Width="16" Height="16"/></ComboBoxItem>
+                    <ComboBoxItem Tag="#FAD1E0"><Border Background="#FAD1E0" Width="16" Height="16"/></ComboBoxItem>
+                </ComboBox>
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
+                <TextBlock Text="&#x2261;" FontSize="15" VerticalAlignment="Center" Margin="2,0,3,0"
+                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="List style"/>
+                <ComboBox Width="80" SelectedIndex="-1"
+                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
+                          SelectionChanged="ListStyleCombo_SelectionChanged" ToolTip="List style">
+                    <ComboBoxItem Tag="Bullets"><TextBlock Text="&#x2022; Bullets" FontSize="11"/></ComboBoxItem>
+                    <ComboBoxItem Tag="Numbering"><TextBlock Text="1. Numbered" FontSize="11"/></ComboBoxItem>
+                </ComboBox>
+            </StackPanel>
+        </ToolBar>
+
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SidebarBackgroundBrush}"
+                BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,1,0,0" Padding="10,3">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding SaveStatusText}" FontSize="11" Foreground="{DynamicResource TertiaryBrush}"
+                           AutomationProperties.LiveSetting="Polite" VerticalAlignment="Center"/>
+                <!-- ROADMAP.md #57: a real determinate bar (stage-based percent - see
+                     SyncCoordinator.PerformSyncAsync's Progress()) instead of the plain status text
+                     being the only signal that a sync is even in progress. -->
+                <ProgressBar Value="{Binding SyncProgressPercent, Mode=OneWay}" Minimum="0" Maximum="100"
+                             Width="90" Height="6" Margin="8,0,0,0" VerticalAlignment="Center"
+                             Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVis}}"
+                             AutomationProperties.Name="Google Drive sync progress"/>
+            </StackPanel>
+        </Border>
+
+    <Grid Background="{DynamicResource BackgroundBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="{Binding SidebarWidth}"/>
+            <ColumnDefinition Width="{Binding CollapseListColumnForFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=340}"/>
+            <ColumnDefinition Width="{Binding CollapseListColumnForFocusMode, Converter={StaticResource BoolToGridLength}, ConverterParameter=5}"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Sidebar: All Tasks / Completed / Trash, then separated Tags and Views sections -->
+        <Grid Grid.Column="0" Background="{DynamicResource SidebarBackgroundBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="2*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="1*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="10,10,10,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
+                           Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
+                           Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar">
+                    <TextBlock Text="&#x2630;" Style="{StaticResource IconGlyph}"/>
+                </Button>
+            </Grid>
+
+            <ListBox x:Name="SidebarListBox" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                      ItemsSource="{Binding SidebarItems}" SelectedItem="{Binding SelectedSidebarItem}"
+                      ItemContainerStyle="{StaticResource SidebarListBoxItem}"
+                      ItemTemplate="{StaticResource SidebarItemTemplate}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"/>
+
+            <Separator Grid.Row="2" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
+
+            <TextBlock Grid.Row="3" Text="TAGS" FontSize="11" FontWeight="Bold"
+                       Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
+                       Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+
+            <ListBox x:Name="TagListBox" Grid.Row="4" Background="Transparent" BorderThickness="0"
+                      ItemsSource="{Binding TagItems}" SelectedItem="{Binding SelectedSidebarItem}"
+                      ItemContainerStyle="{StaticResource SidebarListBoxItem}"
+                      ItemTemplate="{StaticResource SidebarItemTemplate}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+
+            <Separator Grid.Row="5" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
+
+            <TextBlock Grid.Row="6" Text="VIEWS" FontSize="11" FontWeight="Bold"
+                       Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
+                       Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource InverseBoolToVis}}"/>
+
+            <ListBox x:Name="ViewListBox" Grid.Row="7" Background="Transparent" BorderThickness="0"
+                      ItemsSource="{Binding ViewItems}" SelectedItem="{Binding SelectedSidebarItem}"
+                      ItemContainerStyle="{StaticResource SidebarListBoxItem}"
+                      ItemTemplate="{StaticResource SidebarItemTemplate}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+        </Grid>
+
+        <!-- Task list -->
+        <Grid Grid.Column="1" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="8,10,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
+                        AutomationProperties.Name="New task"
+                        Command="{Binding AddTaskCommand}">
+                    <TextBlock Text="&#x2795;" Style="{StaticResource IconGlyph}"/>
+                </Button>
+
+                <Grid Grid.Column="1" Margin="6,0">
+                    <TextBox x:Name="SearchTextBox" Padding="22,6,6,6" FontSize="13" Foreground="{DynamicResource PrimaryTextBrush}"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Search tasks, notes, and tags. Operators: tag:name, is:overdue, is:pinned, is:recurring, is:done, has:link, has:attachment, due:today - combine with plain text or each other. Ctrl+F to jump here."/>
+                    <TextBlock Text="&#x1F50D;" FontFamily="{StaticResource IconFont}" FontSize="11"
+                               Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
+                               VerticalAlignment="Center" Margin="6,0,0,0"/>
+                </Grid>
+
+                <!-- Explicit size bigger than the 26x26 button itself, with the button pinned to
+                     the opposite (bottom-left) corner from the badge (top-right) - reserves real
+                     clearance for the badge instead of relying on negative margins to push it past
+                     the button's own bounds, which measured out to sitting mostly ON TOP of the
+                     icon glyph rather than beside it (confirmed by rendering this exact markup
+                     through WPF's layout engine before and after - the corner-anchored-with-
+                     negative-margin version visibly covered the funnel's tip). -->
+                <Grid Grid.Column="2" Width="34" Height="32">
+                    <Button x:Name="FilterButton" Style="{StaticResource IconButton}"
+                            HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                            ToolTip="Filters - combine as many as you like" AutomationProperties.Name="Filters"
+                            Command="{Binding ToggleFilterPopupCommand}">
+                        <!-- Actual Filter glyph (funnel), not the gear/Settings icon this used to
+                             borrow - Segoe Fluent Icons/MDL2 Assets both ship on Windows 10/11 and
+                             map E71C to Filter, matching real Fluent iconography instead of an
+                             emoji standing in for it. -->
+                        <TextBlock Text="&#xE71C;" Style="{StaticResource IconGlyph}" FontFamily="{StaticResource FluentIconFont}"/>
+                    </Button>
+                    <!-- Active-filter count badge, same idea as an unread-count badge - shows how
+                         many are on at a glance even if the chip row below has scrolled out of
+                         view, rather than just an on/off dot. -->
+                    <Border Background="{DynamicResource ButtonBackgroundBrush}" CornerRadius="7"
+                            MinWidth="14" Height="14" Padding="3,0" IsHitTestVisible="False"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Visibility="{Binding HasActiveQuickFilters, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding ActiveQuickFilterCount}" FontSize="9.5" FontWeight="Bold"
+                                   Foreground="{DynamicResource ButtonForegroundBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
+                <Popup PlacementTarget="{Binding ElementName=FilterButton}" Placement="Bottom"
+                       IsOpen="{Binding IsFilterPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
+                    <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="3" MinWidth="190">
+                        <StackPanel>
+                            <!-- Checkboxes rather than the old single-select buttons: any combination can be
+                                 checked at once (AND-combined - see MainViewModel.MatchesQuickFilter), and
+                                 checking one doesn't close the popup, so several can be picked in one pass. -->
+                            <CheckBox Content="Overdue" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.Overdue}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.Overdue}"/>
+                            <CheckBox Content="Due Today" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.DueToday}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.DueToday}"/>
+                            <CheckBox Content="No Due Date" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.NoDueDate}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.NoDueDate}"/>
+                            <CheckBox Content="Recurring" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.Recurring}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.Recurring}"/>
+                            <CheckBox Content="With Link" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.HasLink}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.HasLink}"/>
+                            <CheckBox Content="With Attachment" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.HasAttachment}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.HasAttachment}"/>
+                            <CheckBox Content="High Priority" Style="{StaticResource FilterCheckBox}" Padding="6,5" Margin="4,1"
+                                      IsChecked="{Binding ActiveQuickFilters, Mode=OneWay, Converter={StaticResource QuickFilterActive}, ConverterParameter={x:Static vm:QuickFilter.HighPriority}}"
+                                      Command="{Binding ToggleQuickFilterCommand}" CommandParameter="{x:Static vm:QuickFilter.HighPriority}"/>
+                            <Separator Margin="0,3"/>
+                            <Button Content="Clear all filters" HorizontalContentAlignment="Left" Padding="8,5" Background="Transparent" BorderThickness="0"
+                                    Command="{Binding ClearQuickFiltersCommand}"/>
+                            <Separator Margin="0,3"/>
+                            <Button Content="⭐ Save current search as view" HorizontalContentAlignment="Left" Padding="8,5" Background="Transparent" BorderThickness="0"
+                                    Command="{Binding SaveViewCommand}"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </Grid>
+
+            <!-- Active-filter chip row - "what's currently applied" needs to be visible at a
+                 glance without reopening the popup, and each chip removes just that one filter
+                 without resetting the rest (same pattern as the per-task tag chips elsewhere in
+                 this file). Collapses to nothing when no quick filters are active. -->
+            <ItemsControl Grid.Row="1" Margin="8,0,8,8" ItemsSource="{Binding ActiveQuickFilterChips}"
+                          Visibility="{Binding HasActiveQuickFilters, Converter={StaticResource BoolToVis}}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Converter={StaticResource QuickFilterLabel}}" FontSize="12"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
+                                           Cursor="Hand" VerticalAlignment="Center">
+                                    <TextBlock.InputBindings>
+                                        <MouseBinding MouseAction="LeftClick"
+                                                      Command="{Binding DataContext.RemoveQuickFilterCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                      CommandParameter="{Binding}"/>
+                                    </TextBlock.InputBindings>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <ListBox x:Name="TaskListBox" Grid.Row="2" Background="Transparent" BorderThickness="0,1,0,0"
+                      BorderBrush="{DynamicResource SecondaryBrush}" SelectionMode="Extended"
+                      ItemsSource="{Binding FilteredTasksView}" SelectedItem="{Binding SelectedTask}"
+                      ItemContainerStyle="{StaticResource TaskListItemStyle}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      SelectionChanged="TaskListBox_SelectionChanged"
+                      PreviewMouseRightButtonDown="TaskListBox_PreviewMouseRightButtonDown"
+                      Tag="{Binding}">
+                <ListBox.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Mark Completed"
+                                  Visibility="{Binding PlacementTarget.Tag.SelectedSidebarItem.Kind, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MarkCompletedVis}}"
+                                  Command="{Binding PlacementTarget.Tag.BulkMarkDoneCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Pin/Unpin"
+                                  Command="{Binding PlacementTarget.Tag.BulkTogglePinCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <Separator/>
+                        <MenuItem Header="Move to Trash"
+                                  Visibility="{Binding PlacementTarget.Tag.SelectedSidebarItem.Kind, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.BulkTrashCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Restore from Trash"
+                                  Visibility="{Binding PlacementTarget.Tag.SelectedSidebarItem.Kind, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.BulkRestoreCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Delete Permanently"
+                                  Command="{Binding PlacementTarget.Tag.BulkDeleteCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    </ContextMenu>
+                </ListBox.ContextMenu>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <CheckBox Grid.Column="0" Style="{StaticResource TaskCheckBox}"
+                                      VerticalAlignment="Top" Margin="0,2,6,0" ToolTip="Mark completed"
+                                      AutomationProperties.Name="Mark completed"
+                                      IsChecked="{Binding IsDone}"
+                                      IsEnabled="{Binding IsClosed, Converter={StaticResource InverseBool}}"
+                                      Visibility="{Binding DataContext.ShowDoneCheckbox, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolToVis}}"/>
+
+                            <TextBlock Grid.Column="1" Text="&#x1F4CC;" FontSize="11" VerticalAlignment="Top"
+                                       Margin="0,2,6,0" Cursor="Hand" ToolTip="Pin to top"
+                                       AutomationProperties.Name="{Binding IsPinned, Converter={StaticResource PinLabel}}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Opacity" Value="0.15"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                                                <Setter Property="Opacity" Value="1"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                                <TextBlock.InputBindings>
+                                    <MouseBinding MouseAction="LeftClick"
+                                                  Command="{Binding DataContext.TogglePinCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                  CommandParameter="{Binding}"/>
+                                </TextBlock.InputBindings>
+                            </TextBlock>
+
+                            <Ellipse Grid.Column="2" Width="8" Height="8" VerticalAlignment="Top" Margin="0,4,6,0"
+                                     ToolTip="{Binding Priority}"
+                                     Fill="{Binding Priority, Converter={StaticResource PriorityColor}}"
+                                     Visibility="{Binding Priority, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+
+                            <StackPanel Grid.Column="3">
+                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13.5"
+                                           Foreground="{DynamicResource PrimaryTextBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                    <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding DueDate, Converter={StaticResource DueDateToString}}"
+                                           FontSize="10.5" Margin="0,2,0,0"
+                                           Visibility="{Binding DueDate, Converter={StaticResource NullToVis}}">
+                                    <TextBlock.Foreground>
+                                        <MultiBinding Converter="{StaticResource DueDateColor}">
+                                            <Binding Path="DueDate"/>
+                                            <Binding Path="IsDone"/>
+                                        </MultiBinding>
+                                    </TextBlock.Foreground>
+                                </TextBlock>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                    <TextBlock Text="&#x1F5BC;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
+                                               ToolTip="Has photo"
+                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Photo}"/>
+                                    <TextBlock Text="&#x1F4CE;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
+                                               ToolTip="Has file attachment"
+                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=File}"/>
+                                    <TextBlock Text="&#x1F517;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
+                                               ToolTip="Has link"
+                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Link}"/>
+                                    <TextBlock Text="&#x2611;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
+                                               ToolTip="Has checklist"
+                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}"/>
+                                    <TextBlock Text="&#x1F3F7;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
+                                               ToolTip="Has tags"
+                                               Visibility="{Binding Tags, Converter={StaticResource AnyItemToVis}}"/>
+                                    <TextBlock Text="&#x1F501;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                               Foreground="{DynamicResource TertiaryBrush}"
+                                               ToolTip="Recurring"
+                                               Visibility="{Binding Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <TextBlock Grid.Row="2" Text="{Binding EmptyStateMessage}"
+                       Visibility="{Binding FilteredTasksView.IsEmpty, Converter={StaticResource BoolToVis}}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                       FontSize="13" Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
+                       MaxWidth="180" IsHitTestVisible="False"/>
+        </Grid>
+
+        <GridSplitter Grid.Column="2" Width="5" HorizontalAlignment="Stretch" Background="{DynamicResource SecondaryBrush}"
+                      Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}"/>
+
+        <!-- Calendar view: replaces the task list + splitter + editor (columns 1-3) while active -->
+        <Grid Grid.Column="1" Grid.ColumnSpan="3" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Calendar}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="16,14,16,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="Previous month"
+                        AutomationProperties.Name="Previous month" Command="{Binding PreviousMonthCommand}">
+                    <TextBlock Text="&#x2039;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="Next month"
+                        AutomationProperties.Name="Next month" Command="{Binding NextMonthCommand}">
+                    <TextBlock Text="&#x203A;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                </Button>
+                <TextBlock Grid.Column="2" Text="{Binding CalendarMonthLabel}" FontSize="16" FontWeight="Bold"
+                           VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <Button Grid.Column="4" Content="Today" Padding="10,4" Background="Transparent"
+                        BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1"
+                        Foreground="{DynamicResource PrimaryTextBrush}" Cursor="Hand"
+                        Command="{Binding TodayCommand}"/>
+            </Grid>
+
+            <UniformGrid Grid.Row="1" Columns="7" Margin="16,0,16,4">
+                <TextBlock Text="Sun" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Mon" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Tue" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Wed" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Thu" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Fri" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+                <TextBlock Text="Sat" HorizontalAlignment="Center" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TertiaryBrush}"/>
+            </UniformGrid>
+
+            <ItemsControl Grid.Row="2" ItemsSource="{Binding CalendarDays}" Margin="12,0,12,12">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="7" Rows="6"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="2" Padding="4" BorderThickness="1" BorderBrush="{DynamicResource SecondaryBrush}"
+                                Background="{DynamicResource BackgroundBrush}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsToday}" Value="True">
+                                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                            <Setter Property="BorderThickness" Value="2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Date.Day}" FontSize="12" FontWeight="Bold"
+                                           Margin="2,0,0,4">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsCurrentMonth}" Value="False">
+                                                    <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Tasks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource TagChipBrush}" CornerRadius="3"
+                                                    Margin="0,0,0,2" Padding="4,1" Cursor="Hand"
+                                                    ToolTip="{Binding Text}">
+                                                <Border.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.SelectCalendarTaskCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </Border.InputBindings>
+                                                <TextBlock Text="{Binding Text}" FontSize="10.5" TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                    <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource TertiaryBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Grid>
+
+        <!-- Editor -->
+        <Grid Grid.Column="3" Background="{DynamicResource BackgroundBrush}"
+              Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}">
+            <TextBlock Text="Select a task, or create a new one."
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       FontSize="14" Foreground="{DynamicResource TertiaryBrush}"
+                       Visibility="{Binding SelectedTaskDetail, Converter={StaticResource InverseNullToVis}}"/>
+
+            <!-- A DataContext binding and a Visibility binding on the SAME element both referencing
+                 SelectedTaskDetail is a classic WPF trap: once DataContext resolves to the
+                 TaskDetailViewModel, the Visibility binding re-resolves "SelectedTaskDetail" against
+                 THAT object (which has no such property) instead of the parent MainViewModel, fails
+                 silently, and falls back to its default (Visible) - so this pane never actually hid.
+                 The outer Grid here carries the Visibility check against the untouched parent
+                 DataContext; only the ScrollViewer inside overrides DataContext. -->
+            <Grid Visibility="{Binding SelectedTaskDetail, Converter={StaticResource NullToVis}}"
+                  AllowDrop="True"
+                  PreviewDragEnter="Body_DragEnter"
+                  PreviewDragOver="Body_DragOver"
+                  PreviewDragLeave="Body_DragLeave"
+                  PreviewDrop="Body_Drop">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,20"
+                          DataContext="{Binding SelectedTaskDetail}">
+                <StackPanel>
+                    <!-- Icon toolbar - grouped logically into functional clusters with subtle vertical dividers -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Group 1: Task State & Metadata -->
+                        <CheckBox Style="{StaticResource TaskCheckBox}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                  ToolTip="Mark completed" AutomationProperties.Name="Mark completed"
+                                  IsChecked="{Binding Task.IsDone}"
+                                  IsEnabled="{Binding CanToggleComplete}"
+                                  Visibility="{Binding DataContext.ShowDoneCheckbox, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}"/>
+
+                        <Button Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="{Binding Task.IsPinned, Converter={StaticResource PinLabel}}"
+                                Command="{Binding DataContext.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding Task}">
+                            <Button.ToolTip>
+                                <Binding Path="Task.IsPinned" Converter="{StaticResource PinLabel}"/>
+                            </Button.ToolTip>
+                            <TextBlock Text="&#x1F4CC;">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource IconGlyph}">
+                                        <Setter Property="Opacity" Value="0.35"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Task.IsPinned}" Value="True">
+                                                <Setter Property="Opacity" Value="1"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Button>
+
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
+
+                        <!-- Group 2: Note Content Insertion Tools -->
+                        <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
+                            <Button Style="{StaticResource IconButton}" Click="AddPhoto_Click" ToolTip="Add photo inline (Ctrl+Shift+P)"
+                                    AutomationProperties.Name="Add photo">
+                                <TextBlock Text="&#x1F5BC;" Style="{StaticResource IconGlyph}"/>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Click="AddLink_Click" ToolTip="Add link inline (Ctrl+Shift+L)"
+                                    AutomationProperties.Name="Add link">
+                                <TextBlock Text="&#x1F517;" Style="{StaticResource IconGlyph}"/>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Click="AddChecklist_Click" ToolTip="Add checklist item (Ctrl+Shift+C)"
+                                    AutomationProperties.Name="Add checklist">
+                                <TextBlock Text="&#x2611;" Style="{StaticResource IconGlyph}"/>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Click="AddTable_Click" ToolTip="Insert Table (Ctrl+Shift+K)"
+                                    AutomationProperties.Name="Insert table">
+                                <TextBlock Text="&#x229E;" Style="{StaticResource IconGlyph}"/>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Click="AddFile_Click" ToolTip="Add file inline (Ctrl+Shift+F)"
+                                    AutomationProperties.Name="Add file">
+                                <TextBlock Text="&#x1F4CE;" Style="{StaticResource IconGlyph}"/>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
+
+                        <!-- Group 3: Utilities & Export -->
+                        <Button Style="{StaticResource IconButton}" Click="ExportNote_Click" ToolTip="Export / Print Note (Ctrl+E)"
+                                AutomationProperties.Name="Export note">
+                            <TextBlock Text="&#x1F4E4;" Style="{StaticResource IconGlyph}"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" ToolTip="Task Info" AutomationProperties.Name="Task Info"
+                                Command="{Binding ToggleInfoPanelCommand}">
+                            <TextBlock Text="&#x24D8;" Style="{StaticResource IconGlyph}"/>
+                        </Button>
+
+                        <!-- Group Divider -->
+                        <Border Width="1" Height="16" Margin="6,0" Background="{DynamicResource SecondaryBrush}"/>
+
+                        <!-- Group 4: Destructive & Management Actions -->
+                        <Button Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="{Binding Task.IsClosed, Converter={StaticResource CloseReopenLabel}}"
+                                Command="{Binding DataContext.ToggleCloseSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <Button.ToolTip>
+                                <Binding Path="Task.IsClosed" Converter="{StaticResource CloseReopenLabel}"/>
+                            </Button.ToolTip>
+                            <TextBlock Style="{StaticResource IconGlyph}">
+                                <TextBlock.Text>
+                                    <Binding Path="Task.IsClosed" Converter="{StaticResource CloseReopenIcon}"/>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </Button>
+
+                        <Button Style="{StaticResource IconButton}" ToolTip="Delete permanently"
+                                AutomationProperties.Name="Delete permanently"
+                                Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}" Foreground="{DynamicResource DangerBrush}"/>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Sized and unboxed like a document title/header, not a form field - the
+                         toolbar above is the only chrome; everything below it is just the page. -->
+                    <TextBox x:Name="TitleTextBox"
+                             Text="{Binding Task.Text, UpdateSourceTrigger=PropertyChanged}"
+                             IsReadOnly="{Binding IsReadOnly}"
+                             FontSize="28" FontWeight="Bold" Padding="0" Margin="0,20,0,0"
+                             Foreground="{DynamicResource PrimaryTextBrush}"
+                             BorderThickness="0" Background="Transparent"
+                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                             ContextMenuOpening="TextBox_ContextMenuOpening"
+                             KeyDown="TitleTextBox_KeyDown"
+                             PreviewKeyDown="TitleTextBox_PreviewKeyDown"/>
+
+                    <Border Background="{DynamicResource SecondaryHighlightBrush}" CornerRadius="3" Padding="10" Margin="0,8,0,0"
+                            Visibility="{Binding ShowInfoPanel, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding CreatedDisplay, StringFormat='Created: {0}'}" FontSize="11.5"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <TextBlock Text="{Binding ModifiedDisplay, StringFormat='Modified: {0}'}" FontSize="11.5"
+                                       Foreground="{DynamicResource ForegroundBrush}" Margin="0,3,0,0"/>
+                            <TextBlock Text="{Binding WordCount, StringFormat='Word count: {0}'}" FontSize="11.5"
+                                       Foreground="{DynamicResource ForegroundBrush}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Content only - excludes the status action row above (checkmark/pin/trash/delete/info),
+                         which must stay usable even on a Completed or Trashed task. -->
+                    <StackPanel IsEnabled="{Binding IsEditable}">
+                        <!-- Task metadata fields: Due date/Priority/Repeat share one compact row since
+                             each is just a label+control pair; Tags stays on its own row below,
+                             both because its chips wrap onto following lines and to keep it last. -->
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Due date:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <DatePicker Grid.Column="1" SelectedDate="{Binding Task.DueDate}" HorizontalAlignment="Left" Width="130"/>
+                            <TextBlock Grid.Column="2" Text="Priority:" VerticalAlignment="Center" FontSize="13" Margin="16,0,8,0"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <ComboBox Grid.Column="3" ItemsSource="{Binding PriorityOptions}" SelectedItem="{Binding Task.Priority}"
+                                      HorizontalAlignment="Left" Width="100"/>
+                            <TextBlock Grid.Column="4" Text="Repeat:" VerticalAlignment="Center" FontSize="13" Margin="16,0,8,0"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <ComboBox Grid.Column="5" ItemsSource="{Binding RecurrenceOptions}" SelectedItem="{Binding Task.Recurrence}"
+                                      HorizontalAlignment="Left" Width="100"/>
+                            <!-- ROADMAP.md #31: "every N" interval, only meaningful once a recurrence unit is
+                                 actually selected - hidden entirely for None instead of shown-but-disabled, since
+                                 the ComboBox column preceding it already communicates on/off. -->
+                            <TextBlock Grid.Column="6" Text="every" VerticalAlignment="Center" FontSize="13" Margin="10,0,6,0"
+                                       Foreground="{DynamicResource ForegroundBrush}"
+                                       Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                            <ComboBox Grid.Column="7" ItemsSource="{Binding RecurrenceIntervalOptions}" SelectedItem="{Binding Task.RecurrenceInterval}"
+                                      HorizontalAlignment="Left" Width="55"
+                                      Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                        </Grid>
+
+                        <TextBlock Text="{Binding RecurrenceSummary}" FontSize="11" FontStyle="Italic" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
+                                   Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Tags:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <Button Grid.Column="1" x:Name="TagPickerButton" Content="Select tags &#x25BE;"
+                                    HorizontalAlignment="Left" Width="110"
+                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Select or create tags"
+                                    AutomationProperties.Name="Select or create tags"/>
+                        </Grid>
+                        <Popup PlacementTarget="{Binding ElementName=TagPickerButton}" Placement="Bottom"
+                               IsOpen="{Binding IsTagPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
+                            <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                                    BorderThickness="1" CornerRadius="3" Padding="8">
+                                <StackPanel Width="200">
+                                    <TextBox Text="{Binding NewTagText, UpdateSourceTrigger=PropertyChanged}"
+                                             Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Type a tag and press Enter"
+                                             SpellCheck.IsEnabled="True" ContextMenu="{StaticResource TextEditContextMenu}"
+                                             PreviewMouseRightButtonDown="TextBox_PreviewMouseRightButtonDown"
+                                             ContextMenuOpening="TextBox_ContextMenuOpening">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Return" Command="{Binding AddTagCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <TextBlock Text="{Binding TagHint}" FontSize="10.5" Margin="2,4,2,0"
+                                               Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                                    <Button HorizontalContentAlignment="Left" Padding="6,4" Margin="0,4,0,0"
+                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                            Visibility="{Binding CanCreateNewTag, Converter={StaticResource BoolToVis}}"
+                                            Command="{Binding AddTagCommand}">
+                                        <TextBlock FontSize="12.5" Foreground="{DynamicResource AccentBrush}">
+                                            <Run Text="+ Create &quot;"/><Run Text="{Binding NewTagPreview, Mode=OneWay}"/><Run Text="&quot;"/>
+                                        </TextBlock>
+                                    </Button>
+                                    <ItemsControl ItemsSource="{Binding FilteredAvailableTags}" Margin="0,6,0,0"
+                                                  MaxHeight="180">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button HorizontalContentAlignment="Left" Padding="6,4" Margin="0,0,0,1"
+                                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                        Command="{Binding DataContext.SelectExistingTagCommand, RelativeSource={RelativeSource AncestorType=Popup}}"
+                                                        CommandParameter="{Binding}">
+                                                    <TextBlock Text="{Binding}" FontSize="12.5"/>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                        <ItemsControl ItemsSource="{Binding Task.Tags}" Margin="0,6,0,0">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding}" FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                            <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
+                                                       Cursor="Hand" VerticalAlignment="Center">
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- Unified note body: single continuous inline Word-like document canvas -->
+                        <Grid x:Name="NoteBody" Background="Transparent" MinHeight="500" Margin="0,12,0,0"
+                              AllowDrop="True"
+                              DragEnter="NoteBody_DragEnter"
+                              DragOver="NoteBody_DragOver"
+                              DragLeave="NoteBody_DragLeave"
+                              Drop="NoteBody_Drop">
+                            <RichTextBox x:Name="NoteEditor"
+                                         DataContext="{Binding PrimaryBlock}"
+                                         Padding="0" VerticalContentAlignment="Top"
+                                         MinHeight="500"
+                                         Foreground="{DynamicResource PrimaryTextBrush}" FontSize="14"
+                                         AcceptsReturn="True" AcceptsTab="True"
+                                         GotFocus="RichTextBox_GotFocus"
+                                         LostFocus="RichTextBox_LostFocus"
+                                         SelectionChanged="RichTextBox_SelectionChanged"
+                                         PreviewMouseLeftButtonDown="RichTextBox_PreviewMouseLeftButtonDown"
+                                         PreviewMouseRightButtonDown="RichTextBox_PreviewMouseRightButtonDown"
+                                         ContextMenuOpening="RichTextBox_ContextMenuOpening"
+                                         QueryCursor="RichTextBox_QueryCursor"
+                                         SpellCheck.IsEnabled="True"
+                                         beh:RichTextBoxBehavior.Enable="True"
+                                         ContextMenu="{StaticResource TextEditorContextMenu}"/>
+                            <TextBlock Text="Start typing notes, instructions, paste images, or add links..." FontSize="14" FontStyle="Italic"
+                                       Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
+                                       VerticalAlignment="Top" Margin="0,2,0,0"
+                                       Visibility="{Binding ElementName=NoteEditor, Path=(beh:RichTextBoxBehavior.IsEmpty), Converter={StaticResource BoolToVis}}"/>
+                        </Grid>
+
+                        <!-- Content synced from elsewhere that isn't Body[0] (PrimaryBlock, shown in
+                             NoteEditor above) - the only source of this today is Tasky Web's per-type
+                             "+" buttons (or a second desktop syncing its own PrimaryBlock in as index
+                             1+), since this app's own editor only ever writes to PrimaryBlock. Without
+                             this section that content is safely synced but never shown here. View/open/
+                             check-off/remove only - no inline editing of a block's own text from here,
+                             matching the read-mostly scope this was scoped to. -->
+                        <StackPanel Margin="0,16,0,0"
+                                    Visibility="{Binding AdditionalBlocks, Converter={StaticResource AnyItemToVis}}">
+                            <Border Height="1" Background="{DynamicResource SecondaryBrush}" Margin="0,0,0,12"/>
+                            <TextBlock Text="More content (synced from Tasky Web)" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,0,8"/>
+                            <ItemsControl ItemsSource="{Binding AdditionalBlocks}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource SecondaryHighlightBrush}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13"
+                                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                                               Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Text}"/>
+
+                                                    <StackPanel Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Photo}">
+                                                        <Image Source="{Binding Converter={StaticResource NoteBlockToPhotoSource}}"
+                                                               MaxHeight="180" HorizontalAlignment="Left" Stretch="Uniform" Cursor="Hand"
+                                                               MouseLeftButtonDown="Photo_Click"/>
+                                                        <TextBlock Text="{Binding FileName}" FontSize="11" Margin="0,4,0,0"
+                                                                   Foreground="{DynamicResource TertiaryBrush}"/>
+                                                    </StackPanel>
+
+                                                    <Border Cursor="Hand" MouseLeftButtonDown="AdditionalLink_Click"
+                                                            Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Link}">
+                                                        <TextBlock Text="{Binding LinkLabel}" TextWrapping="Wrap" FontSize="13"
+                                                                   Foreground="{DynamicResource AccentBrush}" TextDecorations="Underline"/>
+                                                    </Border>
+
+                                                    <Border Cursor="Hand" MouseLeftButtonDown="AdditionalFile_Click"
+                                                            Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=File}">
+                                                        <TextBlock Text="{Binding FileName}" FontSize="13"
+                                                                   Foreground="{DynamicResource AccentBrush}" TextDecorations="Underline"/>
+                                                    </Border>
+
+                                                    <ItemsControl ItemsSource="{Binding ChecklistItems}"
+                                                                  Visibility="{Binding Type, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Checklist}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+                                                                    <CheckBox IsChecked="{Binding IsChecked}" VerticalAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding Text}" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                               FontSize="13" TextWrapping="Wrap"
+                                                                               Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+
+                                                <Button Grid.Column="1" Style="{StaticResource IconButton}" VerticalAlignment="Top"
+                                                        Command="{Binding DataContext.RemoveAdditionalBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" ToolTip="Remove" AutomationProperties.Name="Remove">
+                                                    <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}"/>
+                                                </Button>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+            <Border x:Name="DropOverlay" Background="#333361CC" BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="2" CornerRadius="4" Margin="6" IsHitTestVisible="False" Visibility="Collapsed"/>
+            </Grid>
+        </Grid>
+    </Grid>
+    </DockPanel>
+</Window>

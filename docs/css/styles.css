@@ -1,0 +1,1517 @@
+:root {
+  /* Without this, native form controls (text inputs, selects, checkboxes, the mobile keyboard's
+     own chrome) render with the browser's default light UA styling regardless of the custom
+     --bg/--text colors above - normally invisible since inputs here are transparent and inherit
+     the pane behind them, but some mobile browsers (seen on Android Chrome) intermittently paint
+     a plain white background under a freshly-focused/newly-created input before the page's own
+     styles are considered, which read as an unstyled white box with black text. Declaring the
+     supported schemes (and pinning it to match an explicit theme override below) tells the
+     browser which native palette to use up front instead of guessing. */
+  color-scheme: light dark;
+  --bg: #f3f4f7;
+  --pane-bg: #ffffff;
+  --border: #e3e6eb;
+  --text: #1a1d23;
+  --text-dim: #6b7280;
+  --accent: #3861d6;
+  --accent-2: #5b7ff0;
+  --accent-text: #ffffff;
+  --hover: #eef1f7;
+  --selected: #e6ecfd;
+  --danger: #d64545;
+  /* --danger itself fails WCAG AA (4.5:1) as *text* on --pane-bg in both themes (~4.38:1 light,
+     ~3.44:1 dark) - it was only ever contrast-checked for background/border use. --danger-text is
+     a separate, theme-tuned token for actual error text with different contrast math/requirements.
+     --danger does get its own dark-mode value below (was missing one for a while - the swipe-to-
+     trash background stayed exactly this light-mode red in dark mode while --success correctly
+     brightened, reported live as the swipe colors not fitting the theme), tuned to roughly the same
+     lightness as dark mode's --success so the two read as a matched pair again. */
+  --danger-text: #c0392b;
+  --success: #2f9e5c;
+  --shadow: 0 4px 16px rgba(20, 24, 33, 0.08);
+  --shadow-lg: 0 12px 32px rgba(20, 24, 33, 0.16);
+  --radius: 12px;
+}
+
+/* Dark palette leans on Google Cloud Console's flat near-black grays rather than a blue-tinted
+   dark theme - fewer distinct surface colors, borders doing more of the separation than shadows.
+
+   !! These same values are duplicated verbatim in the plain :root[data-theme="dark"] block right
+   below - a media query can't be combined with an attribute selector in one rule, and this
+   project deliberately has no build step/preprocessor to define the palette once and share it.
+   If you change a color here, change it there too, or "match system" and "force dark" will
+   silently drift apart. */
+/* Pins native controls to light even when the OS is dark - otherwise color-scheme:"light dark" on
+   :root leaves the browser free to render inputs/selects/checkboxes in dark UA styling by OS
+   preference alone, while everything else on the page (correctly, via the :not([data-theme="light"])
+   guard below) stays on the explicitly-chosen light palette. No matching dark-palette values needed
+   here since :root's own light defaults already apply whenever this attribute is set. */
+:root[data-theme="light"] { color-scheme: light; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1f1f1f;
+    --pane-bg: #262629;
+    --border: #3c4043;
+    --text: #e8eaed;
+    --text-dim: #9aa0a6;
+    --accent: #8ab4f8;
+    --accent-2: #669df6;
+    --accent-text: #202124;
+    --hover: #303134;
+    --selected: #37383b;
+    --danger: #e06666;
+    --danger-text: #f28b82;
+    --success: #6ac789;
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+/* Duplicates the @media (prefers-color-scheme: dark) block above - see its comment. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1f1f1f;
+  --pane-bg: #262629;
+  --border: #3c4043;
+  --text: #e8eaed;
+  --text-dim: #9aa0a6;
+  --accent: #8ab4f8;
+  --accent-2: #669df6;
+  --accent-text: #202124;
+  --hover: #303134;
+  --selected: #37383b;
+  --danger: #e06666;
+  --danger-text: #f28b82;
+  --success: #6ac789;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+* { box-sizing: border-box; }
+/* Chrome for Android's pull-to-refresh triggers off document-level overscroll - without this, a
+   downward swipe that starts inside a scrolled-to-top list (search results, task list, editor
+   body) chains straight through to it and reloads the whole SPA, discarding anything not yet
+   autosaved. Blocking it here is enough; the inner panes already scroll independently. */
+/* 100dvh (the browser's dynamic viewport height, shrinking live as the soft keyboard opens or a
+   mobile browser's URL bar collapses/expands) as a progressive enhancement over 100% - a browser
+   without dvh support just ignores the second declaration and keeps the 100% fallback. */
+html, body { height: 100%; height: 100dvh; overscroll-behavior-y: contain; }
+/* Text size preference - most of this stylesheet sizes type in em, which cascades from this root
+   size, so scaling it here scales the whole app proportionally without a unit-by-unit audit. */
+html { font-size: 100%; touch-action: manipulation; }
+:root[data-font-size="small"] { font-size: 90%; }
+:root[data-font-size="large"] { font-size: 115%; }
+:root[data-font-size="xlarge"] { font-size: 130%; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.hidden { display: none !important; }
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  /* A literal color, not var(--danger)/(--danger-text) - this is white text ON a red background,
+     which needs a darker, non-theme-varying red to stay AA-compliant regardless of app theme
+     (--danger-text is tuned the opposite way - lighter in dark mode - for the reverse case of
+     colored text on a neutral background, so it isn't safe to reuse here). */
+  background: #c0392b;
+  color: #fff;
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 0.85em;
+}
+/* .offline-banner is position:fixed (it isn't inside .app or .signin-screen - both exist as
+   separate, mutually-hidden trees, so it can't be a normal-flow sibling of either), which means
+   showing it doesn't reserve any space on its own - without this, it would render on top of and
+   obscure whatever's at the top of the viewport instead of pushing it down. --offline-banner-height
+   is set by app.js from the real element's measured height (its text can wrap to two lines on a
+   narrow phone), and only applied via this class while the banner is actually visible. */
+:root { --offline-banner-height: 0px; }
+body.offline-banner-visible .app,
+body.offline-banner-visible .signin-screen {
+  padding-top: var(--offline-banner-height);
+}
+button { font-family: inherit; }
+a { color: var(--accent); }
+.icon { width: 18px; height: 18px; display: block; }
+
+/* Browsers render native scrollbars in a fixed OS color regardless of the page's own theme -
+   left alone, that's a bright light-mode scrollbar sitting in an otherwise dark UI. Themed via
+   the same CSS variables the rest of the page uses, so it follows light/dark automatically. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Sign-in screen */
+.signin-screen {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 15%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 45%),
+    radial-gradient(circle at 85% 80%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 45%),
+    var(--bg);
+}
+.signin-card {
+  text-align: center;
+  max-width: 340px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 36px 28px;
+  box-shadow: var(--shadow-lg);
+}
+.signin-logo { width: 72px; height: 72px; border-radius: 18px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.signin-card h1 { margin: 0 0 4px; letter-spacing: -0.02em; }
+.signin-sub { color: var(--text-dim); margin-bottom: 22px; }
+.signin-status { color: var(--danger-text); font-size: 0.9em; min-height: 1.2em; }
+.signin-version { color: var(--text-dim); opacity: 0.5; font-size: 0.72em; margin-top: 18px; margin-bottom: 0; }
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 1em;
+  cursor: pointer;
+  transition: transform 0.05s ease, background 0.15s ease;
+}
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-text); box-shadow: var(--shadow); }
+.btn-ghost { background: none; border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover { background: var(--hover); }
+.btn.small { padding: 4px 10px; font-size: 0.85em; }
+.btn.danger { color: var(--danger-text); border-color: var(--danger); }
+
+/* App shell */
+.app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--pane-bg);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 30;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  margin: 0 0 0 6px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.brand:hover, .brand:focus-visible { background: var(--hover); }
+.brand-logo { width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; }
+.header-title { font-size: 1.05em; font-weight: 600; margin: 0; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.save-status { font-size: 0.82em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+.save-status-action { color: var(--accent); text-decoration: underline; cursor: pointer; }
+/* ROADMAP.md #57: mirrors desktop's ProgressBar next to SaveStatusText - width transition makes
+   each stage jump (see setSyncProgress in app.js) read as continuous motion rather than a snap. */
+.save-progress { display: inline-block; width: 70px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; margin-right: 8px; flex-shrink: 0; }
+.save-progress.hidden { display: none; }
+.save-progress-fill { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width 0.25s ease; }
+.icon-btn {
+  position: relative;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  padding: 7px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:hover { background: var(--hover); }
+.filter-toggle-btn { flex-shrink: 0; }
+.filter-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.62em;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+.nav-back { display: none; margin-right: 4px; }
+.sidebar-drawer-btn { display: none; }
+.insert-toggle-btn { display: none; }
+
+/* Grouped icon buttons read as one toolbar control (Cloud Console style) instead of loose
+   floating buttons - shared pill background, buttons themselves stay borderless inside it. */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+}
+.toolbar-group .icon-btn, .toolbar-group .account-avatar { border-radius: 999px; }
+#sync-now-btn.spinning .icon { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Dropdowns (menu + account) */
+.menu-wrap, .account-wrap { position: relative; }
+.dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 8px;
+  z-index: 40;
+}
+.dropdown-right { left: auto; right: 0; }
+.dropdown-section-label {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 6px 8px 2px;
+}
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.dropdown-item:hover { background: var(--hover); }
+.dropdown-divider { height: 1px; background: var(--border); margin: 6px 4px; }
+.dropdown-email { padding: 8px; font-size: 0.85em; color: var(--text-dim); word-break: break-all; }
+/* Icon-only segmented control (like an OS appearance picker) rather than three bordered text
+   buttons - one pill container, active choice gets the raised segment. */
+.theme-switch {
+  display: flex;
+  gap: 2px;
+  margin: 4px 8px 8px;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.theme-switch button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 0;
+  border-radius: 999px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.theme-switch button .icon { width: 16px; height: 16px; }
+.theme-switch button.active { background: var(--pane-bg); color: var(--accent); box-shadow: var(--shadow); }
+.font-size-switch button:nth-child(1) { font-size: 0.8em; }
+.font-size-switch button:nth-child(2) { font-size: 1em; }
+.font-size-switch button:nth-child(3) { font-size: 1.3em; }
+.font-size-switch button:nth-child(4) { font-size: 1.5em; }
+
+.account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: var(--accent-text);
+  font-weight: 700;
+  font-size: 0.85em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0;
+}
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dropdown-name { padding: 8px 8px 0; font-size: 0.9em; font-weight: 600; }
+
+/* Modal (About) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 16, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+.modal-card {
+  position: relative;
+  background: var(--pane-bg);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  padding: 32px 28px;
+  max-width: 360px;
+  text-align: center;
+}
+.modal-card h2 { margin: 4px 0; }
+.modal-card p { color: var(--text-dim); font-size: 0.9em; line-height: 1.5; }
+.about-version { font-size: 0.8em !important; }
+.modal-close { position: absolute; top: 10px; right: 10px; }
+
+/* Confirm dialog (Delete Permanently / Empty Trash / etc., see confirmModal in app.js) - a lighter,
+   smaller sibling of .modal-overlay/.modal-card, closer in weight to .undo-toast (same
+   var(--pane-bg)/var(--border)/var(--shadow-lg) tokens the whole app already shares, just a much
+   thinner backdrop and a tighter card) rather than the heavy full-screen-feeling dialog those share
+   with About/Shortcuts. Still a real blocking confirm (unlike the toast) - reported live as "a big
+   popup" that didn't match the small notification completing a task gives, so this keeps the
+   confirm-before-you-lose-data-forever gate but dials back how heavy it feels. Stays a small
+   centered card at every width rather than becoming a mobile bottom sheet - a yes/no decision reads
+   better as a brief centered alert than a drawer, same idiom native OS confirm dialogs use. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 16, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+.confirm-card {
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 16px 18px;
+  max-width: 300px;
+  text-align: left;
+}
+.confirm-card h2 { margin: 0 0 6px; font-size: 1.02em; }
+.confirm-card p { margin: 0; color: var(--text-dim); font-size: 0.88em; line-height: 1.5; }
+.confirm-card .link-modal-actions { margin-top: 14px; }
+
+/* Settings/About - JS-positioned popups (position:fixed, exact coordinates set from the trigger
+   button's rect - see openAnchoredPopup in app.js), same idiom as #list-filter-row/#more-sheet-popup,
+   not modals - no swipe-to-dismiss to build, dismiss is already "tap outside or Escape" via the
+   existing closeDropdowns() plumbing. Not nested under a single anchor like menu-dropdown/
+   account-dropdown are, since on mobile they're opened from the bottom tab bar's More popup instead
+   of the header hamburger (which is hidden there - see .menu-wrap below) - one overflow menu on
+   phones, not two. Settings needs more width than the plain text-list popups to fit the
+   theme/text-size switches. */
+.settings-dropdown, .about-dropdown {
+  position: fixed;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 8px;
+  z-index: 40;
+}
+.settings-dropdown { width: 260px; }
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 8px 4px;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+.settings-toggle-row input { flex-shrink: 0; }
+.settings-row-disabled { opacity: 0.5; cursor: default; }
+.about-dropdown { width: 240px; text-align: center; padding: 16px 14px; }
+.about-dropdown h2 { margin: 4px 0; }
+.about-dropdown p { color: var(--text-dim); font-size: 0.9em; line-height: 1.5; }
+/* Stacks the download/source links one per line rather than letting two adjacent inline <a>s run
+   together on one cramped line. */
+.about-dropdown a { display: block; margin-top: 6px; }
+.about-dropdown-logo { width: 48px; height: 48px; border-radius: 12px; box-shadow: var(--shadow); }
+.about-replay-tour-btn {
+  display: block;
+  margin: 10px auto 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.about-replay-tour-btn:hover { text-decoration: underline; }
+
+/* Modal (Add Link) - reuses .modal-overlay/.modal-card, adds a vertical form layout since
+   .editor-field is a horizontal label+input pair meant for the small Due/Repeats row. */
+.link-modal-card { text-align: left; max-width: 400px; }
+
+/* Mobile "More" popup - same small-anchored-card idiom as #list-filter-row (position:fixed, JS
+   sets the exact coordinates from the trigger button's rect - see the More button handler in
+   renderMobileTabbar), just visually matching .dropdown's look since its content (a couple of
+   dropdown-item rows) is the same shape as the menu/account dropdowns rather than the
+   sort/filter chip groups. */
+.more-sheet-popup {
+  position: fixed;
+  min-width: 190px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 8px;
+  z-index: 40;
+}
+/* Same fixed-popup chrome as .more-sheet-popup above - see #quick-add-popup's comment in index.html
+   for what opens it. .quick-add-input/.quick-add-preview (styled near .quick-add-row) are reused
+   as-is inside it rather than duplicated. */
+.quick-add-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: fixed;
+  width: 260px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 10px;
+  z-index: 40;
+}
+.link-modal-field { display: block; font-size: 0.85em; color: var(--text-dim); margin: 12px 0 4px; }
+.link-modal-field input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  background: var(--pane-bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 1em;
+}
+.link-modal-error { color: var(--danger-text); font-size: 0.85em !important; margin: 4px 0 0; }
+.link-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.app-body {
+  --list-pane-width: 320px;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 220px var(--list-pane-width) 6px 1fr;
+  min-height: 0;
+  transition: grid-template-columns 0.15s ease;
+}
+.app-body.sidebar-collapsed { grid-template-columns: 56px var(--list-pane-width) 6px 1fr; }
+.app-body.resizing { transition: none; }
+.pane { overflow-y: auto; min-height: 0; }
+
+/* Desktop-only drag handle between the list and editor panes (hidden below - see the
+   max-width:1023px tablet block, where list+editor already split the width evenly and there's
+   no fixed list-pane width left to adjust). Drawn as a thin line inset within a wider invisible
+   hit target so it's actually easy to grab without needing pixel precision. */
+.pane-resizer {
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+}
+.pane-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+.pane-resizer:hover::after, .pane-resizer.dragging::after { background: var(--accent); }
+.sidebar { border-right: 1px solid var(--border); background: var(--pane-bg); padding: 8px 0; position: relative; }
+/* overflow-y: hidden overrides .pane's auto - the search/filter toolbar above #task-list should
+   stay put, with only the task rows themselves scrolling (#task-list already has its own
+   overflow-y: auto). Without this, the whole pane became a second, redundant scroll container,
+   which is what a persistent scrollbar sitting above the actual list rows was really showing. */
+.list-pane { border-right: 1px solid var(--border); background: var(--pane-bg); display: flex; flex-direction: column; overflow-y: hidden; }
+.editor-pane { background: var(--bg); padding: 20px; }
+
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.sidebar-collapse-btn:hover { color: var(--text); background: var(--hover); }
+.sidebar-collapsed .sidebar-collapse-btn .icon { transform: rotate(180deg); }
+
+.new-task-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 16px);
+  margin: 0 8px 12px;
+  padding: 12px;
+  font-size: 1em;
+  font-weight: 600;
+}
+.new-task-btn .icon { width: 20px; height: 20px; flex-shrink: 0; }
+#list-pane > .new-task-btn { width: calc(100% - 20px); margin: 0 10px 10px; }
+.sidebar-collapsed .new-task-btn { width: 40px; height: 40px; padding: 0; margin: 0 auto 12px; border-radius: 50%; }
+.sidebar-collapsed .new-task-btn .sidebar-item-label { display: none; }
+/* Desktop only (see the tablet/mobile blocks further down - below 1024px the sidebar is a
+   drawer that's hidden by default, so #list-pane's copy is the only reachable "new task" button
+   there and stays). At >=1024px the sidebar is permanently visible alongside the list pane, so
+   showing both was just the same action offered twice in the same view. The quick-add row above
+   this button covers fast text-only capture on desktop; the sidebar button remains for opening
+   straight into the full editor. */
+@media (min-width: 1024px) {
+  #list-pane > .new-task-btn { display: none; }
+}
+
+.sidebar-list { list-style: none; margin: 0; padding: 0 8px; }
+.sidebar-section-label {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 14px 16px 4px;
+}
+.sidebar-list li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95em;
+}
+.sidebar-list li .sidebar-item-label { flex: 1; }
+.sidebar-list li .icon { flex-shrink: 0; color: var(--text-dim); }
+.saved-views-list li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-delete-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  display: flex;
+  padding: 0;
+}
+.view-delete-btn .icon { width: 14px; height: 14px; }
+.view-delete-btn:hover { color: var(--danger-text); }
+.sidebar-list li:hover, .sidebar-list li:focus-visible { background: var(--hover); }
+.sidebar-list li.active { background: var(--selected); font-weight: 600; }
+.sidebar-list li.active .icon { color: var(--accent); }
+.sidebar-list .count { color: var(--text-dim); font-size: 0.85em; }
+
+.sidebar-collapsed .sidebar-section-label,
+.sidebar-collapsed .tag-list,
+.sidebar-collapsed .saved-views-list,
+.sidebar-collapsed .sidebar-item-label,
+.sidebar-collapsed .count { display: none; }
+.sidebar-collapsed .sidebar-list li { justify-content: center; padding: 10px; }
+
+.list-toolbar { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.search-box-wrap { position: relative; flex: 1; display: flex; }
+.search-box {
+  flex: 1;
+  padding: 8px 30px 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.search-clear-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 50%;
+  display: flex;
+}
+.search-clear-btn:hover { background: var(--hover); color: var(--text); }
+.search-clear-btn .icon { width: 14px; height: 14px; }
+
+.quick-add-row { padding: 0 10px 10px; }
+.quick-add-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.92em;
+}
+.quick-add-input:focus { outline: none; border-style: solid; border-color: var(--accent); }
+.quick-add-input::placeholder { color: var(--text-dim); }
+/* ROADMAP.md #135: mirrors desktop's QuickAddWindow PreviewText styling (TertiaryBrush, small). */
+.quick-add-preview { font-size: 0.78em; color: var(--text-dim); padding: 4px 12px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.quick-add-preview.hidden { display: none; }
+.quick-add-preview .qa-tag { color: var(--accent); }
+
+/* Sort/Filter collapse behind one icon (#filter-toggle-btn) into this small anchored popup at every
+   width - same openAnchoredPopup idiom as the Settings/About/More popups (app.js sets exact
+   left/right/top/bottom from the trigger button's rect on open, flipping side depending which half
+   of the screen it's in), so no fixed offset here. Used to stay a permanently-visible inline row on
+   tablet/desktop; collapsed everywhere per user feedback (2026-08-28) once it was pointed out the
+   sort/filter controls shouldn't eat space above the list when nobody's actively choosing one. */
+.list-filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  position: fixed;
+  width: 200px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 22;
+}
+.chip-group-label {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.chip-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.82em;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.chip:hover { background: var(--hover); }
+.chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.trash-actions-row { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.trash-actions-row .btn { width: 100%; }
+/* Selection mode was hard to tell was even on (reported live, mobile) - the icon-button's own
+   accent fill is subtle among the other header icons and easy to miss at a glance. Reinforced with
+   three more signals that don't depend on spotting one small button: the toggle's icon itself swaps
+   to an X (see updateBulkActionsBar in app.js) so the button also communicates "tap to exit", the
+   bulk-actions bar gets a tinted background instead of blending in like the plain trash/done rows,
+   and the whole list gets a faint matching tint so the mode reads even while scrolled past the bar. */
+.select-toggle-btn.active { background: var(--accent); color: var(--accent-text); }
+.bulk-actions-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--pane-bg));
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.bulk-selected-count { font-size: 0.9em; color: var(--text); font-weight: 700; }
+.bulk-actions-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.bulk-actions-buttons .btn { flex: 1 1 auto; min-width: 72px; }
+.task-list.selecting { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+/* The per-row selection checkbox only makes sense while bulk-select mode is on - kept in the DOM
+   at all times (see renderTaskRow in app.js) rather than added/removed, so toggling selection mode
+   is a pure CSS flip instead of a re-render of every row. The default-hide rule below is scoped to
+   `.task-list` (two classes) rather than bare `.select-checkbox-wrap` (one class) so it reliably
+   beats the generic `.checkbox-tap-target { display: inline-flex }` rule further down this file on
+   specificity - both rules have equal specificity otherwise, so whichever happens to come later in
+   the file wins, which left the selection checkbox visibly stuck on at all times, selection mode or
+   not (reported live: "two checkboxes" showing on every row with multiselect never turned on). */
+.task-list .select-checkbox-wrap { display: none; }
+.task-list.selecting .select-checkbox-wrap { display: inline-flex; }
+.task-list.selecting .checkbox-tap-target:not(.select-checkbox-wrap) { display: none; }
+.task-list li.row-selected .task-content { background: var(--selected); }
+/* Settings > Task List > "Show Mark done checkbox" (default on) - lets anyone who's learned the
+   swipe-to-done gesture reclaim the row space. High-specificity selector so it wins regardless of
+   source order, same reasoning as the select-checkbox-wrap rule above. Also gates the editor's own
+   Done pill (see .editor-done-field below) - requested live so turning this off is consistent
+   everywhere rather than only hiding the row checkbox while leaving an equivalent one in the
+   editor. The editor has no swipe gesture of its own, but IsDone stays reachable there via the
+   task's own row (swipe or the row checkbox, whichever's on) even with this off. */
+html.hide-done-checkbox .task-list .done-checkbox-wrap,
+html.hide-done-checkbox .editor-done-field { display: none; }
+.task-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0; }
+/* The swipe-to-reveal gesture (touch only - see bindSwipeGesture in app.js) needs two layers: the
+   <li> itself just clips (overflow:hidden) and carries the stable border/radius/margin, while
+   .task-content is the actual visible card - opaque background, all the original padding/flex
+   layout - that slides via transform to reveal one of the two absolutely-positioned action panels
+   sitting underneath it. Splitting it this way means a mouse/keyboard user sees literally the same
+   card as before; only touch dragging exposes the new layer. */
+.task-list li {
+  position: relative;
+  overflow: hidden;
+  margin: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  cursor: pointer;
+}
+.task-swipe-action {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 92px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  color: #fff;
+  font-size: 0.82em;
+  font-weight: 600;
+}
+.task-swipe-action .icon { width: 17px; height: 17px; flex-shrink: 0; }
+/* .complete = "the left slot" (revealed by swiping right), .trash = "the right slot" (revealed by
+   swiping left) - see updateTaskRow in app.js, which decides per section what each slot means:
+   right is the forward/positive step on Today/All/Recurring (left=green/Done, right=red/Trash,
+   plain defaults below, no modifier), but the away/negative step on Completed and Trash instead
+   (both invert the defaults via .danger/.safe - same trick, different labels: Trash/Undo vs
+   Delete/Restore). */
+.task-swipe-action.complete { left: 0; background: var(--success); }
+.task-swipe-action.trash { right: 0; background: var(--danger); justify-content: flex-end; }
+.task-swipe-action.complete.danger { background: var(--danger); }
+.task-swipe-action.trash.safe { background: var(--success); }
+.task-content {
+  position: relative;
+  z-index: 1;
+  background: var(--pane-bg);
+  padding: 10px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  transition: background 0.15s ease;
+  touch-action: pan-y;
+}
+/* .checkbox-tap-target is a <label> wrapping the checkbox (see app.js/editor.js) - by default it's
+   just a transparent inline wrapper matching the old unwrapped layout; the mobile media query
+   below is what actually grows the tap target, since padding on a native checkbox itself isn't
+   reliably respected for hit-testing across browsers. */
+.checkbox-tap-target { display: inline-flex; align-items: center; flex-shrink: 0; }
+.task-list li .checkbox-tap-target { margin-top: 3px; }
+.task-row-info { flex: 1; min-width: 0; }
+.task-list li:hover .task-content, .task-list li:focus-visible .task-content { background: var(--hover); }
+.task-list li.selected .task-content { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
+.task-list li.selected { border-color: transparent; }
+.task-list li.pinned:not(.selected) { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.task-title { font-weight: 500; }
+.task-title .icon.pin-inline { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; color: var(--accent); display: inline-block; }
+.tag-chip button .icon { width: 10px; height: 10px; }
+.sidebar-list li .icon { width: 17px; height: 17px; }
+.task-title.done { text-decoration: line-through; color: var(--text-dim); }
+.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.task-due-overdue { color: var(--danger-text); font-weight: 600; }
+.task-indicators { display: flex; align-items: center; gap: 4px; }
+.task-indicators .icon { width: 12px; height: 12px; }
+
+.empty-state { color: var(--text-dim); text-align: center; padding: 40px 16px; }
+
+.editor-empty-dashboard { max-width: 360px; margin: 0 auto; }
+.empty-dashboard-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 24px; }
+.empty-dashboard-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 8px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.empty-dashboard-card:hover, .empty-dashboard-card:focus-visible { border-color: var(--accent); background: var(--hover); }
+.empty-dashboard-count { font-size: 1.6em; font-weight: 700; color: var(--accent); }
+.empty-dashboard-count.overdue { color: var(--danger-text); }
+.empty-dashboard-label { font-size: 0.75em; color: var(--text-dim); }
+.empty-dashboard-hint { margin-bottom: 20px; }
+/* Desktop/tablet already has New Task in the list pane and sidebar, both visible alongside this
+   dashboard - shown only on mobile (see the max-width:767px block below), where the dashboard is
+   its own full-screen view with no other Add Task button reachable from it. */
+.empty-dashboard-add-btn {
+  display: none;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.empty-dashboard-add-btn .icon { width: 18px; height: 18px; }
+.empty-dashboard-shortcuts {
+  text-align: left;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+}
+.shortcut-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 0.88em; }
+.shortcut-row + .shortcut-row { border-top: 1px solid var(--border); }
+.shortcut-row span:last-child { color: var(--text-dim); }
+.shortcut-keys { flex-shrink: 0; min-width: 72px; }
+.shortcut-row-link {
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.shortcut-row-link:hover span:last-child { color: var(--accent); text-decoration: underline; }
+/* Desktop/tablet already reach Settings/Tags via the header hamburger and sidebar, both visible
+   alongside this dashboard - shown only on mobile (see the max-width:767px block below), same
+   reasoning and pattern as .empty-dashboard-add-btn above. */
+.empty-dashboard-links { display: none; text-align: left; background: var(--pane-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 14px; margin-top: 10px; }
+kbd {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.shortcuts-modal-card { text-align: left; max-width: 420px; }
+.shortcuts-modal-card h2 { text-align: center; }
+.shortcuts-list { margin: 16px 0; }
+.shortcuts-hint { font-size: 0.85em !important; }
+.shortcuts-hint code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.95em;
+}
+
+.onboarding-modal-card { text-align: left; max-width: 420px; }
+.onboarding-modal-card h2 { text-align: center; margin-top: 4px; }
+.onboarding-list { margin: 16px 0; padding-left: 20px; }
+.onboarding-list li { margin-bottom: 10px; line-height: 1.4; font-size: 0.92em; }
+.onboarding-list code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.onboarding-sample-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+  padding: 8px 0 16px;
+  cursor: pointer;
+}
+.onboarding-modal-card .btn { width: 100%; }
+
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--pane-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-lg);
+  padding: 8px 8px 8px 18px;
+  font-size: 0.9em;
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+}
+.undo-toast-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undo-toast .btn { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+
+/* Roadmap #37 install banner - same fixed-bottom-toast family as .undo-toast, just wider (fits a
+   headline + description line) and left-aligned instead of centered, since it can appear
+   alongside the undo toast (a completed/trashed task right before install-eligibility fires) and
+   the two would otherwise collide at the same centered spot. */
+.install-banner {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 24px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--pane-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+  max-width: 420px;
+}
+.install-banner-icon { width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; }
+.install-banner-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.88em; }
+.install-banner-text strong { font-size: 1.05em; }
+.install-banner-text span { color: var(--text-dim); line-height: 1.4; }
+#install-action-btn, #install-dismiss-btn { flex-shrink: 0; }
+
+/* Title carries at most one lightweight header action (the overflow menu) - see index.html's
+   comment on .editor-title-row for why Done/Pin moved out of here and into the pill row below,
+   leaving only the rare/destructive Trash/Delete actions behind the "more" button. */
+.editor-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.editor-more-wrap { position: relative; flex-shrink: 0; }
+.dropdown-item.danger { color: var(--danger-text); }
+
+.editor-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.5em;
+  font-weight: 700;
+  border: none;
+  background: none;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+/* One compact metadata strip (Due/Repeat/Tags) instead of three separate labeled rows - Due/Repeat
+   share the tag chips' exact pill styling (background/radius/padding below) so every piece of task
+   metadata reads as the same small family of scannable pills, icon-led instead of text-labeled
+   ("Due"/"Repeats" read as form labels; a calendar/repeat icon says the same thing in less width
+   and less visual noise). Mirrors how Google Tasks/Apple Reminders keep due-date and repeat as
+   compact, icon-led controls rather than always-open labeled form rows. */
+.editor-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.editor-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--selected);
+  border: none;
+  border-radius: 12px;
+  padding: 3px 10px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  min-height: 32px;
+}
+.editor-field-icon { display: flex; flex-shrink: 0; }
+.editor-field-icon .icon { width: 14px; height: 14px; color: var(--text-dim); }
+/* Replaces the native calendar-icon/dropdown-arrow indicators (hidden below) - those render as a
+   tiny, OS-drawn, low-contrast glyph that's easy to miss in dark mode and, on the date field, was
+   the one exact spot that had to be tapped for the picker to open. This single higher-contrast
+   chevron is the field's only "opens a picker" affordance now; the whole-pill click handler in
+   app.js is what actually opens it regardless of where within the pill was tapped. */
+.editor-field-arrow { display: flex; flex-shrink: 0; margin-left: auto; pointer-events: none; }
+.editor-field-arrow .icon { width: 12px; height: 12px; color: var(--text-dim); }
+.editor-field input, .editor-field select {
+  border: none;
+  background: none;
+  color: var(--text);
+  padding: 0;
+  font-size: 0.85em;
+  font: inherit;
+  cursor: pointer;
+}
+.editor-field select { appearance: none; -webkit-appearance: none; }
+.editor-field input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0; }
+.editor-field.overdue { background: color-mix(in srgb, var(--danger) 16%, var(--selected)); }
+.editor-field.overdue .editor-field-icon .icon,
+.editor-field.overdue .editor-field-arrow .icon,
+.editor-field.overdue input { color: var(--danger-text); }
+/* Done and Pin share the same pill as Due/Repeat (see .editor-meta-row's comment) instead of the
+   checkbox+label / bare icon button they used to be - a checked/pinned state reuses the same
+   "active" treatment as everywhere else a pill or chip can be toggled on (sidebar selection, sort
+   chips), rather than inventing a one-off look for just these two. */
+/* "Mark done" is a rounded-square box on desktop (see ControlStyles.xaml's TaskCheckBox) - matched
+   here instead of leaving it as the browser's native square control, which is what every engine
+   (Chrome/Edge/Firefox/Safari, desktop and mobile alike) renders type="checkbox" as by default but
+   with its own inconsistent corner rounding/border weight per engine. appearance:none drops native
+   rendering entirely, so size/border/checked-state/checkmark all need to be drawn by hand below -
+   accent-color alone (the previous approach) only recolors the native box, it can't reshape it.
+   Deliberately scoped to just these two (the row checkbox and #editor-done) via done-checkbox-wrap/
+   editor-field, not every input[type=checkbox] in the app - the bulk-select row checkbox and
+   in-note checklist items have no desktop equivalent to match, so they keep native rendering. */
+.done-checkbox-wrap input[type="checkbox"],
+.editor-field input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1.6px solid var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+.done-checkbox-wrap input[type="checkbox"]:checked,
+.editor-field input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.done-checkbox-wrap input[type="checkbox"]:checked::after,
+.editor-field input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent-text);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+.editor-field:has(#editor-done:checked) { background: var(--accent); color: var(--accent-text); }
+.editor-field#editor-pin-btn .editor-field-icon .icon { width: 15px; height: 15px; }
+.editor-field#editor-pin-btn.active { background: var(--accent); color: var(--accent-text); }
+.editor-field#editor-pin-btn.active .editor-field-icon .icon { color: var(--accent-text); }
+.editor-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag-chip {
+  background: var(--selected);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 0.8em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tag-chip button { border: none; background: none; cursor: pointer; color: var(--text-dim); }
+.tag-input {
+  border: 1px solid var(--border);
+  background: var(--pane-bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.85em;
+}
+/* Tag picker dropdown (mirrors desktop's tag popup - TaskDetailViewModel's IsTagPopupOpen/
+   FilteredAvailableTags/CanCreateNewTag) - web previously had only the raw text input with no way
+   to browse or click an existing tag, reported live as "tag dropdown is not working." Opens on
+   focus, filters live as you type, closes on blur/outside-click/Escape/commit. */
+.tag-input-wrap { position: relative; }
+.tag-suggest-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  max-width: 260px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 45;
+}
+.tag-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.tag-suggest-item:hover { background: var(--hover); }
+.tag-suggest-item.create { color: var(--accent); font-weight: 600; }
+.tag-suggest-empty { padding: 6px 8px; font-size: 0.82em; color: var(--text-dim); }
+
+.editor-body {
+  line-height: 1.5;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.block-wrap { position: relative; margin-bottom: 8px; padding-right: 24px; }
+.block-remove {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.5;
+}
+.block-remove:hover { opacity: 1; }
+.block-remove.small { position: static; margin-left: 4px; }
+.block-text {
+  min-height: 1.5em;
+  outline: none;
+  padding: 4px 0;
+  white-space: pre-wrap;
+}
+/* outline:none above drops the browser default with nothing replacing it - a keyboard/external-
+   keyboard user editing text had no visual cue which block currently had focus. Outline doesn't
+   take layout space, so this can't shift anything else on focus. */
+.block-text:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); }
+.block-photo, .block-file { color: var(--text-dim); font-style: italic; }
+.block-photo .icon.inline-icon, .block-file-link .icon.inline-icon {
+  width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px;
+}
+.block-photo-img { max-width: 100%; border-radius: 8px; display: block; }
+.block-photo-error { color: var(--danger-text); cursor: pointer; }
+.block-photo-error:hover { text-decoration: underline; }
+.block-file-link {
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.block-file-link:hover { text-decoration: underline; }
+.block-checklist-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.block-checklist-item.editable input[type="text"] {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+}
+.checklist-add {
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  padding: 4px 0 4px 22px;
+}
+.insert-toolbar { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* Tablet: sidebar becomes an overlay drawer, list+editor share the width */
+@media (max-width: 1023px) {
+  .app-body, .app-body.sidebar-collapsed { grid-template-columns: 1fr 1fr; }
+  /* display:none removes it from grid placement entirely, so list-pane and editor-pane still
+     land in exactly the two tracks defined above. */
+  .pane-resizer { display: none; }
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 20;
+    box-shadow: var(--shadow-lg);
+  }
+  .app[data-sidebar-open="true"] .sidebar { transform: translateX(0); }
+  .nav-back { display: none; }
+  .sidebar-drawer-btn { display: inline-flex; }
+  .sidebar-collapse-btn { display: none; }
+  .sidebar-collapsed .sidebar-section-label,
+  .sidebar-collapsed .tag-list,
+  .sidebar-collapsed .saved-views-list,
+  .sidebar-collapsed .sidebar-item-label,
+  .sidebar-collapsed .count { display: initial; }
+}
+
+.mobile-tabbar { display: none; }
+
+/* Mobile: one pane at a time, driven by data-view on .app */
+@media (max-width: 767px) {
+  .app-body, .app-body.sidebar-collapsed { grid-template-columns: 1fr; }
+  .pane { display: none; border-right: none; }
+  .app[data-view="sidebar"] .sidebar { display: block; position: static; transform: none; box-shadow: none; width: auto; }
+  .app[data-view="list"] .list-pane { display: flex; }
+  .app[data-view="editor"] .editor-pane { display: block; }
+  .app:not([data-view="sidebar"]) .nav-back { display: inline-block; }
+  /* The tab bar now owns top-level navigation between sections - a back button on the list view
+     would just be a redundant way to reach the same "sidebar" screen the More tab already opens. */
+  .app[data-view="list"] .nav-back { display: none; }
+  .sidebar-drawer-btn { display: none; }
+  /* Settings/About move into the bottom tab bar's More popup on mobile (see #more-sheet-popup) -
+     without this, the header hamburger and the tab bar's More button were two separate overflow
+     menus doing overlapping jobs (reported live: "I feel like I have two menus doing the same
+     thing"). */
+  .menu-wrap { display: none; }
+  /* With both children above hidden on mobile, this pill had nothing left inside it and just
+     rendered as an empty bordered circle floating between the back button and the brand logo
+     (reported live: "I do not know what the circle does"). It only ever holds sidebar-drawer-btn
+     (tablet-only) and menu-wrap (desktop-only), so below this breakpoint it's always empty -
+     hide the whole thing rather than leave a dead decoration. */
+  .toolbar-group-leading { display: none; }
+
+  /* Mobile top-app-bar sizing (Material 3 / iOS HIG both land on ~24px glyphs inside ~48px touch
+     targets): the header's icon buttons were still using the desktop's 18px glyph centered in a
+     44px box, which read as small and inconsistent next to the sync/account icons on the other
+     side (reported live: "the logo and the back button should be larger"). */
+  .app-header .icon-btn .icon { width: 23px; height: 23px; }
+  /* Pulls the back button's larger touch target back toward the edge so the *glyph* - not its
+     invisible tap area - lines up with the header's own edge padding, matching how native back
+     buttons hug the leading edge instead of floating inset from it. */
+  .nav-back { margin-left: -8px; }
+  /* The brand logo/title stayed at the desktop's compact size even on a touch-first screen,
+     making the header's primary element look smaller than the (now-bigger) back button next to
+     it. Sized up to read as the header's anchor, in line with the icon bump above. */
+  .brand-logo { width: 30px; height: 30px; border-radius: 8px; }
+  .header-title { font-size: 1.2em; }
+
+  /* The save-status text ("Loaded N task(s)", "Saving…", etc.) crowds the brand/icons in the
+     header on narrow screens - relocate it to a fixed bar at the bottom instead, sitting just
+     above the tab bar. position:fixed takes it out of the header's flex flow entirely regardless
+     of its DOM parent, so no markup change is needed. */
+  .save-status {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--mobile-tabbar-height);
+    z-index: 25;
+    margin: 0;
+    text-align: center;
+    background: var(--pane-bg);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    /* Overrides the header-row ellipsis truncation: this bar is full-width and out of any flex
+       flow, so a long error message (e.g. a Drive API failure with the request URL and reason)
+       can safely wrap across lines instead of being silently cut off illegibly. */
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+    word-break: break-word;
+  }
+  .save-status:empty { display: none; }
+  .sidebar, .list-pane, .editor-pane { padding-bottom: var(--mobile-bottom-chrome); }
+
+  :root {
+    --mobile-tabbar-height: calc(50px + env(safe-area-inset-bottom, 0px));
+    --mobile-bottom-chrome: calc(var(--mobile-tabbar-height) + 40px);
+  }
+  .mobile-tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--mobile-tabbar-height);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-sizing: border-box;
+    border-top: 1px solid var(--border);
+    background: var(--pane-bg);
+    z-index: 26;
+  }
+  /* position:fixed anchors to the layout viewport, not the shrunk-by-the-keyboard visual
+     viewport, so a fixed bottom-of-screen bar can end up floating mid-screen (covering editor
+     content) or sitting behind the keyboard instead of above it once one opens - browsers don't
+     agree here. app.js toggles this class from a visualViewport resize listener; simplest fix is
+     to just get out of the way while the keyboard's up rather than try to reposition to match it. */
+  body.keyboard-open .mobile-tabbar,
+  body.keyboard-open .save-status {
+    display: none;
+  }
+  .mobile-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 0.65em;
+    font-weight: 500;
+    padding: 0;
+    cursor: pointer;
+  }
+  .mobile-tab .icon { width: 20px; height: 20px; }
+  .mobile-tab.active { color: var(--accent); }
+
+  /* Touch targets: Apple HIG / Material Design both call for a ~44-48px minimum tap target.
+     min-width/min-height (not extra padding) grows the box symmetrically around the existing
+     icon via the same flex centering already in place, without changing how any icon itself
+     looks. Desktop keeps the tighter 32px sizing - this is a touch-specific concern, not a
+     visual-density one, so it's scoped to mobile rather than applied everywhere. */
+  .icon-btn, .account-avatar { min-width: 44px; min-height: 44px; }
+  /* These two are small icons inside otherwise-compact rows (a tag chip, a checklist line) -
+     enough padding to reach a full 44px here would visually bloat the chip/row itself, so this
+     is a smaller, safer bump rather than full compliance. Only 6px separates adjacent chips
+     (.editor-tags gap) both within and between wrapped rows, which caps how far this can grow
+     before one chip's hit area starts overlapping its neighbor's - 6px/-6px is close to that
+     ceiling already. Worth a look on a real phone before pushing it any further. */
+  .tag-chip button { padding: 6px; margin: -6px; }
+  .block-remove { padding: 8px; top: -6px; right: -8px; }
+  .block-remove.small { padding: 6px; margin-left: 0; }
+  /* The checkbox itself stays visually 20px - .checkbox-tap-target (the <label> wrapping it) is
+     what actually grows, sized differently per context below since the two rows have very
+     different amounts of spare room around them. Negative margin keeps the larger label from
+     pushing the rest of the row over, same trick as .tag-chip button above, just applied to the
+     wrapper instead of the (unreliably-paddable) checkbox itself. */
+  .task-list li input[type="checkbox"],
+  .block-checklist-item input[type="checkbox"] { width: 20px; height: 20px; }
+  .checkbox-tap-target { justify-content: center; }
+  /* .task-list li has real room to spare (padding: 10px 14px), so this reaches the app's own
+     44px tap-target standard in full. */
+  .task-list li .checkbox-tap-target { min-width: 44px; min-height: 44px; margin: -12px; }
+  /* .block-checklist-item is a much tighter row (padding: 2px 0, only 6px gap to the text input
+     and delete button) - the same -12px/44px used above would bleed well past that buffer and
+     overlap neighboring rows/controls, so this gets the same smaller, safer bump as
+     .tag-chip button rather than full compliance. Worth a look on a real phone. */
+  .block-checklist-item .checkbox-tap-target { min-width: 28px; min-height: 28px; margin: -4px; }
+
+  /* iOS Safari zooms the whole page in on focus for any input/select under 16px - these all
+     read the app's own (smaller, and further-shrinkable via the Small text-size setting) type
+     scale rather than the page base size. A hard 16px floor beats fighting that zoom on every
+     field tap; the resulting mismatch with the text-size preference is deliberate and minor for
+     these specific compact controls. */
+  .search-box, .quick-add-input, .tag-input, .editor-field input, .editor-field select,
+  .block-checklist-item.editable input[type="text"], .checklist-add {
+    font-size: 16px;
+  }
+
+  /* Standard mobile fix for a list toolbar that was eating a third of the screen: New Task
+     collapses from a full-width banner row into a floating action button (same circular
+     treatment the desktop sidebar already uses when collapsed - see .sidebar-collapsed
+     .new-task-btn), and Sort/Filter collapse from two permanently-visible dropdown pills into
+     one icon that reveals them in a small popup. Both exit normal document flow entirely
+     (position:fixed / hidden-until-opened), so the task list now starts right after the search
+     row instead of three rows down. */
+  .list-toolbar { position: relative; }
+  #list-pane > .new-task-btn {
+    position: fixed;
+    right: 16px;
+    bottom: calc(var(--mobile-bottom-chrome) + 16px);
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    z-index: 24;
+  }
+  #list-pane > .new-task-btn .sidebar-item-label { display: none; }
+
+  .undo-toast { bottom: calc(var(--mobile-tabbar-height) + 12px); }
+  .install-banner { left: 12px; right: 12px; max-width: none; bottom: calc(var(--mobile-tabbar-height) + 12px); }
+
+  .empty-dashboard-add-btn { display: flex; }
+  /* Ctrl+N/Ctrl+Z/F1 hints are meaningless without a physical keyboard - the dashboard already
+     has the button above for the one action (Add Task) worth surfacing on a touchscreen. */
+  .empty-dashboard-shortcuts { display: none; }
+  /* Mirror of the rule above: mobile hides the header hamburger entirely (Settings/Tags/About all
+     move into the bottom tab bar's More sheet - see the more-sheet-popup comment in index.html),
+     so this is the one place those two get a direct, no-extra-tap link on a touchscreen. */
+  .empty-dashboard-links { display: block; }
+  /* Same reasoning, for the hamburger menu's own "Keyboard Shortcuts" entry. */
+  .shortcuts-menu-item { display: none; }
+
+  /* Insert-block toolbar (+ Text/Checklist/Link/Photo): four buttons that fit fine on desktop's
+     wider editor pane overflow a mobile-width one. Standard fix for 3+ actions that don't fit a
+     toolbar is one trigger with an overflow menu rather than letting them spill off-screen - same
+     idiom as the Sort/Filter popup above, reused here for consistency. */
+  .insert-toolbar-wrap { position: relative; display: inline-block; }
+  .insert-toggle-btn { display: flex; }
+  .insert-toolbar {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    margin: 0;
+    padding: 6px;
+    border-top: none;
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 22;
+    min-width: 170px;
+  }
+  .insert-toolbar .btn { width: 100%; text-align: left; }
+}
+
+/* .insert-toolbar (the block editor's + Text/Checklist/Link/Photo row) always starts with a
+   "hidden" class in the markup - see renderInsertToolbar in editor.js - since only mobile needs it
+   collapsed behind .insert-toggle-btn (four buttons fit fine in desktop's wider editor pane). This
+   forces it visible on tablet/desktop regardless of that class, unlike .list-filter-row above which
+   now stays collapsed at every width. */
+@media (min-width: 768px) {
+  .insert-toolbar.hidden { display: flex !important; }
+}
+
+/* Roadmap #36: the About/Shortcuts (and Add-Link, which shares .modal-card) modals become bottom
+   sheets under 640px - a deliberately narrower cutoff than the 767px single-pane breakpoint used
+   everywhere else, since a centered card still reads fine down to phone-tablet widths and only
+   cramped phone widths benefit from anchoring to the thumb-reachable bottom edge. Placed last in
+   the file, and re-targeting .shortcuts-modal-card/.link-modal-card explicitly rather than
+   relying on .modal-card alone, so this wins the cascade over their earlier, always-on max-width
+   overrides (same specificity - last declaration in source order wins). Pure CSS: the open/close
+   JS (classList.toggle('hidden')) and outside-click/Escape handling are untouched, so this is
+   just where the element ends up on screen, not how it opens or closes.
+   The account dropdown used to get this same bottom-sheet treatment but no longer does - it's
+   back to the small inline .dropdown card anchored under the avatar at every width, same idiom
+   as the More/Sort-Filter popups (#more-sheet-popup/#list-filter-row) rather than a full-screen
+   sheet, per user feedback (2026-08-25). */
+@keyframes sheet-slide-up {
+  from { transform: translateY(16px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (max-width: 640px) {
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal-card, .shortcuts-modal-card, .link-modal-card {
+    width: 100%;
+    max-width: none;
+    border-radius: 16px 16px 0 0;
+    padding: 10px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+    max-height: 85vh;
+    overflow-y: auto;
+    animation: sheet-slide-up 0.2s ease;
+  }
+  .modal-card::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 999px;
+    margin: 0 auto 14px;
+  }
+}

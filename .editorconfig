@@ -1,0 +1,86 @@
+# EditorConfig for Tasky - Consistent code style across team and tools
+# See https://editorconfig.org for docs
+
+root = true
+
+# All files
+[*]
+indent_style = space
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+# C# files
+[*.cs]
+indent_size = 4
+
+# Code style rules
+# https://docs.microsoft.com/en-us/dotnet/fundamentals/code-analysis/style-rules
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_space_after_comma = true
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+
+# Naming conventions
+dotnet_naming_rule.interfaces_should_be_begins_with_i.severity = warning
+dotnet_naming_rule.interfaces_should_be_begins_with_i.symbols = interface
+dotnet_naming_rule.interfaces_should_be_begins_with_i.style = begins_with_i
+
+dotnet_naming_rule.types_should_be_pascal_case.severity = warning
+dotnet_naming_rule.types_should_be_pascal_case.symbols = types
+dotnet_naming_rule.types_should_be_pascal_case.style = pascal_case
+
+dotnet_naming_rule.private_fields_should_be_camelcase.severity = warning
+dotnet_naming_rule.private_fields_should_be_camelcase.symbols = private_fields
+dotnet_naming_rule.private_fields_should_be_camelcase.style = camelcase_with_underscore
+
+dotnet_naming_rule.constants_should_be_pascal_case.severity = warning
+dotnet_naming_rule.constants_should_be_pascal_case.symbols = constants
+dotnet_naming_rule.constants_should_be_pascal_case.style = pascal_case
+
+# Symbols
+dotnet_naming_symbols.interface.applicable_kinds = interface
+dotnet_naming_symbols.interface.applicable_accessibilities = *
+dotnet_naming_symbols.interface.required_modifiers = 
+
+dotnet_naming_symbols.types.applicable_kinds = class,struct,interface,enum
+dotnet_naming_symbols.types.applicable_accessibilities = *
+dotnet_naming_symbols.types.required_modifiers = 
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_fields.required_modifiers = 
+
+dotnet_naming_symbols.constants.applicable_kinds = field
+dotnet_naming_symbols.constants.applicable_accessibilities = *
+dotnet_naming_symbols.constants.required_modifiers = const
+
+# Styles
+dotnet_naming_style.begins_with_i.required_prefix = I
+dotnet_naming_style.begins_with_i.required_suffix = 
+dotnet_naming_style.begins_with_i.word_separator = 
+dotnet_naming_style.begins_with_i.capitalization = pascal_case
+
+dotnet_naming_style.pascal_case.required_prefix = 
+dotnet_naming_style.pascal_case.required_suffix = 
+dotnet_naming_style.pascal_case.word_separator = 
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_style.camelcase_with_underscore.required_prefix = _
+dotnet_naming_style.camelcase_with_underscore.required_suffix = 
+dotnet_naming_style.camelcase_with_underscore.word_separator = 
+dotnet_naming_style.camelcase_with_underscore.capitalization = camel_case
+
+# XAML files
+[*.xaml]
+indent_size = 2
+
+# JSON files
+[*.json]
+indent_size = 2
+
+# PowerShell files
+[*.ps1]
+indent_size = 4

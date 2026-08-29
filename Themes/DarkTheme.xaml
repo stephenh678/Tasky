@@ -1,0 +1,43 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="BackgroundBrush" Color="#1D2327"/>
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#1D2327"/>
+    <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#2C3338"/>
+    <SolidColorBrush x:Key="ForegroundBrush" Color="#8C8F94"/>
+    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="SecondaryBrush" Color="#2C3338"/>
+    <SolidColorBrush x:Key="TertiaryBrush" Color="#A7AAAD"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="#84A4F0"/>
+    <SolidColorBrush x:Key="SecondaryAccentBrush" Color="#50575E"/>
+    <SolidColorBrush x:Key="HighlightBrush" Color="#663361CC"/>
+    <SolidColorBrush x:Key="SecondaryHighlightBrush" Color="#2C3338"/>
+    <SolidColorBrush x:Key="TagChipBrush" Color="#3C434A"/>
+    <SolidColorBrush x:Key="PlaceholderBrush" Color="#A7AAAD"/>
+    <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#3361CC"/>
+    <SolidColorBrush x:Key="ButtonForegroundBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="DangerBrush" Color="#FF8085"/>
+    <!-- DueDateColorConverter's "due today" color. #FAA754 clears WCAG AA's 4.5:1 text contrast
+         (~9.7:1) against this theme's dark backgrounds, so unlike LightTheme this can keep the
+         converter's original fallback value. -->
+    <SolidColorBrush x:Key="WarningBrush" Color="#FAA754"/>
+
+    <!-- Native WPF chrome (Menu/MenuItem popups, ToolBar padding, ComboBox dropdowns, DatePicker)
+         reads these SystemColors keys internally for parts that aren't exposed as simple
+         Background/Foreground properties. Overriding them here is what actually makes those
+         controls follow the app theme instead of the OS theme. -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#1D2327"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#3C434A"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#1D2327"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBarBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#3361CC"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#3361CC"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#8C8F94"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ActiveBorderBrushKey}" Color="#3C434A"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveBorderBrushKey}" Color="#2C3338"/>
+</ResourceDictionary>

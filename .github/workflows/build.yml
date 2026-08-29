@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  desktop:
+    # net9.0-windows10.0.19041.0 (WPF/WinForms) only builds on Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore TodoApp.csproj
+
+      - name: Build
+        run: dotnet build TodoApp.csproj --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test TodoApp.Tests/TodoApp.Tests.csproj --configuration Release
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax-check all Tasky Web JS
+        # Tasky Web has no build step (no bundler, plain ES module imports) - `node --check` is a
+        # cheap first signal: it parses every file without executing it, catching syntax errors
+        # before they'd otherwise only surface as a runtime failure in a user's browser.
+        run: |
+          for f in docs/js/*.js docs/js/test/*.js functions/exchange-token/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+
+      - name: JS/C# parity tests (ROADMAP.md #89)
+        # docs/js/sync.js and model.js are hand-ported from TaskSyncMerge.cs/QuickEntryParser.cs -
+        # this is what actually exercises that port, not just its syntax. Built-in node:test, no
+        # install step, matching Tasky Web's deliberately build-step-free design.
+        run: node --test docs/js/test/parity.test.js
+
+      - name: Cache-bust / desktop version consistency
+        run: node check-cache-version.js

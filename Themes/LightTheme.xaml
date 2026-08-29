@@ -1,0 +1,54 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="BackgroundBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F6F7F7"/>
+    <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#F6F7F7"/>
+    <!-- Darkened from the original #646970 (WCAG AA audit: 3.95:1, failed 4.5:1 against the
+         HighlightBrush selected-row tint) to #575B61, which clears 4.5:1 against every
+         background it's actually painted on in this theme - white, the window/sidebar tint,
+         tag chips, and the selection highlight. -->
+    <SolidColorBrush x:Key="ForegroundBrush" Color="#575B61"/>
+    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#2C3338"/>
+    <SolidColorBrush x:Key="SecondaryBrush" Color="#DCDCDE"/>
+    <!-- Darkened from the original #A7AAAD (WCAG AA audit: 2.33:1 against white) to #5D5F60,
+         same rationale as ForegroundBrush above - clears 4.5:1 against white, tag chips, and
+         the selection highlight. Necessarily lands close to ForegroundBrush's new value since
+         both need to clear the same near-white backgrounds; the two are now told apart mainly
+         by the slightly cooler tint on ForegroundBrush rather than by a large lightness gap. -->
+    <SolidColorBrush x:Key="TertiaryBrush" Color="#5D5F60"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="#3361CC"/>
+    <SolidColorBrush x:Key="SecondaryAccentBrush" Color="#C3C4C7"/>
+    <SolidColorBrush x:Key="HighlightBrush" Color="#CED9F2"/>
+    <SolidColorBrush x:Key="SecondaryHighlightBrush" Color="#F6F7F7"/>
+    <SolidColorBrush x:Key="TagChipBrush" Color="#DCDCDE"/>
+    <!-- Same color as ForegroundBrush above and for the same reason - was sharing its
+         since-fixed failing value. -->
+    <SolidColorBrush x:Key="PlaceholderBrush" Color="#575B61"/>
+    <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#3361CC"/>
+    <SolidColorBrush x:Key="ButtonForegroundBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="DangerBrush" Color="#D63638"/>
+    <!-- DueDateColorConverter's "due today" color. #FAA754 (the converter's original hardcoded
+         fallback) only clears 1.96:1 against white - #B45309 is the closest amber that still
+         clears WCAG AA's 4.5:1 text contrast (~5.02:1) against this theme's white/near-white
+         backgrounds. -->
+    <SolidColorBrush x:Key="WarningBrush" Color="#B45309"/>
+
+    <!-- Mirrors the same SystemColors keys the dark theme overrides, so native chrome
+         (Menu popups, ToolBar, ComboBox dropdowns, DatePicker) stays visually consistent
+         with this theme's palette rather than whatever the OS accent/theme happens to be. -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#F6F7F7"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#DCDCDE"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBarBrushKey}" Color="#F6F7F7"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#2C3338"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#3361CC"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#3361CC"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#A7AAAD"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ActiveBorderBrushKey}" Color="#DCDCDE"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveBorderBrushKey}" Color="#DCDCDE"/>
+</ResourceDictionary>

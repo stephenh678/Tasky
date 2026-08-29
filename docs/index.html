@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- script-src stays locked to 'self' - no remote scripts load on this page. Google Identity
+       Services' script (accounts.google.com/gsi/client) used to be loaded here, but was removed
+       entirely (ROADMAP.md #117 postmortem): merely having that script present was enough for
+       Chrome to intercept the redirect to Google's OAuth authorization endpoint and substitute
+       its own streamlined "Sign in with Google" identity-only flow, silently dropping the Drive
+       scope no matter what auth.js's hand-built authorization URL actually requested. auth.js's
+       sign-in flow is a plain full-page redirect built and handled entirely without any GIS API,
+       so nothing here depends on that script anymore. style-src still needs 'unsafe-inline' -
+       unrelated to GIS, kept for other inline-styled runtime DOM. img-src covers task photo
+       attachments (rendered from blob: object URLs after downloading from Drive) and the
+       signed-in user's Google account picture (served from *.googleusercontent.com). connect-src
+       covers the Drive API and Google's userinfo endpoint (both www.googleapis.com), plus the
+       OAuth code/token exchange and silent-refresh Cloud Run functions. No frame-src needed -
+       nothing on this page uses an iframe. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: https://*.googleusercontent.com; connect-src 'self' https://www.googleapis.com https://exchange-token-395690152006.us-central1.run.app https://refresh-token-395690152006.us-central1.run.app; base-uri 'self'; form-action 'self'; object-src 'none'" />
+  <title>Tasky</title>
+  <meta name="description" content="Tasky task manager, synced with Google Drive" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192" />
+  <link rel="icon" href="icons/icon-512.png" sizes="512x512" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <meta name="theme-color" content="#3861d6" />
+  <!-- ROADMAP.md #72: iOS Safari doesn't read manifest.json's display:standalone, so the
+       PWA-install experience (status bar, launch as its own app) needs these too - Android/Chrome
+       already gets everything it needs from the manifest alone. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tasky" />
+  <link rel="stylesheet" href="css/styles.css?v=83" />
+</head>
+<body>
+  <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
+
+  <!-- Signed-out gate -->
+  <div id="signin-screen" class="signin-screen">
+    <div class="signin-card">
+      <img src="icons/icon-192.png" alt="" class="signin-logo" />
+      <h1>Tasky</h1>
+      <p class="signin-sub">Sign in with Google to open your synced tasks.</p>
+      <button id="signin-btn" class="btn btn-primary" disabled>Loading Google Sign-In…</button>
+      <p id="signin-status" class="signin-status"></p>
+      <p id="signin-version" class="signin-version"></p>
+    </div>
+  </div>
+
+  <!-- Main app shell -->
+  <div id="app" class="app hidden">
+    <header class="app-header">
+      <button id="nav-back" class="icon-btn nav-back" aria-label="Back"></button>
+
+      <div class="toolbar-group toolbar-group-leading">
+        <button id="sidebar-drawer-btn" class="icon-btn sidebar-drawer-btn" aria-label="Open sidebar"></button>
+        <!-- Hidden on mobile (see styles.css) - Settings/About move into the bottom tab bar's
+             "More" popup there instead, so there's one overflow menu on phones, not two. -->
+        <div class="menu-wrap">
+          <button id="menu-btn" class="icon-btn" aria-label="Menu"></button>
+          <div id="menu-dropdown" class="dropdown hidden">
+            <button id="settings-btn" class="dropdown-item">Settings</button>
+            <!-- ROADMAP.md #135: mirrors desktop's File > Export All Tasks... (ExportAllTasksCommand). -->
+            <button id="export-markdown-btn" class="dropdown-item">Export All Tasks (Markdown)</button>
+            <button id="export-html-btn" class="dropdown-item">Export All Tasks (HTML)</button>
+            <!-- Keyboard-only, so pointless on a touchscreen with no keyboard - hidden on mobile,
+                 see styles.css. -->
+            <button id="shortcuts-btn" class="dropdown-item shortcuts-menu-item">Keyboard Shortcuts</button>
+            <button id="about-btn" class="dropdown-item">About Tasky Web</button>
+          </div>
+        </div>
+      </div>
+
+      <button type="button" id="brand-home-btn" class="brand" title="Go to dashboard" aria-label="Go to dashboard">
+        <img src="icons/icon-192.png" alt="" class="brand-logo" />
+        <span class="header-title">Tasky</span>
+      </button>
+      <span id="save-status" class="save-status"></span>
+      <!-- ROADMAP.md #57: mirrors desktop's ProgressBar in the bottom status bar - stage-based
+           percent (see setSyncProgress in app.js), not true byte progress. -->
+      <span id="save-progress" class="save-progress hidden" role="progressbar" aria-label="Google Drive sync progress"
+            aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <span id="save-progress-fill" class="save-progress-fill"></span>
+      </span>
+
+      <div class="toolbar-group">
+        <button id="sync-now-btn" class="icon-btn" aria-label="Sync now" title="Sync now"></button>
+        <div class="account-wrap">
+          <button id="account-btn" class="account-avatar" aria-label="Account">?</button>
+          <div id="account-dropdown" class="dropdown dropdown-right hidden">
+            <div id="account-name" class="dropdown-name"></div>
+            <div id="account-email" class="dropdown-email">Not signed in</div>
+            <div id="account-last-synced" class="dropdown-email"></div>
+            <button id="account-signout-btn" class="dropdown-item">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="app-body">
+      <nav id="sidebar" class="pane sidebar">
+        <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" aria-label="Collapse sidebar"></button>
+        <button id="sidebar-new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)" aria-label="New task"></button>
+        <ul id="sidebar-list" class="sidebar-list"></ul>
+        <div class="sidebar-section-label">Tags</div>
+        <ul id="tag-list" class="sidebar-list tag-list"></ul>
+        <div class="sidebar-section-label">Views</div>
+        <ul id="saved-views-list" class="sidebar-list saved-views-list"></ul>
+      </nav>
+
+      <section id="list-pane" class="pane list-pane">
+        <div class="list-toolbar">
+          <div class="search-box-wrap">
+            <input id="search-box" type="search" placeholder="Search… (tag:name, is:overdue)" class="search-box"
+                   title="Operators: tag:name, is:overdue, is:pinned, is:recurring, has:link, has:attachment, due:today|week|none - see Keyboard Shortcuts (F1) for the full list" />
+            <button id="search-clear-btn" class="search-clear-btn hidden" aria-label="Clear search" title="Clear search"></button>
+          </div>
+          <button id="select-toggle-btn" class="icon-btn" aria-label="Select multiple" title="Select multiple"></button>
+          <button id="filter-toggle-btn" class="icon-btn filter-toggle-btn" aria-label="Sort & filter" title="Sort & filter"></button>
+        </div>
+        <div class="quick-add-row">
+          <input id="quick-add-input" type="text" class="quick-add-input" placeholder="+ Add a task…" title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
+          <!-- ROADMAP.md #135: mirrors desktop's QuickAddWindow PreviewText - live preview of what
+               #tag/!due:/@time will actually parse to before Enter commits it. -->
+          <div id="quick-add-preview" class="quick-add-preview hidden"></div>
+        </div>
+        <button id="new-task-btn" class="btn btn-primary new-task-btn" title="New task (Ctrl+N)" aria-label="New task"></button>
+        <div id="list-filter-row" class="list-filter-row hidden">
+          <div class="chip-group-block">
+            <div class="chip-group-label">Sort</div>
+            <div id="sort-chip-group" class="chip-group" role="group" aria-label="Sort by">
+              <button type="button" class="chip active" data-sort="modified">Modified</button>
+              <button type="button" class="chip" data-sort="created">Created</button>
+              <button type="button" class="chip" data-sort="name">Name</button>
+              <button type="button" class="chip" data-sort="due">Due date</button>
+            </div>
+          </div>
+          <div class="chip-group-block">
+            <div class="chip-group-label">Filter</div>
+            <div id="filter-chip-group" class="chip-group" role="group" aria-label="Quick filter">
+              <button type="button" class="chip active" data-filter="">All</button>
+              <button type="button" class="chip" data-filter="overdue">Overdue</button>
+              <button type="button" class="chip" data-filter="dueToday">Due Today</button>
+              <button type="button" class="chip" data-filter="noDueDate">No Due Date</button>
+              <button type="button" class="chip" data-filter="recurring">Recurring</button>
+              <button type="button" class="chip" data-filter="hasLink">With Link</button>
+              <button type="button" class="chip" data-filter="hasAttachment">With Attachment</button>
+            </div>
+          </div>
+          <div class="chip-group-block">
+            <div class="chip-group-label">Views</div>
+            <button type="button" id="save-view-btn" class="btn btn-ghost small" disabled>Save current search as view</button>
+          </div>
+        </div>
+        <div id="trash-actions-row" class="trash-actions-row hidden">
+          <button id="empty-trash-btn" class="btn btn-ghost small danger">Empty Trash</button>
+        </div>
+        <div id="done-actions-row" class="trash-actions-row hidden">
+          <button id="move-all-trash-btn" class="btn btn-ghost small danger">Move All to Trash</button>
+        </div>
+        <div id="bulk-actions-row" class="bulk-actions-row hidden">
+          <span id="bulk-selected-count" class="bulk-selected-count">0 selected</span>
+          <div class="bulk-actions-buttons">
+            <button id="bulk-select-all-btn" type="button" class="btn btn-ghost small">Select All</button>
+            <button id="bulk-done-btn" type="button" class="btn btn-ghost small">Mark Done</button>
+            <button id="bulk-trash-btn" type="button" class="btn btn-ghost small">Trash</button>
+            <button id="bulk-restore-btn" type="button" class="btn btn-ghost small">Restore</button>
+            <button id="bulk-delete-btn" type="button" class="btn btn-ghost small danger">Delete</button>
+            <button id="bulk-cancel-btn" type="button" class="btn btn-ghost small">Cancel</button>
+          </div>
+        </div>
+        <ul id="task-list" class="task-list"></ul>
+        <div id="list-empty" class="empty-state hidden">No tasks here.</div>
+      </section>
+
+      <div id="pane-resizer" class="pane-resizer" role="separator" aria-orientation="vertical" aria-label="Resize task list"></div>
+
+      <section id="editor-pane" class="pane editor-pane">
+        <div id="editor-empty" class="empty-state editor-empty-dashboard">
+          <div class="empty-dashboard-cards">
+            <button type="button" id="empty-due-today-card" class="empty-dashboard-card">
+              <span id="empty-due-today-count" class="empty-dashboard-count">0</span>
+              <span class="empty-dashboard-label">Due Today</span>
+            </button>
+            <button type="button" id="empty-overdue-card" class="empty-dashboard-card">
+              <span id="empty-overdue-count" class="empty-dashboard-count overdue">0</span>
+              <span class="empty-dashboard-label">Overdue</span>
+            </button>
+            <button type="button" id="empty-completed-card" class="empty-dashboard-card">
+              <span id="empty-completed-count" class="empty-dashboard-count">0</span>
+              <span class="empty-dashboard-label">Completed</span>
+            </button>
+            <button type="button" id="empty-all-card" class="empty-dashboard-card">
+              <span id="empty-all-count" class="empty-dashboard-count">0</span>
+              <span class="empty-dashboard-label">All Tasks</span>
+            </button>
+          </div>
+          <p class="empty-dashboard-hint">Select a task to view it, or create a new one.</p>
+          <button type="button" id="empty-add-task-btn" class="btn btn-primary empty-dashboard-add-btn"></button>
+          <div class="empty-dashboard-shortcuts">
+            <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span>New task</span></div>
+            <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo last action</span></div>
+            <button id="empty-shortcuts-btn" type="button" class="shortcut-row shortcut-row-link"><span class="shortcut-keys"><kbd>F1</kbd></span><span>All shortcuts…</span></button>
+          </div>
+          <!-- Mobile-only counterpart to the shortcuts list above (hidden on mobile, since it's all
+               keyboard hints - see styles.css). Settings/Tags are otherwise only reachable by
+               opening the bottom tab bar's More sheet first, so this puts the two most-reached-for
+               destinations directly on the dashboard instead. -->
+          <div class="empty-dashboard-links">
+            <button id="empty-tags-link" type="button" class="shortcut-row shortcut-row-link"><span>Tags</span></button>
+            <button id="empty-settings-link" type="button" class="shortcut-row shortcut-row-link"><span>Settings</span></button>
+          </div>
+        </div>
+        <div id="editor-content" class="editor-content hidden">
+          <!-- Title carries at most one lightweight header action (the overflow menu) - Done/Pin
+               used to live up here as a separate always-visible bar of mismatched controls
+               (checkbox+label, bare icon button, bordered text buttons), reported live as feeling
+               "out of place" next to the rest of the app's theme. Move to Trash/Delete Permanently
+               are rare and destructive, so they're the ones that belong behind an overflow menu -
+               Done/Pin are common enough to stay directly visible, moved into the metadata pill
+               row below instead (see its own comment). -->
+          <div class="editor-title-row">
+            <input id="editor-title" class="editor-title" type="text" placeholder="Task title" />
+            <div class="editor-more-wrap">
+              <button type="button" id="editor-more-btn" class="icon-btn" aria-label="More actions" title="More actions"></button>
+              <div id="editor-more-dropdown" class="dropdown dropdown-right hidden">
+                <!-- Reported live on mobile: "there is not a way to close/done the task" - the
+                     Done checkbox lives down in the metadata pill row (see the comment above this
+                     block), easy to miss when you've just opened a task from the list. This gives
+                     the same action a second, more discoverable home next to the other task-level
+                     actions. -->
+                <button id="editor-done-btn" class="dropdown-item">Mark Done</button>
+                <button id="editor-trash-btn" class="dropdown-item">Move to Trash</button>
+                <button id="editor-delete-btn" class="dropdown-item danger hidden">Delete Permanently</button>
+              </div>
+            </div>
+          </div>
+          <!-- One compact metadata strip (Done/Pin/Due/Repeat/Tags) instead of a separate action
+               bar plus a labeled-field stack - Done/Pin/Due/Repeat all share the tag chips' pill
+               styling (see styles.css), so every piece of task state reads as the same scannable
+               row instead of competing visual styles. Reported live as feeling "busy and
+               unorganized" (the original version of this note, before Done/Pin joined it) and "out
+               of place" (the separate bar Done/Pin used to live in, above). -->
+          <div class="editor-meta-row">
+            <label class="editor-field editor-done-field" id="editor-done-field" title="Mark as done" aria-label="Mark as done">
+              <input type="checkbox" id="editor-done" />
+              <span>Done</span>
+            </label>
+            <button type="button" id="editor-pin-btn" class="editor-field" title="Pin" aria-label="Pin">
+              <span id="editor-pin-icon" class="editor-field-icon"></span>
+              <span id="editor-pin-label">Pin</span>
+            </button>
+            <label class="editor-field" title="Due date" aria-label="Due date">
+              <span id="editor-due-icon" class="editor-field-icon"></span>
+              <input id="editor-due" type="date" />
+              <span class="editor-field-arrow"></span>
+            </label>
+            <label class="editor-field" title="Repeat" aria-label="Repeat">
+              <span id="editor-repeat-icon" class="editor-field-icon"></span>
+              <select id="editor-recurrence">
+                <option value="0">Never</option>
+                <option value="1">Daily</option>
+                <option value="2">Weekly</option>
+                <option value="3">Monthly</option>
+                <option value="4">Yearly</option>
+              </select>
+              <span class="editor-field-arrow"></span>
+            </label>
+            <!-- ROADMAP.md #31: "every N" interval, only shown once a recurrence unit is picked -
+                 mirrors desktop's TaskDetailViewModel.RecurrenceIntervalOptions (1-30). -->
+            <label id="editor-recurrence-interval-field" class="editor-field hidden" title="Repeat every" aria-label="Repeat every">
+              <span>every</span>
+              <select id="editor-recurrence-interval"></select>
+              <span class="editor-field-arrow"></span>
+            </label>
+            <span id="editor-tags" class="editor-tags"></span>
+            <div class="tag-input-wrap">
+              <input id="editor-tag-input" class="tag-input" type="text" placeholder="+ tag, Enter to add" enterkeyhint="done" autocomplete="off" />
+              <div id="tag-suggest-popup" class="tag-suggest-popup hidden"></div>
+            </div>
+          </div>
+          <div id="editor-body" class="editor-body"></div>
+        </div>
+      </section>
+    </div>
+
+    <nav id="mobile-tabbar" class="mobile-tabbar"></nav>
+  </div>
+
+  <div id="undo-toast" class="undo-toast hidden" role="status">
+    <span id="undo-toast-text" class="undo-toast-text"></span>
+    <button id="undo-toast-btn" type="button" class="btn btn-ghost small"></button>
+  </div>
+
+  <!-- Roadmap #37: shown either after the browser fires beforeinstallprompt (Chrome/Edge/Android -
+       install-action-btn calls that event's own .prompt()), or, whenever there's no working
+       programmatic install path, as static manual instructions reusing install-ios-hint's slot -
+       genuinely no such event exists on iOS (Apple gives web apps no programmatic install API at
+       all), and on Android it's the fallback if prompt() silently fails or times out (see
+       showManualAndroidFallback in app.js - a captured event can go stale in the browser's own
+       state with no error surfaced to this page at all). Exactly one of install-action-btn or
+       install-ios-hint is ever unhidden. -->
+
+  <div id="install-banner" class="install-banner hidden" role="status">
+    <img src="icons/icon-192.png" alt="" class="install-banner-icon" />
+    <div class="install-banner-text">
+      <strong>Install Tasky</strong>
+      <span id="install-banner-msg">Add it to your home screen for quick, full-screen access.</span>
+      <span id="install-ios-hint" class="hidden">Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</span>
+    </div>
+    <button id="install-action-btn" type="button" class="btn btn-primary small hidden">Install</button>
+    <button id="install-dismiss-btn" type="button" class="icon-btn" aria-label="Dismiss"></button>
+  </div>
+
+  <div id="shortcuts-modal" class="modal-overlay hidden">
+    <div class="modal-card shortcuts-modal-card">
+      <button id="shortcuts-close-btn" class="icon-btn modal-close" aria-label="Close"></button>
+      <h2>Keyboard Shortcuts</h2>
+      <div class="shortcuts-list">
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span>New task</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo last action</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>Add task from the quick-add box</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></span><span>Jump to search</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Close dialogs and menus</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>F1</kbd> or <kbd>Ctrl</kbd>+<kbd>/</kbd></span><span>Show this help</span></div>
+      </div>
+      <p class="shortcuts-hint">Quick-add syntax: <code>#tag</code> · <code>!due:tue</code> (or today/tomorrow/a date) · <code>@3pm</code></p>
+      <p class="shortcuts-hint">Search operators: <code>tag:name</code> · <code>is:overdue</code> · <code>is:pinned</code> · <code>is:recurring</code> · <code>has:link</code> · <code>has:attachment</code> · <code>due:today</code> · <code>due:week</code> · <code>due:none</code> - combine with plain text or each other</p>
+    </div>
+  </div>
+
+  <!-- ROADMAP.md #56: shown once on genuine first use (see maybeShowOnboarding in app.js), and
+       replayable anytime from the About popup. Same static-HTML + show/hide idiom as the Shortcuts
+       modal above, not a JS-built overlay like confirmModal/promptForLink. -->
+  <div id="onboarding-modal" class="modal-overlay hidden">
+    <div class="modal-card onboarding-modal-card">
+      <h2>Welcome to Tasky</h2>
+      <ul class="onboarding-list">
+        <li>Quick Add a task, then tag or schedule it inline: <code>Buy milk #errands !due:tomorrow @9am</code></li>
+        <!-- Text set in app.js from a (hover: hover) and (pointer: fine) media query - "Long-press"
+             reads as nonsense advice on a desktop mouse, and "Right-click" doesn't work with a
+             finger, so this shows only the one gesture that's actually usable on the device it's
+             rendering on rather than hedging with both every time. -->
+        <li id="onboarding-quickadd-tip"></li>
+        <li>Search operators find anything fast: <code>tag:urgent</code>, <code>is:overdue</code>, <code>has:link</code></li>
+        <li>On mobile, swipe a task right to mark it done, left to trash it</li>
+        <li>Everything syncs through your own Google Drive — the same file the desktop app reads</li>
+      </ul>
+      <label class="onboarding-sample-check">
+        <input type="checkbox" id="onboarding-add-samples" checked />
+        Add 4 sample tasks to try it out
+      </label>
+      <button id="onboarding-done-btn" class="btn btn-primary" type="button">Get Started</button>
+    </div>
+  </div>
+
+  <!-- Mobile-only popup from the bottom tab bar's "More" button - offers the dashboard (same
+       destination as tapping the header brand/logo) and the sections+tags list, plus Settings/About
+       (the header hamburger menu is hidden on mobile - see styles.css - so this is the one overflow
+       menu on phones, not two). Positioned inline near the button, same idiom as the Sort/Filter
+       popup (#list-filter-row) rather than a full-screen modal. -->
+  <div id="more-sheet-popup" class="more-sheet-popup hidden">
+    <button type="button" id="more-sheet-dashboard" class="dropdown-item"></button>
+    <button type="button" id="more-sheet-sections" class="dropdown-item"></button>
+    <div class="dropdown-divider"></div>
+    <button type="button" id="more-sheet-settings" class="dropdown-item">Settings</button>
+    <button type="button" id="more-sheet-about" class="dropdown-item">About Tasky Web</button>
+  </div>
+
+  <!-- Quick-add capture popup - long-press (touch) or right-click (mouse) any "New Task" button
+       opens this instead of the full editor, same idea as the desktop app's tray-icon/Ctrl+Alt+T
+       QuickAddWindow: one focused input, Enter commits and closes, Esc/outside-click discards. Top
+       level (not inside #sidebar/#list-pane) so it's reachable from every pane and section,
+       including Done/Trash and the mobile editor view, where the list pane's own #quick-add-input
+       (the always-visible row, not this popup) is out of reach. Positioned by openAnchoredPopup,
+       same as Settings/About/More above. -->
+  <div id="quick-add-popup" class="quick-add-popup hidden">
+    <input id="quick-add-popup-input" type="text" class="quick-add-input" placeholder="+ Add a task…"
+           title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
+    <div id="quick-add-popup-preview" class="quick-add-preview hidden"></div>
+  </div>
+
+  <!-- Settings/About - anchored popups (same idiom as menu-dropdown/more-sheet-popup) opened from
+       either the header hamburger (desktop/tablet) or the More popup above (mobile), positioned by
+       JS next to whichever trigger button was actually clicked (see openAnchoredPopup in app.js). -->
+  <div id="settings-dropdown" class="settings-dropdown hidden">
+    <div class="dropdown-section-label">Theme</div>
+    <div class="theme-switch" id="theme-switch">
+      <button data-theme-choice="light" title="Light" aria-label="Light theme"></button>
+      <button data-theme-choice="dark" title="Dark" aria-label="Dark theme"></button>
+      <button data-theme-choice="system" title="Match system" aria-label="Match system theme"></button>
+    </div>
+    <div class="dropdown-section-label">Text Size</div>
+    <div class="theme-switch font-size-switch" id="font-size-switch">
+      <button data-font-size="small" title="Small" aria-label="Small text size">A</button>
+      <button data-font-size="medium" title="Medium" aria-label="Medium text size">A</button>
+      <button data-font-size="large" title="Large" aria-label="Large text size">A</button>
+      <button data-font-size="xlarge" title="Extra Large" aria-label="Extra large text size">A</button>
+    </div>
+    <div class="dropdown-section-label">Task List</div>
+    <label class="settings-toggle-row">
+      <span>Show "Mark done" checkbox on task rows and in the editor</span>
+      <input type="checkbox" id="setting-show-done-checkbox" checked />
+    </label>
+    <div class="dropdown-section-label">Trash</div>
+    <label class="settings-toggle-row">
+      <span>Auto-empty Trash</span>
+      <input type="checkbox" id="setting-auto-empty-trash" />
+    </label>
+    <label class="settings-toggle-row" id="setting-auto-empty-trash-days-row">
+      <span>Delete after (days)</span>
+      <select id="setting-auto-empty-trash-days">
+        <option value="7">7</option>
+        <option value="14">14</option>
+        <option value="30">30</option>
+        <option value="60">60</option>
+        <option value="90">90</option>
+      </select>
+    </label>
+  </div>
+  <div id="about-dropdown" class="about-dropdown hidden">
+    <img src="icons/icon-192.png" alt="" class="about-dropdown-logo" />
+    <h2>Tasky Web</h2>
+    <p id="about-version" class="about-version"></p>
+    <p class="about-version">Data format compatible with Tasky desktop v1.5.0+</p>
+    <p>Your tasks live in Google Drive - this page reads and writes the same file the desktop app uses, so both stay in sync.</p>
+    <a href="https://github.com/stephenh678/Tasky/releases" target="_blank" rel="noopener noreferrer">Download Tasky for Windows</a>
+    <a href="https://github.com/stephenh678/Tasky" target="_blank" rel="noopener noreferrer">View source on GitHub</a>
+    <button id="about-replay-tour-btn" type="button" class="about-replay-tour-btn">Replay welcome tour</button>
+  </div>
+
+  <script type="module" src="js/app.js?v=83"></script>
+</body>
+</html>

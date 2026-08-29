@@ -1,0 +1,119 @@
+using System.Windows;
+using System.Windows.Input;
+using TodoApp.Services;
+
+namespace TodoApp;
+
+public partial class ThemedMessageBoxWindow : Window
+{
+    public MessageBoxResult Result { get; private set; } = MessageBoxResult.None;
+
+    public ThemedMessageBoxWindow(string message, string title, MessageBoxButton button, MessageBoxImage icon)
+    {
+        InitializeComponent();
+        ThemeService.ApplyTitleBar(this);
+        Title = title;
+        MessageText.Text = message;
+
+        IconText.Text = icon switch
+        {
+            MessageBoxImage.Warning => "⚠",
+            MessageBoxImage.Question => "❓",
+            MessageBoxImage.Information => "ℹ",
+            MessageBoxImage.Error => "⛔",
+            _ => string.Empty
+        };
+        IconText.Visibility = IconText.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        YesButton.Visibility = Visibility.Collapsed;
+        NoButton.Visibility = Visibility.Collapsed;
+        OkButton.Visibility = Visibility.Collapsed;
+        CancelButton.Visibility = Visibility.Collapsed;
+
+        switch (button)
+        {
+            case MessageBoxButton.YesNo:
+                YesButton.Visibility = Visibility.Visible;
+                NoButton.Visibility = Visibility.Visible;
+                break;
+            case MessageBoxButton.YesNoCancel:
+                YesButton.Visibility = Visibility.Visible;
+                NoButton.Visibility = Visibility.Visible;
+                CancelButton.Visibility = Visibility.Visible;
+                break;
+            case MessageBoxButton.OKCancel:
+                OkButton.Visibility = Visibility.Visible;
+                CancelButton.Visibility = Visibility.Visible;
+                break;
+            default:
+                OkButton.Visibility = Visibility.Visible;
+                break;
+        }
+
+        // Win32 UX guidance: "for all controls, select the safest value by default." A Warning/
+        // Error icon on a YesNo(Cancel) box means Yes performs something risky (permanent delete,
+        // restoring over the current file, running an executable someone else wrote - see every
+        // call site that passes MessageBoxImage.Warning) - Enter defaulting to Yes there would
+        // make a reflexive keypress do the dangerous thing. Question-icon boxes (Move to Trash,
+        // Disconnect Drive - reversible, low-stakes) keep the old Yes-on-Enter convenience.
+        var riskyChoice = (button == MessageBoxButton.YesNo || button == MessageBoxButton.YesNoCancel)
+            && (icon == MessageBoxImage.Warning || icon == MessageBoxImage.Error);
+
+        // None of these buttons set IsDefault/IsCancel in XAML - they're shared across every
+        // button combination above with only one of {Yes, Ok} and one of {No, Cancel} ever
+        // visible at once (except YesNoCancel, where Escape should mean Cancel specifically, not
+        // No), so picking the "current" default/cancel action here based on what's actually
+        // visible is simpler than juggling conflicting IsDefault/IsCancel flags in XAML.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape)
+            {
+                if (CancelButton.Visibility == Visibility.Visible) Cancel_Click(this, new RoutedEventArgs());
+                else if (NoButton.Visibility == Visibility.Visible) No_Click(this, new RoutedEventArgs());
+                else if (OkButton.Visibility == Visibility.Visible) Ok_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter)
+            {
+                if (riskyChoice && NoButton.Visibility == Visibility.Visible) No_Click(this, new RoutedEventArgs());
+                else if (YesButton.Visibility == Visibility.Visible) Yes_Click(this, new RoutedEventArgs());
+                else if (OkButton.Visibility == Visibility.Visible) Ok_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+        };
+
+        // Give the safe choice actual keyboard focus too, not just the Enter key - so Tab order
+        // and the visible focus rectangle agree with what Enter is about to do, and a screen
+        // reader announces the safe button as the starting point.
+        Loaded += (_, _) =>
+        {
+            if (riskyChoice && NoButton.Visibility == Visibility.Visible) NoButton.Focus();
+            else if (YesButton.Visibility == Visibility.Visible) YesButton.Focus();
+            else if (OkButton.Visibility == Visibility.Visible) OkButton.Focus();
+        };
+    }
+
+    private void Yes_Click(object sender, RoutedEventArgs e)
+    {
+        Result = MessageBoxResult.Yes;
+        Close();
+    }
+
+    private void No_Click(object sender, RoutedEventArgs e)
+    {
+        Result = MessageBoxResult.No;
+        Close();
+    }
+
+    private void Ok_Click(object sender, RoutedEventArgs e)
+    {
+        Result = MessageBoxResult.OK;
+        Close();
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        Result = MessageBoxResult.Cancel;
+        Close();
+    }
+}

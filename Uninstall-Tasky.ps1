@@ -238,6 +238,23 @@ try {
         } catch {
             Write-Host "  Could not clean up notification registration ($($_.Exception.Message)) - harmless, skipping." -ForegroundColor Yellow
         }
+
+        # Merely starting Tasky.exe above - even in --cleanup-notifications mode - unconditionally
+        # recreates Documents\Tasky\debug.log: App's constructor logs a line before OnStartup even
+        # checks for that flag (see AppLogger.cs/App.xaml.cs). If task data was already removed
+        # above, this launch just silently rebuilt the folder with nothing but a log file in it -
+        # clean that back up now that it's served its purpose. If data was kept, leave it: AppLogger
+        # only ever appends, so this just added a few harmless lines to a log the user is keeping.
+        if (-not $keepData) {
+            $DebugLogPath = Join-Path $DocumentsFolder "debug.log"
+            if (Test-Path -LiteralPath $DebugLogPath) {
+                Remove-Item -LiteralPath $DebugLogPath -Force -ErrorAction SilentlyContinue
+            }
+            if ((Test-Path -LiteralPath $DocumentsFolder) -and
+                -not (Get-ChildItem -LiteralPath $DocumentsFolder -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $DocumentsFolder -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     # --- Remove the known application files (including this script itself) ---------------

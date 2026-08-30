@@ -10,7 +10,7 @@
 // Safe to run any time, not just right after a real bump - it's a no-op if DESKTOP_VERSION
 // already matches the csproj.
 const fs = require('fs');
-const { CONFIG_PATH, readCsprojVersion, readConfigDesktopVersion, walkDocsFiles } = require('./version-utils');
+const { CONFIG_PATH, readCsprojVersion, readConfigDesktopVersion, bumpCacheVersion } = require('./version-utils');
 
 const csprojVersion = readCsprojVersion();
 const configVersion = readConfigDesktopVersion();
@@ -21,28 +21,18 @@ if (csprojVersion === configVersion) {
 }
 
 // The cache-bust version must already agree across every occurrence, or bumping "the" version
-// from here is ambiguous - defer to check-cache-version.js's own check rather than guessing.
-const files = walkDocsFiles();
-const versions = new Set();
-for (const file of files) {
-  for (const m of fs.readFileSync(file, 'utf8').matchAll(/\?v=(\d+)/g)) versions.add(m[1]);
-}
-if (versions.size !== 1) {
-  console.error(`Cache-bust versions aren't consistent yet (found: ${[...versions].join(', ')}) - run node check-cache-version.js first and fix that before syncing the desktop version.`);
+// from here is ambiguous - defer to check-cache-version.js's own check rather than guessing. Do
+// this before touching config.js so a failure here leaves nothing half-updated.
+let oldCacheBust, newCacheBust;
+try {
+  ({ oldVersion: oldCacheBust, newVersion: newCacheBust } = bumpCacheVersion());
+} catch (err) {
+  console.error(err.message.replace('bumping.', 'syncing the desktop version.'));
   process.exit(1);
 }
-const oldCacheBust = Number([...versions][0]);
-const newCacheBust = oldCacheBust + 1;
 
 const configSrc = fs.readFileSync(CONFIG_PATH, 'utf8');
 fs.writeFileSync(CONFIG_PATH, configSrc.replace(/DESKTOP_VERSION = '[^']+'/, `DESKTOP_VERSION = '${csprojVersion}'`), 'utf8');
-
-const bumpRe = new RegExp(`\\?v=${oldCacheBust}\\b`, 'g');
-for (const file of files) {
-  const text = fs.readFileSync(file, 'utf8');
-  const updated = text.replace(bumpRe, `?v=${newCacheBust}`);
-  if (updated !== text) fs.writeFileSync(file, updated, 'utf8');
-}
 
 console.log(`Updated DESKTOP_VERSION: ${configVersion} -> ${csprojVersion}`);
 console.log(`Bumped cache-bust version: v${oldCacheBust} -> v${newCacheBust}`);

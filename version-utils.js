@@ -33,4 +33,28 @@ function readConfigDesktopVersion() {
   return m[1];
 }
 
-module.exports = { ROOT, CSPROJ_PATH, CONFIG_PATH, DOCS_DIR, walkDocsFiles, readCsprojVersion, readConfigDesktopVersion };
+// Bumps every "?v=NN" occurrence under docs/ to the next integer. Requires them to already agree
+// on a single version - if they don't, check-cache-version.js needs to be run and fixed first,
+// since bumping "the" version is ambiguous otherwise. Returns { oldVersion, newVersion }, or throws
+// if the versions aren't consistent yet.
+function bumpCacheVersion() {
+  const files = walkDocsFiles();
+  const versions = new Set();
+  for (const file of files) {
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(/\?v=(\d+)/g)) versions.add(m[1]);
+  }
+  if (versions.size !== 1) {
+    throw new Error(`Cache-bust versions aren't consistent yet (found: ${[...versions].join(', ')}) - run node check-cache-version.js first and fix that before bumping.`);
+  }
+  const oldVersion = Number([...versions][0]);
+  const newVersion = oldVersion + 1;
+  const bumpRe = new RegExp(`\\?v=${oldVersion}\\b`, 'g');
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8');
+    const updated = text.replace(bumpRe, `?v=${newVersion}`);
+    if (updated !== text) fs.writeFileSync(file, updated, 'utf8');
+  }
+  return { oldVersion, newVersion };
+}
+
+module.exports = { ROOT, CSPROJ_PATH, CONFIG_PATH, DOCS_DIR, walkDocsFiles, readCsprojVersion, readConfigDesktopVersion, bumpCacheVersion };

@@ -143,6 +143,13 @@ const bulkActionsRow = el('bulk-actions-row');
 const bulkSelectedCount = el('bulk-selected-count');
 const bulkSelectAllBtn = el('bulk-select-all-btn');
 const bulkDoneBtn = el('bulk-done-btn');
+const bulkPinBtn = el('bulk-pin-btn');
+const bulkDueBtn = el('bulk-due-btn');
+const bulkDueInput = el('bulk-due-input');
+const bulkTagBtn = el('bulk-tag-btn');
+const bulkTagPopup = el('bulk-tag-popup');
+const bulkTagInput = el('bulk-tag-input');
+const bulkTagSuggestions = el('bulk-tag-suggestions');
 const bulkTrashBtn = el('bulk-trash-btn');
 const bulkRestoreBtn = el('bulk-restore-btn');
 const bulkDeleteBtn = el('bulk-delete-btn');
@@ -185,6 +192,7 @@ window.addEventListener('offline', updateOfflineBanner);
 // already shown - only matters while offline, so this is a cheap no-op the rest of the time.
 window.addEventListener('resize', () => {
   if (!navigator.onLine) updateOfflineBanner();
+  if (selectedTaskId) autoResizeEditorTitle();
 });
 updateOfflineBanner();
 
@@ -551,6 +559,9 @@ document.addEventListener('click', (e) => {
   // reflects where the click actually happened regardless of what's since been removed.
   const clickPath = e.composedPath();
   if (!clickPath.includes(tagSuggestPopup) && !clickPath.includes(editorTagInput)) closeTagSuggest();
+  // Same composedPath() reasoning as tagSuggestPopup above - clicking a suggestion rebuilds
+  // bulkTagSuggestions' contents synchronously, detaching the clicked button before this listener runs.
+  if (!clickPath.includes(bulkTagPopup)) closeBulkTagPopup();
 });
 filterToggleBtn.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1674,8 +1685,12 @@ async function moveAllDoneToTrash() {
   renderList();
 }
 
+function normalizeTagName(rawTag) {
+  return rawTag.trim().replace(/^#+/, '').replace(/[^\w-]/g, '').toLowerCase();
+}
+
 function addTag(task, rawTag) {
-  const tag = rawTag.trim().replace(/^#+/, '').replace(/[^\w-]/g, '').toLowerCase();
+  const tag = normalizeTagName(rawTag);
   if (!tag || task.Tags.some((t) => t.toLowerCase() === tag)) return;
   task.Tags.push(tag);
   touch(task);
@@ -2107,9 +2122,10 @@ function updateTaskRow(refs, task, sectionKind) {
   if (task.Body.some((b) => b.Type === NoteBlockType.Photo || blockHasInlineImage(b))) indicators.push(icon('image'));
   if (task.Body.some((b) => b.Type === NoteBlockType.File || blockHasInlineFile(b))) indicators.push(icon('paperclip'));
   if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
+  const tagChips = (task.Tags || []).map((t) => `<span class="task-tag-chip">#${escapeHtml(t)}</span>`).join('');
   info.innerHTML = `
     <div class="task-title ${task.IsDone ? 'done' : ''}">${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>
-    <div class="task-sub">${due ? `<span class="${overdue ? 'task-due-overdue' : ''}">${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}</div>
+    <div class="task-sub">${due ? `<span class="${overdue ? 'task-due-overdue' : ''}">${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}${tagChips ? `<span class="task-tags">${tagChips}</span>` : ''}</div>
   `;
 
   li.setAttribute('aria-label', `${task.Text || '(untitled)'}${due ? `, due ${due}` : ''}${overdue ? ' (overdue)' : ''}`);
@@ -2129,6 +2145,9 @@ function updateBulkActionsBar() {
   const count = selectedIds.size;
   bulkSelectedCount.textContent = `${count} selected`;
   bulkDoneBtn.disabled = count === 0;
+  bulkPinBtn.disabled = count === 0;
+  bulkDueBtn.disabled = count === 0;
+  bulkTagBtn.disabled = count === 0;
   bulkTrashBtn.disabled = count === 0;
   bulkRestoreBtn.disabled = count === 0;
   bulkDeleteBtn.disabled = count === 0;
@@ -2316,6 +2335,7 @@ function renderEditor(task) {
   editorDeleteBtn.classList.toggle('hidden', !task.IsClosed);
 
   editorTitle.value = task.Text;
+  autoResizeEditorTitle();
   editorDue.value = task.DueDate ? toDateInputValue(parseDotNetDate(task.DueDate)) : '';
   editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
   editorRecurrence.value = String(task.Recurrence);
@@ -2359,7 +2379,38 @@ for (const control of [editorDue, editorRecurrence, editorRecurrenceInterval]) {
   });
 }
 
-editorTitle.addEventListener('input', () => {
+// A <textarea> so long titles wrap instead of scrolling off the edge of the box (reported live:
+// "the name box does not wrap cutting off some of the task name"). Auto-grows via JS rather than
+// the CSS field-sizing property, matching this codebase's build-everything-natively/no-bleeding-edge
+// stance - field-sizing isn't supported everywhere this app runs yet.
+function autoResizeEditorTitle() {
+  // Deferred to just before the next paint so it measures *after* any DOM changes made in the same
+  // synchronous block - renderEditor() (which sets .value and calls this) runs before
+  // showMobileView('editor') at several call sites, so measuring synchronously here would read
+  // scrollHeight while the editor pane's mobile view is still hidden (scrollHeight of a hidden
+  // element is always 0), collapsing the title to zero height right when a task is opened on mobile.
+  requestAnimationFrame(() => {
+    editorTitle.style.height = 'auto';
+    editorTitle.style.height = `${editorTitle.scrollHeight}px`;
+  });
+}
+editorTitle.addEventListener('keydown', (e) => {
+  // Titles are single-paragraph text, not multi-line notes (that's what the body editor is for) -
+  // Enter shouldn't insert a literal newline into Task.Text.
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    editorTitle.blur();
+  }
+});
+editorTitle.addEventListener('input', (e) => {
+  // Same Android/Gboard fallback as editorTagInput/quickAddInput above - some on-screen keyboards
+  // never fire a real keydown for Enter/Done, only this input event, so the keydown handler above
+  // alone can't be relied on to stop a newline from landing in the title.
+  if (e.inputType === 'insertLineBreak') {
+    editorTitle.value = editorTitle.value.replace(/\n/g, '');
+    editorTitle.blur();
+  }
+  autoResizeEditorTitle();
   const task = findTask(selectedTaskId);
   if (!task) return;
   task.Text = editorTitle.value;
@@ -2578,6 +2629,119 @@ bulkDoneBtn.addEventListener('click', () => {
     touch(t);
   }
   finishBulkAction();
+});
+
+// Pin, due date, and tags, unlike the actions above, don't remove the selected tasks from view or
+// make the selection stop making sense - selectionMode stays on and selectedIds stays intact
+// afterward (refreshAfterBulkEdit, not finishBulkAction) so these can be chained on the same
+// selection without re-selecting the tasks in between.
+function refreshAfterBulkEdit() {
+  markDirty();
+  renderSidebar();
+  renderList();
+}
+
+// Mirrors desktop's BulkTogglePinCommand: toggles each selected task's own pin state independently
+// rather than forcing every selected task to the same pinned/unpinned value.
+bulkPinBtn.addEventListener('click', () => {
+  const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
+  if (targets.length === 0) return;
+  for (const t of targets) {
+    t.IsPinned = !t.IsPinned;
+    touch(t);
+  }
+  refreshAfterBulkEdit();
+});
+
+bulkDueBtn.addEventListener('click', () => {
+  const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
+  if (targets.length === 0) return;
+  bulkDueInput.value = '';
+  try { bulkDueInput.showPicker(); } catch { bulkDueInput.click(); }
+});
+bulkDueInput.addEventListener('change', () => {
+  if (!bulkDueInput.value) return;
+  const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
+  if (targets.length === 0) return;
+  for (const t of targets) {
+    t.DueDate = formatDotNetDate(withDatePickerValue(t.DueDate, bulkDueInput.value));
+    touch(t);
+  }
+  refreshAfterBulkEdit();
+});
+
+// Bulk tag popup mirrors the single-task tag picker's visual language (#tag-suggest-popup's
+// tag-suggest-item/tag-suggest-empty classes) but isn't built on top of renderTagSuggestions()
+// itself - that function's "already on this task" filtering and empty-state copy are both written
+// in terms of exactly one task, which doesn't translate to a set of tasks that may each already
+// have a different subset of tags.
+let bulkTagTargets = [];
+function closeBulkTagPopup() {
+  bulkTagPopup.classList.add('hidden');
+  bulkTagTargets = [];
+}
+function applyBulkTag(tag) {
+  for (const t of bulkTagTargets) {
+    if (!t.Tags.some((x) => x.toLowerCase() === tag)) t.Tags.push(tag);
+    touch(t);
+  }
+  closeBulkTagPopup();
+  refreshAfterBulkEdit();
+}
+function renderBulkTagSuggestions() {
+  const q = normalizeTagName(bulkTagInput.value);
+  const available = allTags();
+  const filtered = q ? available.filter((t) => t.includes(q)) : available;
+  const canCreate = q.length > 0 && !available.includes(q);
+
+  bulkTagSuggestions.innerHTML = '';
+  if (canCreate) {
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.className = 'tag-suggest-item create';
+    createBtn.textContent = `+ Create "${q}"`;
+    createBtn.addEventListener('click', () => applyBulkTag(q));
+    bulkTagSuggestions.appendChild(createBtn);
+  }
+  if (filtered.length === 0 && !canCreate) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-suggest-empty';
+    empty.textContent = allTags().length === 0 ? 'No tags yet - type to create one' : q ? 'No matching tags' : 'No tags yet';
+    bulkTagSuggestions.appendChild(empty);
+  } else {
+    for (const tag of filtered) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tag-suggest-item';
+      btn.textContent = tag;
+      btn.addEventListener('click', () => applyBulkTag(tag));
+      bulkTagSuggestions.appendChild(btn);
+    }
+  }
+}
+bulkTagBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  bulkTagTargets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
+  if (bulkTagTargets.length === 0) return;
+  bulkTagInput.value = '';
+  openAnchoredPopup(bulkTagPopup, bulkTagBtn);
+  renderBulkTagSuggestions();
+  bulkTagInput.focus();
+});
+function commitBulkTagInput() {
+  const tag = normalizeTagName(bulkTagInput.value);
+  if (!tag || bulkTagTargets.length === 0) return;
+  applyBulkTag(tag);
+}
+bulkTagInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') commitBulkTagInput();
+  else if (e.key === 'Escape') closeBulkTagPopup();
+});
+// Same Android/Gboard "insertLineBreak" fallback as editorTagInput/quickAddInput elsewhere in this
+// file - some on-screen keyboards never fire a real keydown for Enter/Done, only this input event.
+bulkTagInput.addEventListener('input', (e) => {
+  if (e.inputType === 'insertLineBreak') commitBulkTagInput();
+  else renderBulkTagSuggestions();
 });
 
 bulkTrashBtn.addEventListener('click', () => {

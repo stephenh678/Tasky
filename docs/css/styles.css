@@ -759,6 +759,11 @@ a { color: var(--accent); }
 .bulk-selected-count { font-size: 0.9em; color: var(--text); font-weight: 700; }
 .bulk-actions-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .bulk-actions-buttons .btn { flex: 1 1 auto; min-width: 72px; }
+/* Keeps #bulk-due-input in the layout/render tree (needed for showPicker() to work in Chrome) while
+   making it visually imperceptible - the standard accessible "hide without display:none" technique. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; }
+.bulk-tag-popup { display: flex; flex-direction: column; gap: 6px; }
+.bulk-tag-popup .tag-input { width: 100%; box-sizing: border-box; }
 .task-list.selecting { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 /* The per-row selection checkbox only makes sense while bulk-select mode is on - kept in the DOM
    at all times (see renderTaskRow in app.js) rather than added/removed, so toggling selection mode
@@ -847,10 +852,12 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .tag-chip button .icon { width: 10px; height: 10px; }
 .sidebar-list li .icon { width: 17px; height: 17px; }
 .task-title.done { text-decoration: line-through; color: var(--text-dim); }
-.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .task-due-overdue { color: var(--danger-text); font-weight: 600; }
 .task-indicators { display: flex; align-items: center; gap: 4px; }
 .task-indicators .icon { width: 12px; height: 12px; }
+.task-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.task-tag-chip { background: var(--selected); border-radius: 8px; padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px; }
 
 .empty-state { color: var(--text-dim); text-align: center; padding: 40px 16px; }
 
@@ -1013,10 +1020,15 @@ kbd {
   min-width: 0;
   font-size: 1.5em;
   font-weight: 700;
+  font-family: inherit;
   border: none;
   background: none;
   color: var(--text);
   letter-spacing: -0.01em;
+  padding: 0;
+  line-height: 1.25;
+  resize: none;
+  overflow: hidden;
 }
 /* One compact metadata strip (Due/Repeat/Tags) instead of three separate labeled rows - Due/Repeat
    share the tag chips' exact pill styling (background/radius/padding below) so every piece of task

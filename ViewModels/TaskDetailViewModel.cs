@@ -5,7 +5,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using TodoApp.Models;
@@ -116,15 +115,9 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     public string NewTagPreview => SanitizeTag(NewTagText);
 
     // ROADMAP #62: was an inline Regex.Replace call, recompiling this pattern on every keystroke in
-    // the tag box (NewTagPreview reads SanitizeTag on every NewTagText change).
-    private static readonly Regex InvalidTagCharsPattern = new("[^\\w-]", RegexOptions.Compiled);
-
-    // Strips everything but word characters and hyphens - matches Tasky Web's addTag() (docs/js/app.js)
-    // so a tag typed here and one typed there normalize to the same string instead of a stray space or
-    // comma silently breaking "#tag" quick-add parsing or the "tag:name" search operator on either
-    // platform.
-    private static string SanitizeTag(string raw)
-        => InvalidTagCharsPattern.Replace(raw.Trim().TrimStart('#'), "").ToLowerInvariant();
+    // the tag box (NewTagPreview reads SanitizeTag on every NewTagText change) - now precompiled
+    // once in TagUtils, shared with the bulk-edit tag dialog.
+    private static string SanitizeTag(string raw) => TagUtils.Sanitize(raw);
 
     // Existing tags only ever appear as clickable rows in FilteredAvailableTags - a name nobody's
     // used yet had no click target at all, just the hint text below the box, so creating a tag by

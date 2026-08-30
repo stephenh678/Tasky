@@ -678,6 +678,10 @@
                                   Command="{Binding PlacementTarget.Tag.BulkMarkDoneCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                         <MenuItem Header="Pin/Unpin"
                                   Command="{Binding PlacementTarget.Tag.BulkTogglePinCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Set Due Date..."
+                                  Command="{Binding PlacementTarget.Tag.BulkSetDueDateCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Add Tag..."
+                                  Command="{Binding PlacementTarget.Tag.BulkAddTagCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                         <Separator/>
                         <MenuItem Header="Move to Trash"
                                   Visibility="{Binding PlacementTarget.Tag.SelectedSidebarItem.Kind, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
@@ -756,7 +760,7 @@
                                     </TextBlock.Foreground>
                                 </TextBlock>
 
-                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                <WrapPanel Margin="0,3,0,0">
                                     <TextBlock Text="&#x1F5BC;" FontFamily="{StaticResource IconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has photo"
@@ -773,15 +777,28 @@
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has checklist"
                                                Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}"/>
-                                    <TextBlock Text="&#x1F3F7;" FontFamily="{StaticResource IconFont}" FontSize="10"
-                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
-                                               ToolTip="Has tags"
-                                               Visibility="{Binding Tags, Converter={StaticResource AnyItemToVis}}"/>
+                                    <ItemsControl ItemsSource="{Binding Tags}" Margin="0,0,6,0">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{DynamicResource TagChipBrush}" CornerRadius="8"
+                                                        Padding="6,1" Margin="0,0,4,0" ToolTip="{Binding}">
+                                                    <TextBlock Text="{Binding}" FontSize="10" MaxWidth="90"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                     <TextBlock Text="&#x1F501;" FontFamily="{StaticResource IconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}"
                                                ToolTip="Recurring"
                                                Visibility="{Binding Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
-                                </StackPanel>
+                                </WrapPanel>
                             </StackPanel>
                         </Grid>
                     </DataTemplate>

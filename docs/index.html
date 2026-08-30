@@ -164,11 +164,19 @@
           <div class="bulk-actions-buttons">
             <button id="bulk-select-all-btn" type="button" class="btn btn-ghost small">Select All</button>
             <button id="bulk-done-btn" type="button" class="btn btn-ghost small">Mark Done</button>
+            <button id="bulk-pin-btn" type="button" class="btn btn-ghost small">Pin</button>
+            <button id="bulk-due-btn" type="button" class="btn btn-ghost small">Due Date</button>
+            <button id="bulk-tag-btn" type="button" class="btn btn-ghost small">Add Tag</button>
             <button id="bulk-trash-btn" type="button" class="btn btn-ghost small">Trash</button>
             <button id="bulk-restore-btn" type="button" class="btn btn-ghost small">Restore</button>
             <button id="bulk-delete-btn" type="button" class="btn btn-ghost small danger">Delete</button>
             <button id="bulk-cancel-btn" type="button" class="btn btn-ghost small">Cancel</button>
           </div>
+          <!-- Not shown directly - #bulk-due-btn triggers its native picker via showPicker(), same
+               idiom as the single-task editor's #editor-due, so bulk-editing due dates gets the
+               platform's own date UI for free instead of a bespoke calendar widget. Visually hidden
+               rather than display:none because Chrome refuses showPicker() on a non-rendered input. -->
+          <input id="bulk-due-input" type="date" class="visually-hidden" tabindex="-1" aria-hidden="true" />
         </div>
         <ul id="task-list" class="task-list"></ul>
         <div id="list-empty" class="empty-state hidden">No tasks here.</div>
@@ -208,7 +216,7 @@
                opening the bottom tab bar's More sheet first, so this puts the two most-reached-for
                destinations directly on the dashboard instead. -->
           <div class="empty-dashboard-links">
-            <button id="empty-tags-link" type="button" class="shortcut-row shortcut-row-link"><span>Tags</span></button>
+            <button id="empty-tags-link" type="button" class="shortcut-row shortcut-row-link"><span>Sections &amp; Tags</span></button>
             <button id="empty-settings-link" type="button" class="shortcut-row shortcut-row-link"><span>Settings</span></button>
           </div>
         </div>
@@ -221,7 +229,7 @@
                Done/Pin are common enough to stay directly visible, moved into the metadata pill
                row below instead (see its own comment). -->
           <div class="editor-title-row">
-            <input id="editor-title" class="editor-title" type="text" placeholder="Task title" />
+            <textarea id="editor-title" class="editor-title" rows="1" placeholder="Task title"></textarea>
             <div class="editor-more-wrap">
               <button type="button" id="editor-more-btn" class="icon-btn" aria-label="More actions" title="More actions"></button>
               <div id="editor-more-dropdown" class="dropdown dropdown-right hidden">
@@ -379,6 +387,15 @@
     <input id="quick-add-popup-input" type="text" class="quick-add-input" placeholder="+ Add a task…"
            title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
     <div id="quick-add-popup-preview" class="quick-add-preview hidden"></div>
+  </div>
+
+  <!-- Bulk-select "Add Tag" popup - same tag-suggest visual language as the single-task editor's
+       #tag-suggest-popup, but self-contained (input + suggestions together) since it isn't anchored
+       next to an always-visible field the way the editor's tag input is. Positioned by
+       openAnchoredPopup, same as quick-add-popup above. -->
+  <div id="bulk-tag-popup" class="tag-suggest-popup bulk-tag-popup hidden">
+    <input id="bulk-tag-input" type="text" class="tag-input" placeholder="Add tag to selected…" autocomplete="off" />
+    <div id="bulk-tag-suggestions"></div>
   </div>
 
   <!-- Settings/About - anchored popups (same idiom as menu-dropdown/more-sheet-popup) opened from

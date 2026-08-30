@@ -600,6 +600,8 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkRestoreCommand { get; private set; } = null!;
     public RelayCommand BulkDeleteCommand { get; private set; } = null!;
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
+    public RelayCommand BulkSetDueDateCommand { get; private set; } = null!;
+    public RelayCommand BulkAddTagCommand { get; private set; } = null!;
     public RelayCommand RestoreBackupCommand { get; private set; } = null!;
     public RelayCommand ExportBackupCommand { get; private set; } = null!;
     public RelayCommand ExportCalendarCommand { get; private set; } = null!;
@@ -623,6 +625,12 @@ public class MainViewModel : INotifyPropertyChanged
     // LinkPromptWindow/TablePromptWindow are only ever constructed from code-behind) - this just
     // signals "the user asked to save the current search," mirroring FocusTitleRequested above.
     public event Action? SaveViewRequested;
+
+    // Same "ViewModel signals, code-behind shows the dialog" split as SaveViewRequested above - a
+    // multi-selection has no single date/tag to bind a picker to inline (unlike TaskDetailViewModel's
+    // own due-date/tag controls), so bulk-editing either one needs its own small prompt window.
+    public event Action? BulkSetDueDateRequested;
+    public event Action? BulkAddTagRequested;
 
     public MainViewModel()
     {
@@ -1502,6 +1510,37 @@ public class MainViewModel : INotifyPropertyChanged
         {
             foreach (var t in SelectedTasks) t.IsPinned = !t.IsPinned;
         }, _ => SelectedTasks.Count > 0);
+
+        BulkSetDueDateCommand = new RelayCommand(_ => BulkSetDueDateRequested?.Invoke(), _ => SelectedTasks.Count > 0);
+        BulkAddTagCommand = new RelayCommand(_ => BulkAddTagRequested?.Invoke(), _ => SelectedTasks.Count > 0);
+    }
+
+    // Called from MainWindow.xaml.cs after BulkDueDatePromptWindow returns (BulkSetDueDateRequested
+    // triggers showing that dialog). date is null for "Clear Due Date," not "user cancelled" -
+    // cancelling never calls this at all. DueDate is a plain SetField-backed property (unlike
+    // Tags/Body below), so Task_PropertyChanged picks up the change and bumps ModifiedAt on its own -
+    // no manual touch needed, same as every other single-task due-date edit.
+    public void ApplyBulkDueDate(DateTime? date)
+    {
+        foreach (var t in SelectedTasks) t.DueDate = date;
+    }
+
+    // Called from MainWindow.xaml.cs after BulkAddTagPromptWindow returns a tag (BulkAddTagRequested
+    // triggers showing that dialog). Mirrors TaskDetailViewModel.AddTagCommand exactly, including its
+    // own manual ModifiedAt bump - Tags is a plain ObservableCollection<string> with no SetField
+    // wrapper, so Add() never raises TaskItem.PropertyChanged and the sync merge would otherwise never
+    // see the new tag as an edit worth keeping.
+    public void ApplyBulkTag(string rawTag)
+    {
+        var tag = TagUtils.Sanitize(rawTag);
+        if (tag.Length == 0) return;
+        foreach (var t in SelectedTasks)
+        {
+            if (t.Tags.Any(x => x.Equals(tag, StringComparison.OrdinalIgnoreCase))) continue;
+            t.Tags.Add(tag);
+            t.ModifiedAt = DateTime.UtcNow;
+        }
+        OnTaskChanged();
     }
 
     // Permanent delete has no undo path (unlike Move to Trash), so a tombstone recorded here
@@ -2222,7 +2261,7 @@ public class MainViewModel : INotifyPropertyChanged
         _ => null
     };
 
-    private IEnumerable<string> GetAllTagNames()
+    public IEnumerable<string> GetAllTagNames()
         => AllTasks.SelectMany(t => t.Tags).Distinct(StringComparer.OrdinalIgnoreCase);
 
     // The hot path: nearly every task edit (typing, checking a box, trashing, tagging...) routes

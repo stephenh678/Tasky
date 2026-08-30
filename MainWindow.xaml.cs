@@ -89,6 +89,24 @@ public partial class MainWindow : Window
             }
         };
 
+        _viewModel.BulkSetDueDateRequested += () =>
+        {
+            var prompt = new BulkDueDatePromptWindow(_viewModel.SelectedTasks.Count) { Owner = this };
+            if (prompt.ShowDialog() == true)
+            {
+                _viewModel.ApplyBulkDueDate(prompt.DueDateResult);
+            }
+        };
+
+        _viewModel.BulkAddTagRequested += () =>
+        {
+            var prompt = new BulkAddTagPromptWindow(_viewModel.SelectedTasks.Count, _viewModel.GetAllTagNames()) { Owner = this };
+            if (prompt.ShowDialog() == true && prompt.TagResult is not null)
+            {
+                _viewModel.ApplyBulkTag(prompt.TagResult);
+            }
+        };
+
         // The task list's extended multi-selection isn't bindable (SelectedItems isn't a DP), so
         // it doesn't get cleared just because SelectedTask/SelectedSidebarItem changes - do it
         // explicitly whenever the active section changes.

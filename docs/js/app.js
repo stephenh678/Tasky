@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=12';
-import * as drive from './drive.js?v=12';
+import * as auth from './auth.js?v=13';
+import * as drive from './drive.js?v=13';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -13,11 +13,11 @@ import {
   blockHasInlineImage,
   blockHasInlineFile,
   parseQuickAdd,
-} from './model.js?v=12';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=12';
-import { renderEditableBody } from './editor.js?v=12';
-import { icon } from './icons.js?v=12';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=12';
+} from './model.js?v=13';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=13';
+import { renderEditableBody } from './editor.js?v=13';
+import { icon } from './icons.js?v=13';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=13';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -2621,9 +2621,12 @@ bulkSelectAllBtn.addEventListener('click', () => {
   renderList();
 });
 
-bulkDoneBtn.addEventListener('click', () => {
+bulkDoneBtn.addEventListener('click', async () => {
   const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id) && !t.IsDone);
   if (targets.length === 0) return;
+  const confirmed = await confirmModal(`Mark ${targets.length} task(s) complete?`,
+    { title: 'Mark Complete', confirmLabel: 'Mark Complete' });
+  if (!confirmed) return;
   for (const t of targets) {
     t.IsDone = true;
     touch(t);
@@ -2649,9 +2652,12 @@ function refreshAfterBulkEdit() {
 
 // Mirrors desktop's BulkTogglePinCommand: toggles each selected task's own pin state independently
 // rather than forcing every selected task to the same pinned/unpinned value.
-bulkPinBtn.addEventListener('click', () => {
+bulkPinBtn.addEventListener('click', async () => {
   const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
   if (targets.length === 0) return;
+  const confirmed = await confirmModal(`Toggle pin on ${targets.length} task(s)?`,
+    { title: 'Toggle Pin', confirmLabel: 'Toggle Pin' });
+  if (!confirmed) return;
   for (const t of targets) {
     t.IsPinned = !t.IsPinned;
     touch(t);
@@ -2785,9 +2791,12 @@ bulkTagInput.addEventListener('input', (e) => {
   else renderBulkTagSuggestions();
 });
 
-bulkTrashBtn.addEventListener('click', () => {
+bulkTrashBtn.addEventListener('click', async () => {
   const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id) && !t.IsClosed);
   if (targets.length === 0) return;
+  const confirmed = await confirmModal(`Move ${targets.length} task(s) to Trash?`,
+    { title: 'Move to Trash', confirmLabel: 'Move to Trash' });
+  if (!confirmed) return;
   for (const t of targets) {
     t.IsClosed = true;
     touch(t);
@@ -2805,9 +2814,12 @@ bulkTrashBtn.addEventListener('click', () => {
   });
 });
 
-bulkRestoreBtn.addEventListener('click', () => {
+bulkRestoreBtn.addEventListener('click', async () => {
   const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id) && t.IsClosed);
   if (targets.length === 0) return;
+  const confirmed = await confirmModal(`Restore ${targets.length} task(s) from Trash?`,
+    { title: 'Restore from Trash', confirmLabel: 'Restore' });
+  if (!confirmed) return;
   for (const t of targets) {
     t.IsClosed = false;
     touch(t);

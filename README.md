@@ -18,9 +18,9 @@ let the app take care of not losing your work.
   AND-combine, each one shows as a removable chip above the list, and the filter button carries a
   dot while any are active
 - Multi-select (Ctrl/Shift-click) with bulk actions: mark completed, pin/unpin, set/clear due
-  date, add a tag, move to trash, restore, delete permanently — due date, tag, and permanent
-  delete confirm the change first since they can touch many tasks at once, and every bulk action
-  except permanent delete is undoable with Ctrl+Z
+  date, add a tag, move to trash, restore, delete permanently — every one of them confirms the
+  change first since they can touch many tasks at once, and every bulk action except permanent
+  delete is also undoable with Ctrl+Z
 
 ### Rich task notes
 Each task's body is one continuous, borderless document — type freely, and insert whatever else

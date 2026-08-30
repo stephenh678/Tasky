@@ -1461,13 +1461,25 @@ public class MainViewModel : INotifyPropertyChanged
 
         BulkMarkDoneCommand = new RelayCommand(_ =>
         {
-            foreach (var t in SelectedTasks) t.IsDone = true;
+            var targets = SelectedTasks.Where(t => !t.IsDone).ToList();
+            if (targets.Count == 0) return;
+
+            var result = ThemedMessageBox.Show($"Mark {targets.Count} task(s) complete?",
+                "Mark Complete", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
+            foreach (var t in targets) t.IsDone = true;
         }, _ => SelectedTasks.Count > 0);
 
         BulkTrashCommand = new RelayCommand(_ =>
         {
             var targets = SelectedTasks.Where(t => !t.IsClosed).ToList();
             if (targets.Count == 0) return;
+
+            var result = ThemedMessageBox.Show($"Move {targets.Count} task(s) to Trash?",
+                "Move to Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
             foreach (var t in targets) t.IsClosed = true;
             PushUndo($"Move {targets.Count} task(s) to Trash", () =>
             {
@@ -1479,6 +1491,11 @@ public class MainViewModel : INotifyPropertyChanged
         {
             var targets = SelectedTasks.Where(t => t.IsClosed).ToList();
             if (targets.Count == 0) return;
+
+            var result = ThemedMessageBox.Show($"Restore {targets.Count} task(s) from Trash?",
+                "Restore from Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
             foreach (var t in targets) t.IsClosed = false;
             PushUndo($"Restore {targets.Count} task(s) from Trash", () =>
             {
@@ -1510,6 +1527,11 @@ public class MainViewModel : INotifyPropertyChanged
         {
             var targets = SelectedTasks.ToList();
             if (targets.Count == 0) return;
+
+            var result = ThemedMessageBox.Show($"Toggle pin on {targets.Count} task(s)?",
+                "Toggle Pin", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
             foreach (var t in targets) t.IsPinned = !t.IsPinned;
             PushUndo($"Toggle pin on {targets.Count} task(s)", () =>
             {

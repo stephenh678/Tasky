@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=11';
-import * as drive from './drive.js?v=11';
+import * as auth from './auth.js?v=12';
+import * as drive from './drive.js?v=12';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -13,11 +13,11 @@ import {
   blockHasInlineImage,
   blockHasInlineFile,
   parseQuickAdd,
-} from './model.js?v=11';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=11';
-import { renderEditableBody } from './editor.js?v=11';
-import { icon } from './icons.js?v=11';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=11';
+} from './model.js?v=12';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=12';
+import { renderEditableBody } from './editor.js?v=12';
+import { icon } from './icons.js?v=12';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=12';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');

@@ -2622,13 +2622,19 @@ bulkSelectAllBtn.addEventListener('click', () => {
 });
 
 bulkDoneBtn.addEventListener('click', () => {
-  const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
+  const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id) && !t.IsDone);
   if (targets.length === 0) return;
   for (const t of targets) {
     t.IsDone = true;
     touch(t);
   }
   finishBulkAction();
+  pushUndo(`Completed ${targets.length} task(s)`, () => {
+    for (const t of targets) {
+      t.IsDone = false;
+      touch(t);
+    }
+  });
 });
 
 // Pin, due date, and tags, unlike the actions above, don't remove the selected tasks from view or
@@ -2651,6 +2657,12 @@ bulkPinBtn.addEventListener('click', () => {
     touch(t);
   }
   refreshAfterBulkEdit();
+  pushUndo(`Toggled pin on ${targets.length} task(s)`, () => {
+    for (const t of targets) {
+      t.IsPinned = !t.IsPinned;
+      touch(t);
+    }
+  });
 });
 
 bulkDueBtn.addEventListener('click', () => {
@@ -2659,15 +2671,27 @@ bulkDueBtn.addEventListener('click', () => {
   bulkDueInput.value = '';
   try { bulkDueInput.showPicker(); } catch { bulkDueInput.click(); }
 });
-bulkDueInput.addEventListener('change', () => {
+bulkDueInput.addEventListener('change', async () => {
   if (!bulkDueInput.value) return;
   const targets = appState.Tasks.filter((t) => selectedIds.has(t.Id));
   if (targets.length === 0) return;
+  const [y, mo, d] = bulkDueInput.value.split('-').map(Number);
+  const confirmed = await confirmModal(`Set the due date to ${formatDate(new Date(y, mo - 1, d))} on ${targets.length} task(s)?`,
+    { title: 'Set Due Date', confirmLabel: 'Set Due Date' });
+  if (!confirmed) return;
+  // Snapshot each task's own prior due date - they didn't necessarily share one before this edit.
+  const previous = targets.map((t) => [t, t.DueDate]);
   for (const t of targets) {
     t.DueDate = formatDotNetDate(withDatePickerValue(t.DueDate, bulkDueInput.value));
     touch(t);
   }
   refreshAfterBulkEdit();
+  pushUndo(`Set due date on ${targets.length} task(s)`, () => {
+    for (const [t, due] of previous) {
+      t.DueDate = due;
+      touch(t);
+    }
+  });
 });
 
 // Bulk tag popup mirrors the single-task tag picker's visual language (#tag-suggest-popup's
@@ -2680,13 +2704,30 @@ function closeBulkTagPopup() {
   bulkTagPopup.classList.add('hidden');
   bulkTagTargets = [];
 }
-function applyBulkTag(tag) {
-  for (const t of bulkTagTargets) {
-    if (!t.Tags.some((x) => x.toLowerCase() === tag)) t.Tags.push(tag);
+async function applyBulkTag(tag) {
+  const targets = bulkTagTargets;
+  const confirmed = await confirmModal(`Add the "${tag}" tag to ${targets.length} task(s)?`,
+    { title: 'Add Tag', confirmLabel: 'Add Tag' });
+  closeBulkTagPopup();
+  if (!confirmed) return;
+  // Only the tasks that didn't already carry this tag actually change - undo must revert exactly
+  // that subset, or it would strip a tag a task already had on its own before this edit.
+  const added = [];
+  for (const t of targets) {
+    if (!t.Tags.some((x) => x.toLowerCase() === tag)) {
+      t.Tags.push(tag);
+      added.push(t);
+    }
     touch(t);
   }
-  closeBulkTagPopup();
   refreshAfterBulkEdit();
+  if (added.length === 0) return;
+  pushUndo(`Added tag "${tag}" to ${added.length} task(s)`, () => {
+    for (const t of added) {
+      t.Tags = t.Tags.filter((x) => x.toLowerCase() !== tag);
+      touch(t);
+    }
+  });
 }
 function renderBulkTagSuggestions() {
   const q = normalizeTagName(bulkTagInput.value);
@@ -2756,6 +2797,12 @@ bulkTrashBtn.addEventListener('click', () => {
     showEmptyEditor();
   }
   finishBulkAction();
+  pushUndo(`Moved ${targets.length} task(s) to Trash`, () => {
+    for (const t of targets) {
+      t.IsClosed = false;
+      touch(t);
+    }
+  });
 });
 
 bulkRestoreBtn.addEventListener('click', () => {
@@ -2766,6 +2813,12 @@ bulkRestoreBtn.addEventListener('click', () => {
     touch(t);
   }
   finishBulkAction();
+  pushUndo(`Restored ${targets.length} task(s) from Trash`, () => {
+    for (const t of targets) {
+      t.IsClosed = true;
+      touch(t);
+    }
+  });
 });
 
 bulkDeleteBtn.addEventListener('click', async () => {

@@ -1508,7 +1508,13 @@ public class MainViewModel : INotifyPropertyChanged
 
         BulkTogglePinCommand = new RelayCommand(_ =>
         {
-            foreach (var t in SelectedTasks) t.IsPinned = !t.IsPinned;
+            var targets = SelectedTasks.ToList();
+            if (targets.Count == 0) return;
+            foreach (var t in targets) t.IsPinned = !t.IsPinned;
+            PushUndo($"Toggle pin on {targets.Count} task(s)", () =>
+            {
+                foreach (var t in targets) t.IsPinned = !t.IsPinned;
+            });
         }, _ => SelectedTasks.Count > 0);
 
         BulkSetDueDateCommand = new RelayCommand(_ => BulkSetDueDateRequested?.Invoke(), _ => SelectedTasks.Count > 0);
@@ -1522,7 +1528,25 @@ public class MainViewModel : INotifyPropertyChanged
     // no manual touch needed, same as every other single-task due-date edit.
     public void ApplyBulkDueDate(DateTime? date)
     {
-        foreach (var t in SelectedTasks) t.DueDate = date;
+        var targets = SelectedTasks.ToList();
+        if (targets.Count == 0) return;
+
+        var message = date is null
+            ? $"Clear the due date on {targets.Count} task(s)?"
+            : $"Set the due date to {date:M/d/yyyy} on {targets.Count} task(s)?";
+        var result = ThemedMessageBox.Show(message, "Set Due Date", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+
+        // Snapshot each task's own prior due date (not just "clear back to null") since they didn't
+        // necessarily share one before the bulk edit - Task_PropertyChanged doesn't special-case
+        // DueDate the way it does IsDone, so this needs its own explicit PushUndo.
+        var previous = targets.Select(t => (Task: t, DueDate: t.DueDate)).ToList();
+        foreach (var t in targets) t.DueDate = date;
+
+        PushUndo($"Set due date on {targets.Count} task(s)", () =>
+        {
+            foreach (var (task, due) in previous) task.DueDate = due;
+        });
     }
 
     // Called from MainWindow.xaml.cs after BulkAddTagPromptWindow returns a tag (BulkAddTagRequested
@@ -1534,13 +1558,38 @@ public class MainViewModel : INotifyPropertyChanged
     {
         var tag = TagUtils.Sanitize(rawTag);
         if (tag.Length == 0) return;
-        foreach (var t in SelectedTasks)
+        var targets = SelectedTasks.ToList();
+        if (targets.Count == 0) return;
+
+        var result = ThemedMessageBox.Show($"Add the \"{tag}\" tag to {targets.Count} task(s)?",
+            "Add Tag", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+
+        // Only the tasks that didn't already carry this tag actually change - undo must revert
+        // exactly that subset, not every selected task, or it would strip a tag a task already had
+        // on its own before this bulk edit ever ran.
+        var added = new List<TaskItem>();
+        foreach (var t in targets)
         {
             if (t.Tags.Any(x => x.Equals(tag, StringComparison.OrdinalIgnoreCase))) continue;
             t.Tags.Add(tag);
             t.ModifiedAt = DateTime.UtcNow;
+            added.Add(t);
         }
         OnTaskChanged();
+
+        if (added.Count == 0) return;
+        PushUndo($"Add tag \"{tag}\" to {added.Count} task(s)", () =>
+        {
+            foreach (var t in added)
+            {
+                for (var i = t.Tags.Count - 1; i >= 0; i--)
+                    if (t.Tags[i].Equals(tag, StringComparison.OrdinalIgnoreCase))
+                        t.Tags.RemoveAt(i);
+                t.ModifiedAt = DateTime.UtcNow;
+            }
+            OnTaskChanged();
+        });
     }
 
     // Permanent delete has no undo path (unlike Move to Trash), so a tombstone recorded here

@@ -17,8 +17,10 @@ let the app take care of not losing your work.
   Priority) combine like a traditional filter panel — check as many as you like and they
   AND-combine, each one shows as a removable chip above the list, and the filter button carries a
   dot while any are active
-- Multi-select (Ctrl/Shift-click) with bulk actions: mark completed, pin/unpin, move to trash,
-  restore, delete permanently
+- Multi-select (Ctrl/Shift-click) with bulk actions: mark completed, pin/unpin, set/clear due
+  date, add a tag, move to trash, restore, delete permanently — due date, tag, and permanent
+  delete confirm the change first since they can touch many tasks at once, and every bulk action
+  except permanent delete is undoable with Ctrl+Z
 
 ### Rich task notes
 Each task's body is one continuous, borderless document — type freely, and insert whatever else
@@ -63,8 +65,9 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
   indicator ("Saving…" / "Saved") and a clear failure message if a write doesn't go through
 - Rolling backups taken before every save, with a **Restore from Backup** dialog to roll back to
   any recent snapshot
-- Ctrl+Z undo for deletes, trashing, restoring, tag removal, and marking a task
-  complete/incomplete
+- Ctrl+Z undo for trashing, restoring, tag removal/addition, due date changes, pinning, and
+  marking a task complete/incomplete — including bulk multi-select edits, not just single-task
+  ones
 - Completed and trashed tasks lock from editing — you can still restore/reopen them, but their
   content can't be changed by accident
 - **Help → Open Debug Log File...** / **Clear Debug Log File...** / **Verbose Logging** for
@@ -218,8 +221,9 @@ photo/file attachments, inline rich note editing — plus:
   mobile, right-click on a desktop taskbar/Start-menu icon) that jumps straight to it, even before
   the app is already open
 - **Undo** — `Ctrl+Z`, or the Undo snackbar that appears after the action, reverts marking a task
-  complete/incomplete or moving a task to Trash — same scope as desktop, including cleaning up a
-  recurring task's auto-spawned next occurrence
+  complete/incomplete, moving a task to/from Trash, pinning, tagging, or setting a due date —
+  including bulk multi-select edits, not just single-task ones — and cleans up a recurring task's
+  auto-spawned next occurrence
 - **Keyboard shortcuts help** — `F1` or `Ctrl+/`, or Menu → Keyboard Shortcuts
 - **Welcome dashboard** in the editor pane when no task is selected — Due Today/Overdue/Completed
   counts plus a shortcuts cheat sheet

@@ -550,8 +550,7 @@ public static class RichTextBoxBehavior
                 {
                     if (inline is Hyperlink link)
                     {
-                        link.RequestNavigate -= Link_RequestNavigate;
-                        link.RequestNavigate += Link_RequestNavigate;
+                        HookHyperlink(link);
                     }
                     else if (inline is Span s)
                     {
@@ -560,14 +559,35 @@ public static class RichTextBoxBehavior
                         {
                             if (spanInline is Hyperlink subLink)
                             {
-                                subLink.RequestNavigate -= Link_RequestNavigate;
-                                subLink.RequestNavigate += Link_RequestNavigate;
+                                HookHyperlink(subLink);
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    private static void HookHyperlink(Hyperlink link)
+    {
+        // None of the Insert*Hyperlink call sites set Cursor or Foreground on the Hyperlink they
+        // create, so it was falling back to the note editor's plain-text color and the default
+        // I-beam cursor - nothing distinguished it as a link at all besides the tooltip. Applying
+        // both here, in the one place every hyperlink already passes through (insert time via
+        // InsertInlineHyperlink/InsertHtmlClipboardContent/BuildImagePlaceholder, and load time
+        // via HookDocumentHyperlinks), fixes it everywhere at once - including links already
+        // sitting in existing notes, the next time they're opened. SetResourceReference (not a
+        // one-time Foreground assignment) mirrors XAML's DynamicResource, so a link re-colors
+        // correctly if the user switches Light/Dark theme while it's on screen, same as every
+        // other themed brush in the app.
+        link.Cursor = Cursors.Hand;
+        link.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
+
+        link.RequestNavigate -= Link_RequestNavigate;
+        link.RequestNavigate += Link_RequestNavigate;
+
+        link.PreviewMouseLeftButtonDown -= Link_PreviewMouseLeftButtonDown;
+        link.PreviewMouseLeftButtonDown += Link_PreviewMouseLeftButtonDown;
     }
 
     public static void HookDocumentCheckboxes(FlowDocument doc, RichTextBox rtb)
@@ -1346,22 +1366,44 @@ public static class RichTextBoxBehavior
 
     private static void Link_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
     {
+        OpenHyperlink(e.Uri);
+        e.Handled = true;
+    }
+
+    // WPF only raises Hyperlink.RequestNavigate for a Hyperlink hosted inside an EDITABLE
+    // RichTextBox when Ctrl is held during the click - a plain click positions the text caret
+    // instead, since editing takes priority by default. Every Insert*Hyperlink call site's
+    // tooltip promises "(Click to open)", not "(Ctrl+Click to open)", so that default silently
+    // breaks the UI's own promise: pasting/inserting a link produces something that looks
+    // clickable but does nothing on a normal click. PreviewMouseLeftButtonDown is a tunneling
+    // event WPF raises regardless of modifier keys, so hooking it directly on the Hyperlink makes
+    // a plain click open the link too, without changing normal caret placement/selection
+    // anywhere else in the document.
+    private static void Link_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Hyperlink { NavigateUri: { } uri })
+        {
+            OpenHyperlink(uri);
+            e.Handled = true;
+        }
+    }
+
+    private static void OpenHyperlink(Uri uri)
+    {
         try
         {
-            // e.Uri ultimately comes from the .tasky JSON (embedded in the block's RTF).
+            // uri ultimately comes from the .tasky JSON (embedded in the block's RTF).
             // Restricting to http(s) means a hyperlink whose target was ever hand-edited or
             // restored from an untrusted backup (e.g. a file:// URI pointing at a local
             // executable) can't get handed to ShellExecute and launched with no warning.
-            if (e.Uri.Scheme is not ("http" or "https"))
+            if (uri.Scheme is not ("http" or "https"))
             {
-                AppLogger.Warn("NoteEditor", $"Refused to open link with non-http(s) scheme: '{e.Uri}'");
-                ThemedMessageBox.Show($"This link's address isn't a web link and can't be opened from here:\n{e.Uri}", "Open Link", MessageBoxButton.OK, MessageBoxImage.Warning);
-                e.Handled = true;
+                AppLogger.Warn("NoteEditor", $"Refused to open link with non-http(s) scheme: '{uri}'");
+                ThemedMessageBox.Show($"This link's address isn't a web link and can't be opened from here:\n{uri}", "Open Link", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
-            e.Handled = true;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
@@ -1542,7 +1584,7 @@ public static class RichTextBoxBehavior
             NavigateUri = Uri.TryCreate(url, UriKind.Absolute, out var u) ? u : new Uri("https://" + url),
             ToolTip = $"{url} (Click to open)"
         };
-        hyperlink.RequestNavigate += Link_RequestNavigate;
+        HookHyperlink(hyperlink);
 
         var caret = rtb.CaretPosition ?? rtb.Document.ContentEnd;
         var paragraph = caret.Paragraph;
@@ -1623,7 +1665,7 @@ public static class RichTextBoxBehavior
                         NavigateUri = Uri.TryCreate(segment.Url, UriKind.Absolute, out var linkUri) ? linkUri : new Uri("https://" + segment.Url),
                         ToolTip = $"{segment.Url} (Click to open)"
                     };
-                    hyperlink.RequestNavigate += Link_RequestNavigate;
+                    HookHyperlink(hyperlink);
                     paragraph.Inlines.Add(hyperlink);
                     break;
 
@@ -1670,7 +1712,7 @@ public static class RichTextBoxBehavior
                 ToolTip = $"{segment.Url} (Click to open the original)",
                 FontStyle = FontStyles.Italic
             };
-            link.RequestNavigate += Link_RequestNavigate;
+            HookHyperlink(link);
             return link;
         }
 

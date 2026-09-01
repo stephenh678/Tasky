@@ -18,7 +18,7 @@
     <AssemblyTitle>Tasky</AssemblyTitle>
     <Product>Tasky</Product>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
-    <Version>1.1.3</Version>
+    <Version>1.1.4</Version>
     <!-- Baked in rather than left as CLI-only flags in README.md's publish command - a publish
          that forgets `-p:SelfContained=true -p:PublishSingleFile=true` silently produces a
          framework-dependent build with every dependency loose alongside Tasky.exe instead of

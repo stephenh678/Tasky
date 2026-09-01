@@ -265,6 +265,42 @@ public static class RichTextBoxBehavior
         return null;
     }
 
+    private static readonly Regex EmbeddedMediaPathRegex = new(
+        @"(?<attr>UriSource|Tag)=""(?<path>[^""]*[\\/](?<dir>InlineImages|Attachments)[\\/](?<file>[^""\\/]+))""",
+        RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// A NoteBlock's saved XAML bakes in whatever absolute local path the machine that inserted an
+    /// image/file was using at the time (BitmapImage.UriSource for an inline image,
+    /// CreateFileCard's Tag for a file chip - e.g. "C:\Users\stephart\Documents\Tasky\InlineImages\
+    /// {guid}.png" on the machine that added it). Drive sync downloads the actual bytes into THIS
+    /// machine's own Attachments/InlineImages folder (MediaPathResolver), but nothing ever
+    /// rewrites the XAML text itself to match - so a synced image parses fine on the machine that
+    /// created it and throws a XamlParseException everywhere else the note is opened (WPF's
+    /// BitmapImage eagerly opens UriSource the instant the XAML is parsed, since InsertInlineImage
+    /// sets BitmapCacheOption.OnLoad). LoadContent has no partial-failure recovery once
+    /// XamlReader.Parse throws, so that doesn't just fail to show one image - it drops the block's
+    /// entire content (every other image, all the text) back to an empty editor.
+    ///
+    /// Same problem ResolveLocalAttachmentPath above already solves for the older single-PhotoPath
+    /// field: resolve by filename in this device's own local folders instead of trusting whatever
+    /// absolute path got baked in on another machine. This rewrites every UriSource/Tag found
+    /// pointing under an InlineImages/Attachments folder - regardless of machine, username, or
+    /// whether the file even lived under OneDrive there - to this device's real local path for
+    /// that same filename, before the XAML is ever parsed.
+    /// </summary>
+    public static string RewriteMediaPathsForThisDevice(string xaml)
+    {
+        return EmbeddedMediaPathRegex.Replace(xaml, m =>
+        {
+            var localDir = string.Equals(m.Groups["dir"].Value, "InlineImages", StringComparison.OrdinalIgnoreCase)
+                ? GetInlineAttachmentDirectory()
+                : GetAttachmentsDirectory();
+            var localPath = Path.Combine(localDir, m.Groups["file"].Value);
+            return $"{m.Groups["attr"].Value}=\"{localPath}\"";
+        });
+    }
+
     public static string CopyFileToAttachments(string sourceFilePath)
     {
         if (!File.Exists(sourceFilePath)) return sourceFilePath;
@@ -386,7 +422,7 @@ public static class RichTextBoxBehavior
                 // round-trips BlockUIContainer images, checkboxes and tables in place.
                 try
                 {
-                    if (XamlReader.Parse(raw) is FlowDocument loaded)
+                    if (XamlReader.Parse(RewriteMediaPathsForThisDevice(raw)) is FlowDocument loaded)
                     {
                         rtb.Document = loaded;
                         HookDocumentHyperlinks(rtb.Document);

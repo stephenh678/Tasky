@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -1522,6 +1524,223 @@ public static class RichTextBoxBehavior
         paragraph.Inlines.Add(span);
         rtb.CaretPosition = paragraph.ContentEnd;
         rtb.Focus();
+    }
+
+    // Public rather than private, same reasoning as GoogleDriveService's
+    // GetReferencedAttachmentFilenames/ParseBlockReferences: this is the pure, non-UI part of
+    // HTML-clipboard paste (regex/entity parsing) - exposed so TodoApp.Tests can cover the
+    // actual bug-prone logic directly, without needing a live RichTextBox on a UI thread.
+    public enum HtmlSegmentKind { Text, Link, Image }
+
+    public sealed record HtmlSegment(HtmlSegmentKind Kind, string Text, string? Url);
+
+    private static readonly Regex HtmlAnchorOrImageRegex = new(
+        @"<a\b(?<attrs>[^>]*)>(?<inner>.*?)</a\s*>|<img\b(?<imgattrs>[^>]*?)/?>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+    private static readonly Regex HtmlAttributeRegex = new(
+        @"(?<name>[\w-]+)\s*=\s*(?:""(?<val1>[^""]*)""|'(?<val2>[^']*)'|(?<val3>[^\s>]+))",
+        RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Reconstructs a paste from the clipboard's HTML representation (DataFormats.Html) - the one
+    /// format WPF's stock RichTextBox.Paste() completely ignores (it only understands
+    /// Xaml/Rtf/plain text). That's exactly what apps like Slack/Teams put on the clipboard for a
+    /// "copy message": Html plus a much poorer plain-text fallback, no Rtf, and (for an inline
+    /// photo) no real image bytes - chat apps reference images by a CDN URL rather than embedding
+    /// them, so there is nothing to actually paste as a bitmap. Without this, that plain-text
+    /// fallback is all Tasky ever saw: a real hyperlink collapsed to its bare display text, and an
+    /// image vanished with no indication anything was dropped - sometimes leaving stray fragments
+    /// (a filename, a timestamp) jammed straight into the surrounding sentence with no spacing.
+    ///
+    /// This isn't a full HTML renderer - just enough structure (links, images, paragraph/line/
+    /// table-row breaks) to keep a pasted chat message readable: a &lt;a href&gt; becomes a real,
+    /// clickable inline hyperlink (the same shape InsertInlineHyperlink produces), and an
+    /// unreachable &lt;img&gt; becomes a clearly-labeled placeholder run - linked back to its
+    /// source URL when there is one - instead of raw jammed text.
+    /// </summary>
+    public static void InsertHtmlClipboardContent(RichTextBox rtb, string cfHtml)
+    {
+        var fragment = ExtractHtmlFragment(cfHtml);
+        var segments = ParseHtmlSegments(fragment);
+        if (segments.Count == 0) return;
+
+        var caret = rtb.CaretPosition ?? rtb.Document.ContentEnd;
+        var paragraph = caret.Paragraph;
+        if (paragraph is null)
+        {
+            paragraph = new Paragraph();
+            rtb.Document.Blocks.Add(paragraph);
+        }
+
+        foreach (var segment in segments)
+        {
+            switch (segment.Kind)
+            {
+                case HtmlSegmentKind.Text:
+                    paragraph = AppendTextWithLineBreaks(rtb, paragraph, segment.Text);
+                    break;
+
+                case HtmlSegmentKind.Link:
+                    var hyperlink = new Hyperlink(new Run(segment.Text))
+                    {
+                        NavigateUri = Uri.TryCreate(segment.Url, UriKind.Absolute, out var linkUri) ? linkUri : new Uri("https://" + segment.Url),
+                        ToolTip = $"{segment.Url} (Click to open)"
+                    };
+                    hyperlink.RequestNavigate += Link_RequestNavigate;
+                    paragraph.Inlines.Add(hyperlink);
+                    break;
+
+                case HtmlSegmentKind.Image:
+                    paragraph.Inlines.Add(BuildImagePlaceholder(segment));
+                    break;
+            }
+        }
+
+        rtb.CaretPosition = paragraph.ContentEnd;
+        rtb.Focus();
+        SaveContentToBlock(rtb);
+    }
+
+    private static Paragraph AppendTextWithLineBreaks(RichTextBox rtb, Paragraph paragraph, string text)
+    {
+        var lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Length > 0)
+                paragraph.Inlines.Add(new Run(lines[i]));
+
+            if (i < lines.Length - 1)
+            {
+                var nextPara = new Paragraph();
+                rtb.Document.Blocks.InsertAfter(paragraph, nextPara);
+                paragraph = nextPara;
+            }
+        }
+        return paragraph;
+    }
+
+    private static Inline BuildImagePlaceholder(HtmlSegment segment)
+    {
+        var label = string.IsNullOrWhiteSpace(segment.Text) ? "image" : segment.Text;
+        var caption = $"[image: {label} — not pasted; copy the photo itself to include it]";
+
+        if (Uri.TryCreate(segment.Url, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            var link = new Hyperlink(new Run(caption))
+            {
+                NavigateUri = uri,
+                ToolTip = $"{segment.Url} (Click to open the original)",
+                FontStyle = FontStyles.Italic
+            };
+            link.RequestNavigate += Link_RequestNavigate;
+            return link;
+        }
+
+        return new Run(caption) { FontStyle = FontStyles.Italic, Foreground = Brushes.Gray };
+    }
+
+    // CF_HTML wraps the actual markup in a small header (Version/StartHTML/EndHTML/
+    // StartFragment/EndFragment) whose numeric offsets are byte offsets into the source app's own
+    // encoding of the payload - not safe to use as .NET string indices without redoing that
+    // encoding math. The <!--StartFragment--> / <!--EndFragment--> comment markers the spec also
+    // requires are plain text landmarks in the same string Clipboard.GetData already handed back,
+    // so anchoring on those instead sidesteps the encoding question entirely.
+    public static string ExtractHtmlFragment(string cfHtml)
+    {
+        const string startMarker = "<!--StartFragment-->";
+        const string endMarker = "<!--EndFragment-->";
+        var startIdx = cfHtml.IndexOf(startMarker, StringComparison.OrdinalIgnoreCase);
+        var endIdx = cfHtml.IndexOf(endMarker, StringComparison.OrdinalIgnoreCase);
+        if (startIdx >= 0 && endIdx > startIdx)
+            return cfHtml[(startIdx + startMarker.Length)..endIdx];
+
+        var bodyMatch = Regex.Match(cfHtml, @"<body[^>]*>(?<body>.*)</body>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (bodyMatch.Success) return bodyMatch.Groups["body"].Value;
+
+        var htmlIdx = cfHtml.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
+        return htmlIdx >= 0 ? cfHtml[htmlIdx..] : cfHtml;
+    }
+
+    private static string? ExtractAttribute(string attrsText, string name)
+    {
+        foreach (Match m in HtmlAttributeRegex.Matches(attrsText))
+        {
+            if (!string.Equals(m.Groups["name"].Value, name, StringComparison.OrdinalIgnoreCase)) continue;
+            var val = m.Groups["val1"].Success ? m.Groups["val1"].Value
+                : m.Groups["val2"].Success ? m.Groups["val2"].Value
+                : m.Groups["val3"].Value;
+            return WebUtility.HtmlDecode(val);
+        }
+        return null;
+    }
+
+    private static string FileNameFromUrl(string url)
+    {
+        var noQuery = url.Split('?', '#')[0];
+        var idx = noQuery.LastIndexOf('/');
+        return idx >= 0 && idx < noQuery.Length - 1 ? noQuery[(idx + 1)..] : noQuery;
+    }
+
+    public static List<HtmlSegment> ParseHtmlSegments(string fragment)
+    {
+        fragment = Regex.Replace(fragment, @"<script\b.*?</script\s*>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        fragment = Regex.Replace(fragment, @"<style\b.*?</style\s*>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        var segments = new List<HtmlSegment>();
+        var lastIndex = 0;
+
+        void AddTextGap(string gap)
+        {
+            var text = HtmlFragmentToPlainText(gap);
+            if (text.Length > 0) segments.Add(new HtmlSegment(HtmlSegmentKind.Text, text, null));
+        }
+
+        foreach (Match match in HtmlAnchorOrImageRegex.Matches(fragment))
+        {
+            AddTextGap(fragment[lastIndex..match.Index]);
+
+            if (match.Groups["imgattrs"].Success)
+            {
+                var src = ExtractAttribute(match.Groups["imgattrs"].Value, "src");
+                var alt = ExtractAttribute(match.Groups["imgattrs"].Value, "alt");
+                var label = !string.IsNullOrWhiteSpace(alt) ? alt
+                    : !string.IsNullOrEmpty(src) ? FileNameFromUrl(src)
+                    : "image";
+                segments.Add(new HtmlSegment(HtmlSegmentKind.Image, label, src));
+            }
+            else
+            {
+                var href = ExtractAttribute(match.Groups["attrs"].Value, "href");
+                var displayText = HtmlFragmentToPlainText(match.Groups["inner"].Value).Trim();
+                if (!string.IsNullOrEmpty(href))
+                    segments.Add(new HtmlSegment(HtmlSegmentKind.Link, string.IsNullOrEmpty(displayText) ? href : displayText, href));
+                else if (displayText.Length > 0)
+                    segments.Add(new HtmlSegment(HtmlSegmentKind.Text, displayText, null));
+            }
+
+            lastIndex = match.Index + match.Length;
+        }
+
+        AddTextGap(fragment[lastIndex..]);
+        return segments;
+    }
+
+    public static string HtmlFragmentToPlainText(string html)
+    {
+        var text = Regex.Replace(html, @"</p\s*>|<br\s*/?>|</div\s*>|</li\s*>|</tr\s*>", "\n", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"</td\s*>|</th\s*>", " | ", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, "<[^>]+>", "");
+        text = WebUtility.HtmlDecode(text);
+        text = text.Replace(' ', ' ').Replace("\r\n", "\n").Replace('\r', '\n');
+        // A row's last cell leaves a dangling " | " with nothing after it once </tr> becomes the
+        // following newline - strip that before the general trailing-whitespace cleanup below, or
+        // the lone "|" survives as a meaningless trailing character on the line.
+        text = Regex.Replace(text, @"[ \t]*\|[ \t]*\n", "\n");
+        text = Regex.Replace(text, @"[ \t]+\n", "\n");
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+        return text.Trim('\n', ' ');
     }
 
     public static void InsertInlineChecklist(RichTextBox rtb, string itemText = "")

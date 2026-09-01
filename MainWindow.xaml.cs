@@ -638,7 +638,26 @@ public partial class MainWindow : Window
             }
         }
 
-        // 3. Bare URL copied to clipboard becomes an inline hyperlink
+        // 3. Rich content copied from a chat/browser app (Slack, Teams, browser selections) - these
+        // put HTML on the clipboard (real links, images referenced by a CDN URL rather than actual
+        // bytes) but usually no Rtf, so WPF's native RichTextBox.Paste() (Xaml/Rtf/Text only,
+        // no Html support) would otherwise fall straight to the poorer plain-text fallback -
+        // flattening a real hyperlink into bare text and leaving an unpasteable image's
+        // filename/timestamp jammed into the surrounding text with no spacing. Skipped when Rtf is
+        // also present (e.g. Word/Outlook) since native paste already handles that well, images
+        // included.
+        if (Clipboard.ContainsData(DataFormats.Html) && !Clipboard.ContainsData(DataFormats.Rtf))
+        {
+            var html = Clipboard.GetData(DataFormats.Html) as string;
+            if (!string.IsNullOrWhiteSpace(html) && Keyboard.FocusedElement is not TextBox)
+            {
+                RichTextBoxBehavior.InsertHtmlClipboardContent(NoteEditor, html);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // 4. Bare URL copied to clipboard becomes an inline hyperlink
         if (Clipboard.ContainsText() && TryGetBareUrl(Clipboard.GetText(), out var url))
         {
             if (Keyboard.FocusedElement is not TextBox)
@@ -649,7 +668,7 @@ public partial class MainWindow : Window
             }
         }
 
-        // 4. Regular Text: if focus is NOT inside an active editable control, focus the editor and paste
+        // 5. Regular Text: if focus is NOT inside an active editable control, focus the editor and paste
         if (Clipboard.ContainsText())
         {
             if (Keyboard.FocusedElement is not TextBox && Keyboard.FocusedElement is not RichTextBox)

@@ -494,6 +494,58 @@ public class GoogleDriveService
         return containerId;
     }
 
+    /// <summary>
+    /// Same by-name lookup as GetOrCreateFolderAsync, but never creates one - for probes where
+    /// "doesn't exist" is a legitimate answer, not something to fix by creating an empty folder.
+    /// </summary>
+    private async Task<string?> FindFolderIdAsync(string folderName, string? parentFolderId)
+    {
+        if (_driveService is null) return null;
+
+        var q = $"name = '{EscapeDriveQueryValue(folderName)}' and mimeType = '{FolderMimeType}' and trashed = false";
+        if (!string.IsNullOrEmpty(parentFolderId))
+            q += $" and '{EscapeDriveQueryValue(parentFolderId)}' in parents";
+
+        return await FindFileIdWithIndexLagRetryAsync(q, $"Folder '{folderName}'");
+    }
+
+    /// <summary>
+    /// Returns every Drive folder that might hold this file's attachments for a download pass:
+    /// the single container ResolveMediaContainerFolderIdAsync would pick (and does pick, for
+    /// uploads), plus whichever of the other layout's folder happens to exist too.
+    ///
+    /// GoogleDriveLegacyAttachmentsFileKey (what ResolveMediaContainerFolderIdAsync's decision
+    /// is keyed on) lives in this device's own local settings.json and is only ever adopted the
+    /// first time THIS device links to a remote file with no per-file cache yet (see
+    /// SyncCoordinator.MarkLegacyAttachmentsOwnerIfUnset) - Drive sync never carries it between
+    /// devices. Two installs of the same account can therefore each validly resolve a different
+    /// answer for the same file: one uploads new photos flat under the Tasky root, the other into
+    /// "&lt;name&gt; Attachments". A download that only ever checks its own device's answer can
+    /// never see what the other device wrote. Tasky Web's drive.js hit the same problem from the
+    /// other direction (no local settings to consult at all) and already solves it by checking
+    /// both layouts unconditionally (ensureCandidateFolderIds) - this mirrors that, except the
+    /// non-primary candidate is looked up rather than created, so a probe against a layout this
+    /// file never actually used doesn't leave behind an empty folder.
+    /// </summary>
+    private async Task<List<string>> GetCandidateMediaContainerFolderIdsAsync(string localDataFilePath, string taskyFolderId, Settings? settings, SettingsStore? settingsStore)
+    {
+        var primary = await ResolveMediaContainerFolderIdAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
+        var ids = new List<string> { primary };
+
+        if (primary != taskyFolderId)
+        {
+            ids.Add(taskyFolderId);
+        }
+        else
+        {
+            var fileKey = Path.GetFileName(localDataFilePath).ToLowerInvariant();
+            var otherId = await FindFolderIdAsync($"{Path.GetFileNameWithoutExtension(fileKey)} Attachments", taskyFolderId);
+            if (!string.IsNullOrEmpty(otherId)) ids.Add(otherId);
+        }
+
+        return ids;
+    }
+
     private async Task SyncMediaDirectoryAsync(string dirName, string localDataFilePath, string containerFolderId, Settings? settings = null, SettingsStore? settingsStore = null)
     {
         if (_driveService is null) return;
@@ -727,9 +779,12 @@ public class GoogleDriveService
         try
         {
             var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
-            var containerFolderId = await ResolveMediaContainerFolderIdAsync(destinationLocalPath, taskyFolderId, settings, settingsStore);
-            await DownloadMediaDirectoryAsync("Attachments", destinationLocalPath, containerFolderId);
-            await DownloadMediaDirectoryAsync("InlineImages", destinationLocalPath, containerFolderId);
+            var containerFolderIds = await GetCandidateMediaContainerFolderIdsAsync(destinationLocalPath, taskyFolderId, settings, settingsStore);
+            foreach (var containerFolderId in containerFolderIds)
+            {
+                await DownloadMediaDirectoryAsync("Attachments", destinationLocalPath, containerFolderId);
+                await DownloadMediaDirectoryAsync("InlineImages", destinationLocalPath, containerFolderId);
+            }
         }
         catch (Exception ex)
         {
@@ -753,9 +808,12 @@ public class GoogleDriveService
         try
         {
             var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
-            var containerFolderId = await ResolveMediaContainerFolderIdAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
-            await DownloadMediaDirectoryAsync("Attachments", localDataFilePath, containerFolderId);
-            await DownloadMediaDirectoryAsync("InlineImages", localDataFilePath, containerFolderId);
+            var containerFolderIds = await GetCandidateMediaContainerFolderIdsAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
+            foreach (var containerFolderId in containerFolderIds)
+            {
+                await DownloadMediaDirectoryAsync("Attachments", localDataFilePath, containerFolderId);
+                await DownloadMediaDirectoryAsync("InlineImages", localDataFilePath, containerFolderId);
+            }
         }
         catch (Exception ex)
         {
@@ -763,12 +821,17 @@ public class GoogleDriveService
         }
     }
 
-    private async Task DownloadMediaDirectoryAsync(string dirName, string dataFilePath, string taskyFolderId)
+    private async Task DownloadMediaDirectoryAsync(string dirName, string dataFilePath, string containerFolderId)
     {
         if (_driveService is null) return;
         try
         {
-            var remoteFolderId = await GetOrCreateFolderAsync(dirName, taskyFolderId);
+            // Find-only, not GetOrCreate: this is a download pass probing a container that might
+            // be the "other" candidate layout (see GetCandidateMediaContainerFolderIdsAsync) which
+            // this file may never have actually used - creating an empty Attachments/InlineImages
+            // folder under it on every sync would just be Drive clutter with nothing to download.
+            var remoteFolderId = await FindFolderIdAsync(dirName, containerFolderId);
+            if (string.IsNullOrEmpty(remoteFolderId)) return;
             var localDir = MediaPathResolver.DirectoryFor(dataFilePath, dirName);
             Directory.CreateDirectory(localDir);
 

@@ -638,7 +638,23 @@ public partial class MainWindow : Window
             }
         }
 
-        // 3. Rich content copied from a chat/browser app (Slack, Teams, browser selections) - these
+        // 3. Bare URL copied to clipboard becomes an inline hyperlink. Checked ahead of the HTML
+        // branch below (even though a bare-URL copy is plain text) because a lot of apps - browsers
+        // especially - attach an Html clipboard format even for a trivial "just a URL" selection,
+        // with no real <a href> wrapping it (it's raw text, not a link element) - left to the HTML
+        // branch, that would paste as inert plain text instead of becoming clickable, which is
+        // exactly the paste this case exists to handle.
+        if (Clipboard.ContainsText() && TryGetBareUrl(Clipboard.GetText(), out var url))
+        {
+            if (Keyboard.FocusedElement is not TextBox)
+            {
+                RichTextBoxBehavior.InsertInlineHyperlink(NoteEditor, url);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // 4. Rich content copied from a chat/browser app (Slack, Teams, browser selections) - these
         // put HTML on the clipboard (real links, images referenced by a CDN URL rather than actual
         // bytes) but usually no Rtf, so WPF's native RichTextBox.Paste() (Xaml/Rtf/Text only,
         // no Html support) would otherwise fall straight to the poorer plain-text fallback -
@@ -652,17 +668,6 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(html) && Keyboard.FocusedElement is not TextBox)
             {
                 RichTextBoxBehavior.InsertHtmlClipboardContent(NoteEditor, html);
-                e.Handled = true;
-                return;
-            }
-        }
-
-        // 4. Bare URL copied to clipboard becomes an inline hyperlink
-        if (Clipboard.ContainsText() && TryGetBareUrl(Clipboard.GetText(), out var url))
-        {
-            if (Keyboard.FocusedElement is not TextBox)
-            {
-                RichTextBoxBehavior.InsertInlineHyperlink(NoteEditor, url);
                 e.Handled = true;
                 return;
             }

@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=19';
-import * as drive from './drive.js?v=19';
+import * as auth from './auth.js?v=20';
+import * as drive from './drive.js?v=20';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -13,11 +13,11 @@ import {
   blockHasInlineImage,
   blockHasInlineFile,
   parseQuickAdd,
-} from './model.js?v=19';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=19';
-import { renderEditableBody } from './editor.js?v=19';
-import { icon } from './icons.js?v=19';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=19';
+} from './model.js?v=20';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=20';
+import { renderEditableBody } from './editor.js?v=20';
+import { icon } from './icons.js?v=20';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=20';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -73,6 +73,7 @@ const emptyShortcutsBtn = el('empty-shortcuts-btn');
 const editorContent = el('editor-content');
 const editorTitle = el('editor-title');
 const editorDue = el('editor-due');
+const editorPriority = el('editor-priority');
 const editorRecurrence = el('editor-recurrence');
 const editorRecurrenceIntervalField = el('editor-recurrence-interval-field');
 const editorRecurrenceInterval = el('editor-recurrence-interval');
@@ -239,6 +240,7 @@ selectToggleBtn.innerHTML = icon('checkSquare');
 el('editor-pin-icon').innerHTML = icon('pin');
 editorMoreBtn.innerHTML = icon('moreVertical');
 el('editor-due-icon').innerHTML = icon('calendar');
+el('editor-priority-icon').innerHTML = icon('flag');
 el('editor-repeat-icon').innerHTML = icon('repeat');
 // Native date/select controls each draw their own tiny, OS-styled open affordance (a calendar
 // glyph, a dropdown arrow) at the far right of these pills - low-contrast in dark mode and
@@ -2123,8 +2125,12 @@ function updateTaskRow(refs, task, sectionKind) {
   if (task.Body.some((b) => b.Type === NoteBlockType.File || blockHasInlineFile(b))) indicators.push(icon('paperclip'));
   if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
   const tagChips = (task.Tags || []).map((t) => `<span class="task-tag-chip">#${escapeHtml(t)}</span>`).join('');
+  // Mirrors desktop's row-level priority Ellipse (MainWindow.xaml + PriorityColorConverter) -
+  // hidden entirely at None, same as there.
+  const priorityInfo = { [TaskPriority.Low]: ['priority-low', 'Low'], [TaskPriority.Medium]: ['priority-medium', 'Medium'], [TaskPriority.High]: ['priority-high', 'High'] }[task.Priority];
+  const priorityDot = priorityInfo ? `<span class="task-priority-dot ${priorityInfo[0]}" title="${priorityInfo[1]} priority"></span>` : '';
   info.innerHTML = `
-    <div class="task-title ${task.IsDone ? 'done' : ''}">${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>
+    <div class="task-title ${task.IsDone ? 'done' : ''}">${priorityDot}${task.IsPinned ? icon('pin', 'pin-inline') : ''}${escapeHtml(task.Text || '(untitled)')}</div>
     <div class="task-sub">${due ? `<span class="${overdue ? 'task-due-overdue' : ''}">${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}${tagChips ? `<span class="task-tags">${tagChips}</span>` : ''}</div>
   `;
 
@@ -2338,6 +2344,7 @@ function renderEditor(task) {
   autoResizeEditorTitle();
   editorDue.value = task.DueDate ? toDateInputValue(parseDotNetDate(task.DueDate)) : '';
   editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
+  editorPriority.value = String(task.Priority ?? TaskPriority.None);
   editorRecurrence.value = String(task.Recurrence);
   editorRecurrenceInterval.value = String(task.RecurrenceInterval ?? 1);
   editorRecurrenceIntervalField.classList.toggle('hidden', task.Recurrence === RecurrenceRule.None);
@@ -2368,7 +2375,7 @@ function renderEditor(task) {
 // A tap landing anywhere on the due/repeat pill opens its picker, rather than only the exact
 // native icon pixel - see the chevron comment above for why. showPicker() is a no-op/safe to call
 // even when the browser's own default click handling already opened the same picker.
-for (const control of [editorDue, editorRecurrence, editorRecurrenceInterval]) {
+for (const control of [editorDue, editorPriority, editorRecurrence, editorRecurrenceInterval]) {
   control.closest('.editor-field').addEventListener('click', (e) => {
     // A click that lands on the control itself already opens the picker via the browser's own
     // default label/control activation - that activation then re-dispatches a second click, on
@@ -2427,6 +2434,15 @@ editorDue.addEventListener('change', () => {
   markDirty();
   renderList();
   editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
+});
+
+editorPriority.addEventListener('change', () => {
+  const task = findTask(selectedTaskId);
+  if (!task) return;
+  task.Priority = Number(editorPriority.value);
+  touch(task);
+  markDirty();
+  renderList();
 });
 
 editorRecurrence.addEventListener('change', () => {

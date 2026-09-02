@@ -28,6 +28,11 @@
      lightness as dark mode's --success so the two read as a matched pair again. */
   --danger-text: #c0392b;
   --success: #2f9e5c;
+  /* Priority indicator (ROADMAP #30/parity pass) - reuses desktop's WarningBrush hex exactly
+     (Themes/LightTheme.xaml, Themes/DarkTheme.xaml) since there's no pre-existing web token for
+     "orange" to diverge from the way --danger/--accent already mildly do. High priority reuses
+     --danger, Low reuses --accent - only Medium needed a new token. */
+  --warning: #b45309;
   --shadow: 0 4px 16px rgba(20, 24, 33, 0.08);
   --shadow-lg: 0 12px 32px rgba(20, 24, 33, 0.16);
   --radius: 12px;
@@ -63,6 +68,7 @@
     --danger: #e06666;
     --danger-text: #f28b82;
     --success: #6ac789;
+    --warning: #faa754;
     --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
   }
@@ -83,6 +89,7 @@
   --danger: #e06666;
   --danger-text: #f28b82;
   --success: #6ac789;
+  --warning: #faa754;
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
@@ -849,6 +856,13 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-list li.pinned:not(.selected) { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .task-title { font-weight: 500; }
 .task-title .icon.pin-inline { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; color: var(--accent); display: inline-block; }
+/* Priority dot - mirrors desktop's row-level Ellipse (MainWindow.xaml/PriorityColorConverter):
+   same three colors, same "hidden entirely at None" rule, just an inline dot before the title
+   here instead of its own grid column. */
+.task-priority-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.task-priority-dot.priority-low { background: var(--accent); }
+.task-priority-dot.priority-medium { background: var(--warning); }
+.task-priority-dot.priority-high { background: var(--danger); }
 .tag-chip button .icon { width: 10px; height: 10px; }
 .sidebar-list li .icon { width: 17px; height: 17px; }
 .task-title.done { text-decoration: line-through; color: var(--text-dim); }

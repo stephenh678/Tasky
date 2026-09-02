@@ -160,6 +160,42 @@ public class GoogleDriveServiceTests : IDisposable
         Assert.Empty(found);
     }
 
+    // ROADMAP #64: GetReferencedAttachmentFilenamesCached wraps the (expensive) static
+    // GetReferencedAttachmentFilenames scan with an mtime-keyed cache, since SyncMediaDirectoryAsync
+    // used to call the uncached version twice per sync and again on every later sync pass with no
+    // change in between.
+    [Fact]
+    public void GetReferencedAttachmentFilenamesCached_UnchangedFile_ReturnsSameCachedInstance()
+    {
+        var path = WriteDataFile("""{"Tasks":[{"Id":"1","Body":[{"Type":"Photo","PhotoPath":"C:\\p\\a.png"}]}]}""");
+        var service = new GoogleDriveService();
+
+        var first = service.GetReferencedAttachmentFilenamesCached(path);
+        var second = service.GetReferencedAttachmentFilenamesCached(path);
+
+        Assert.Same(first, second);
+        Assert.Contains("a.png", second);
+    }
+
+    [Fact]
+    public void GetReferencedAttachmentFilenamesCached_FileModifiedSinceLastScan_RescansAndPicksUpChange()
+    {
+        var path = WriteDataFile("""{"Tasks":[{"Id":"1","Body":[{"Type":"Photo","PhotoPath":"C:\\p\\a.png"}]}]}""");
+        var service = new GoogleDriveService();
+        var first = service.GetReferencedAttachmentFilenamesCached(path);
+        Assert.Contains("a.png", first);
+
+        // Force a distinct, later LastWriteTimeUtc - some filesystems' write-time resolution is too
+        // coarse for a same-tick rewrite to reliably bump the timestamp on its own.
+        File.WriteAllText(path, """{"Tasks":[{"Id":"1","Body":[{"Type":"Photo","PhotoPath":"C:\\p\\b.png"}]}]}""");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(5));
+
+        var second = service.GetReferencedAttachmentFilenamesCached(path);
+
+        Assert.DoesNotContain("a.png", second);
+        Assert.Contains("b.png", second);
+    }
+
     [Fact]
     public void ParseBlockReferences_PhotoPath_AddsFileNameOnlyNotFullPath()
     {

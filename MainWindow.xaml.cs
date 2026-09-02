@@ -342,22 +342,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Body_DragEnter(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop))
-        {
-            e.Effects = DragDropEffects.Copy;
-            e.Handled = true;
-            DropOverlay.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            e.Effects = DragDropEffects.None;
-            DropOverlay.Visibility = Visibility.Collapsed;
-        }
-    }
-
-    private void Body_DragOver(object sender, DragEventArgs e)
+    // ROADMAP #123: DragEnter and DragOver need to react identically here (show the drop overlay
+    // for a file drag, hide it otherwise) - was two copy-pasted methods, now one shared by both
+    // XAML event wirings.
+    private void Body_DragEnterOrOver(object sender, DragEventArgs e)
     {
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
         {
@@ -701,17 +689,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NoteBody_DragEnter(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop))
-        {
-            e.Effects = DragDropEffects.Copy;
-            DropOverlay.Visibility = Visibility.Visible;
-            e.Handled = true;
-        }
-    }
-
-    private void NoteBody_DragOver(object sender, DragEventArgs e)
+    // ROADMAP #123: same DragEnter/DragOver duplication as Body_DragEnterOrOver above, one level
+    // deeper in the visual tree (NoteBody wraps just the RichTextBox stream, not the whole pane).
+    private void NoteBody_DragEnterOrOver(object sender, DragEventArgs e)
     {
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
         {
@@ -1187,40 +1167,54 @@ public partial class MainWindow : Window
         }), DispatcherPriority.Background);
     }
 
+    // ROADMAP #123: RichTextBox_PreviewMouseRightButtonDown, RichTextBox_ContextMenuOpening, and
+    // RichTextBox_QueryCursor below each used to run their own copy of this loop (walk every
+    // BlockUIContainer, skip invisible/non-matching children, TransformToAncestor + bounds-check
+    // against the pointer, swallow per-element transform failures) before doing their own,
+    // genuinely different thing with whatever element they found. Block layout is a vertical,
+    // non-overlapping flow, so at most one block's bounds can ever contain a given point - "find
+    // the matching block element" and "act on it" are safe to split apart. Deliberately NOT
+    // extended to RichTextBox_PreviewMouseLeftButtonDown's loop below: that one checks multiple
+    // different sub-elements (delete button vs. card body vs. image) per iteration with different
+    // actions for each, not "find one element, then branch," so it doesn't fit this shape without
+    // a riskier rewrite of logic this method can't verify against a live UI.
+    private static FrameworkElement? FindBlockElementAtPoint(RichTextBox rtb, Point point, Func<FrameworkElement, bool> predicate)
+    {
+        foreach (var bui in rtb.Document.Blocks.OfType<BlockUIContainer>())
+        {
+            if (bui.Child is FrameworkElement elem && elem.IsVisible && predicate(elem))
+            {
+                try
+                {
+                    var bounds = elem.TransformToAncestor(rtb).TransformBounds(new Rect(0, 0, elem.ActualWidth, elem.ActualHeight));
+                    if (bounds.Contains(point)) return elem;
+                }
+                catch { }
+            }
+        }
+        return null;
+    }
+
     private void RichTextBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not RichTextBox rtb) return;
 
         var point = e.GetPosition(rtb);
-        foreach (var bui in rtb.Document.Blocks.OfType<BlockUIContainer>())
+        var elem = FindBlockElementAtPoint(rtb, point, candidate => candidate.Tag is string && candidate is not Image);
+        if (elem is not null)
         {
-            if (bui.Child is FrameworkElement elem && elem.Tag is string && elem is not Image)
+            // The ContextMenu (Save As/Open/Delete, etc.) actually lives on an inner element - e.g.
+            // CreateImageContainer sets it on the Image, CreateFileCard on the inner "CardBody"
+            // Border - not on this outer wrapper Grid, so checking elem.ContextMenu directly always
+            // came up null and right-clicks fell through to the RichTextBox's default
+            // select-on-right-click instead.
+            var menuOwner = FindFirstVisualDescendantWithContextMenu(elem);
+            if (menuOwner?.ContextMenu is not null)
             {
-                if (elem.IsVisible)
-                {
-                    try
-                    {
-                        var transform = elem.TransformToAncestor(rtb);
-                        var bounds = transform.TransformBounds(new Rect(0, 0, elem.ActualWidth, elem.ActualHeight));
-                        if (bounds.Contains(point))
-                        {
-                            // The ContextMenu (Save As/Open/Delete, etc.) actually lives on an inner
-                            // element - e.g. CreateImageContainer sets it on the Image, CreateFileCard
-                            // on the inner "CardBody" Border - not on this outer wrapper Grid, so
-                            // checking elem.ContextMenu directly always came up null and right-clicks
-                            // fell through to the RichTextBox's default select-on-right-click instead.
-                            var menuOwner = FindFirstVisualDescendantWithContextMenu(elem);
-                            if (menuOwner?.ContextMenu is not null)
-                            {
-                                menuOwner.ContextMenu.PlacementTarget = menuOwner;
-                                menuOwner.ContextMenu.IsOpen = true;
-                                e.Handled = true;
-                                return;
-                            }
-                        }
-                    }
-                    catch { }
-                }
+                menuOwner.ContextMenu.PlacementTarget = menuOwner;
+                menuOwner.ContextMenu.IsOpen = true;
+                e.Handled = true;
+                return;
             }
         }
 
@@ -1254,25 +1248,11 @@ public partial class MainWindow : Window
         if (sender is not RichTextBox rtb) return;
 
         var point = Mouse.GetPosition(rtb);
-        foreach (var bui in rtb.Document.Blocks.OfType<BlockUIContainer>())
+        var elem = FindBlockElementAtPoint(rtb, point, candidate => candidate.Tag is string || candidate is Border { Child: Image } || candidate is Image);
+        if (elem is not null)
         {
-            if (bui.Child is FrameworkElement elem && (elem.Tag is string || elem is Border { Child: Image } || elem is Image))
-            {
-                if (elem.IsVisible)
-                {
-                    try
-                    {
-                        var transform = elem.TransformToAncestor(rtb);
-                        var bounds = transform.TransformBounds(new Rect(0, 0, elem.ActualWidth, elem.ActualHeight));
-                        if (bounds.Contains(point))
-                        {
-                            e.Handled = true;
-                            return;
-                        }
-                    }
-                    catch { }
-                }
-            }
+            e.Handled = true;
+            return;
         }
 
         SpellCheckContextMenu.MergeSuggestions(rtb);
@@ -1283,56 +1263,47 @@ public partial class MainWindow : Window
         if (sender is not RichTextBox rtb) return;
 
         var point = Mouse.GetPosition(rtb);
-        foreach (var bui in rtb.Document.Blocks.OfType<BlockUIContainer>())
+        var elem = FindBlockElementAtPoint(rtb, point, _ => true);
+        if (elem is null) return;
+
+        try
         {
-            if (bui.Child is FrameworkElement elem && elem.IsVisible)
+            // Check if over delete button
+            if (elem is Grid g)
             {
-                try
+                var delBtn = g.Children.OfType<FrameworkElement>().FirstOrDefault(c => (c.Tag as string) is "DeleteAttachmentBtn" or "DeleteImageBtn");
+                if (delBtn is not null && delBtn.IsVisible)
                 {
-                    var transform = elem.TransformToAncestor(rtb);
-                    var bounds = transform.TransformBounds(new Rect(0, 0, elem.ActualWidth, elem.ActualHeight));
-                    if (bounds.Contains(point))
+                    var dbBounds = delBtn.TransformToAncestor(rtb).TransformBounds(new Rect(0, 0, delBtn.ActualWidth, delBtn.ActualHeight));
+                    if (dbBounds.Contains(point))
                     {
-                        // Check if over delete button
-                        if (elem is Grid g)
-                        {
-                            var delBtn = g.Children.OfType<FrameworkElement>().FirstOrDefault(c => (c.Tag as string) is "DeleteAttachmentBtn" or "DeleteImageBtn");
-                            if (delBtn is not null && delBtn.IsVisible)
-                            {
-                                var dbBounds = delBtn.TransformToAncestor(rtb).TransformBounds(new Rect(0, 0, delBtn.ActualWidth, delBtn.ActualHeight));
-                                if (dbBounds.Contains(point))
-                                {
-                                    e.Cursor = Cursors.Hand;
-                                    e.Handled = true;
-                                    return;
-                                }
-                            }
-                        }
-
-                        // Over photo -> Hand cursor (indicating clickable / expandable)
-                        if (elem.Tag as string == "ImageContainer" || (elem is Grid imgG && imgG.Children.OfType<Border>().Any(b => b.Child is Image)))
-                        {
-                            e.Cursor = Cursors.Hand;
-                            e.Handled = true;
-                            return;
-                        }
-
-                        // Over file attachment card -> Hand cursor
-                        if (elem.Tag is string filePath && !string.IsNullOrWhiteSpace(filePath))
-                        {
-                            e.Cursor = Cursors.Hand;
-                            e.Handled = true;
-                            return;
-                        }
-
-                        e.Cursor = elem.Cursor ?? Cursors.Arrow;
+                        e.Cursor = Cursors.Hand;
                         e.Handled = true;
                         return;
                     }
                 }
-                catch { }
             }
+
+            // Over photo -> Hand cursor (indicating clickable / expandable)
+            if (elem.Tag as string == "ImageContainer" || (elem is Grid imgG && imgG.Children.OfType<Border>().Any(b => b.Child is Image)))
+            {
+                e.Cursor = Cursors.Hand;
+                e.Handled = true;
+                return;
+            }
+
+            // Over file attachment card -> Hand cursor
+            if (elem.Tag is string filePath && !string.IsNullOrWhiteSpace(filePath))
+            {
+                e.Cursor = Cursors.Hand;
+                e.Handled = true;
+                return;
+            }
+
+            e.Cursor = elem.Cursor ?? Cursors.Arrow;
+            e.Handled = true;
         }
+        catch { }
     }
 
     // ROADMAP.md #133 (formerly review_tasks.md's cursor-leak item): this used to set

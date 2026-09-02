@@ -26,6 +26,36 @@ public class GoogleDriveService
     // idle sync every 3 minutes) once it's already been checked once.
     private readonly HashSet<string> _knownGoodFolderIds = new();
 
+    // ROADMAP #64: SyncMediaDirectoryAsync used to call GetReferencedAttachmentFilenames (a full
+    // File.ReadAllText + JsonDocument.Parse + per-block RTF regex scan of the local .tasky file)
+    // twice per sync - once for "Attachments", once for "InlineImages" - and again on every later
+    // sync pass even when nothing had changed, same repeat-cost pattern _knownGoodFolderIds above
+    // already exists to avoid. Cached per file path, invalidated by the file's own
+    // LastWriteTimeUtc: a real edit bumps mtime and forces a fresh scan, an unchanged file (the
+    // common case for a while-idle auto-sync) reuses the last one. Callers must treat the returned
+    // set as read-only - the same instance is shared across calls.
+    private readonly Dictionary<string, (DateTime LastWriteUtc, HashSet<string> Files)> _referencedAttachmentsCache = new(StringComparer.OrdinalIgnoreCase);
+
+    internal HashSet<string> GetReferencedAttachmentFilenamesCached(string localDataFilePath)
+    {
+        DateTime lastWriteUtc;
+        try
+        {
+            lastWriteUtc = File.Exists(localDataFilePath) ? File.GetLastWriteTimeUtc(localDataFilePath) : DateTime.MinValue;
+        }
+        catch
+        {
+            lastWriteUtc = DateTime.MinValue;
+        }
+
+        if (_referencedAttachmentsCache.TryGetValue(localDataFilePath, out var cached) && cached.LastWriteUtc == lastWriteUtc)
+            return cached.Files;
+
+        var files = GetReferencedAttachmentFilenames(localDataFilePath);
+        _referencedAttachmentsCache[localDataFilePath] = (lastWriteUtc, files);
+        return files;
+    }
+
     public bool IsAuthenticated => _driveService is not null && _credential is not null;
 
     // ROADMAP.md #61: AuthenticateAsync/TrySilentAuthenticateAsync used to just overwrite
@@ -571,7 +601,7 @@ public class GoogleDriveService
                 .Where(n => !string.IsNullOrEmpty(n))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var referencedFiles = GetReferencedAttachmentFilenames(localDataFilePath);
+            var referencedFiles = GetReferencedAttachmentFilenamesCached(localDataFilePath);
             var mediaFileKey = Path.GetFileName(localDataFilePath).ToLowerInvariant();
             var lastSyncedSet = ResolveLastSyncedMediaSet(mediaFileKey, settings);
 

@@ -944,8 +944,8 @@
                  DataContext; only the ScrollViewer inside overrides DataContext. -->
             <Grid Visibility="{Binding SelectedTaskDetail, Converter={StaticResource NullToVis}}"
                   AllowDrop="True"
-                  PreviewDragEnter="Body_DragEnter"
-                  PreviewDragOver="Body_DragOver"
+                  PreviewDragEnter="Body_DragEnterOrOver"
+                  PreviewDragOver="Body_DragEnterOrOver"
                   PreviewDragLeave="Body_DragLeave"
                   PreviewDrop="Body_Drop">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,20,24,20"
@@ -1200,8 +1200,8 @@
                         <!-- Unified note body: single continuous inline Word-like document canvas -->
                         <Grid x:Name="NoteBody" Background="Transparent" MinHeight="200" Margin="0,12,0,0"
                               AllowDrop="True"
-                              DragEnter="NoteBody_DragEnter"
-                              DragOver="NoteBody_DragOver"
+                              DragEnter="NoteBody_DragEnterOrOver"
+                              DragOver="NoteBody_DragEnterOrOver"
                               DragLeave="NoteBody_DragLeave"
                               Drop="NoteBody_Drop">
                             <RichTextBox x:Name="NoteEditor"

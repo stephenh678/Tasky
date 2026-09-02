@@ -7,6 +7,10 @@ namespace TodoApp.Services;
 
 public class SettingsStore
 {
+    // ROADMAP #129: Save() used to allocate a fresh JsonSerializerOptions on every call just to
+    // set WriteIndented - hoisted to a shared static since the options never vary between calls.
+    private static readonly JsonSerializerOptions SaveJsonOptions = new() { WriteIndented = true };
+
     private readonly string _filePath;
     private int _failureCount;
     private int _batchDepth;
@@ -125,7 +129,7 @@ public class SettingsStore
         try
         {
             settings.GoogleDriveClientSecretProtected = SecretProtector.Protect(settings.GoogleDriveClientSecret);
-            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(settings, SaveJsonOptions);
 
             // Same atomic write-then-replace pattern as TodoStore.SaveAsync - writes the new
             // content to a temp file first so a crash/power-loss mid-write can only ever leave a

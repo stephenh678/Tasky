@@ -104,15 +104,51 @@ public class TaskItem : INotifyPropertyChanged
         set => SetField(ref _priority, value);
     }
 
-    // Legacy fields, kept only so old saved data can be migrated into Body once on load.
+    // Legacy fields, kept only so old saved data can be migrated into Body once on load. Every
+    // task that's been through MigrateToBody (TodoStore.cs) - which is to say every task saved by
+    // this app in a long time - has these permanently empty, yet they used to serialize into every
+    // single save/sync payload regardless (ROADMAP #131). [JsonIgnore] here plus the shadow
+    // "ForSerialization" properties below skip them in the wire format once empty, while still
+    // reading an old file's populated values in (System.Text.Json has no built-in "omit if empty
+    // collection/string" condition - only WhenWritingDefault/WhenWritingNull, which compare against
+    // the CLR default, i.e. null, not ""/an empty collection - hence the null-when-empty shadow
+    // getter to make WhenWritingNull apply).
+    [JsonIgnore]
     public string Notes
     {
         get => _notes;
         set => SetField(ref _notes, value ?? string.Empty);
     }
 
+    [JsonPropertyName("Notes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NotesForSerialization
+    {
+        get => _notes.Length == 0 ? null : _notes;
+        set => Notes = value ?? string.Empty;
+    }
+
+    [JsonIgnore]
     public ObservableCollection<TaskLink> Links { get; set; } = new();
+
+    [JsonPropertyName("Links")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservableCollection<TaskLink>? LinksForSerialization
+    {
+        get => Links.Count == 0 ? null : Links;
+        set => Links = value ?? new ObservableCollection<TaskLink>();
+    }
+
+    [JsonIgnore]
     public ObservableCollection<string> Photos { get; set; } = new();
+
+    [JsonPropertyName("Photos")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservableCollection<string>? PhotosForSerialization
+    {
+        get => Photos.Count == 0 ? null : Photos;
+        set => Photos = value ?? new ObservableCollection<string>();
+    }
 
     // The unified note body: an ordered stream of text/photo/link blocks.
     public ObservableCollection<NoteBlock> Body { get; set; } = new();

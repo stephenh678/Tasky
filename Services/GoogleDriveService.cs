@@ -763,12 +763,19 @@ public class GoogleDriveService
         var dir = Path.GetDirectoryName(destinationLocalPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
+        // ROADMAP #130: used to buffer the whole download into a MemoryStream, then ToArray() it
+        // into a second copy for File.WriteAllBytesAsync - double the peak allocation for a large
+        // attachment, plus LOH pressure past 85KB. Streaming straight into a temp file avoids both
+        // copies; the temp-file-then-move keeps the same atomic-replace guarantee the old
+        // buffer-then-write approach had for free (a failed/interrupted download can't leave a
+        // half-written .tasky file in place of a good one).
         var request = _driveService.Files.Get(remoteFileId);
-        using var memoryStream = new MemoryStream();
-        await request.DownloadAsync(memoryStream);
-
-        memoryStream.Position = 0;
-        await File.WriteAllBytesAsync(destinationLocalPath, memoryStream.ToArray());
+        var tempDownloadPath = destinationLocalPath + ".download.tmp";
+        await using (var fileStream = new FileStream(tempDownloadPath, FileMode.Create, FileAccess.Write))
+        {
+            await request.DownloadAsync(fileStream);
+        }
+        File.Move(tempDownloadPath, destinationLocalPath, overwrite: true);
         AppLogger.Debug("GoogleDriveService", $"Download completed successfully for '{destinationLocalPath}'");
 
         if (!downloadAttachments) return;
@@ -846,10 +853,16 @@ public class GoogleDriveService
                 var destFile = Path.Combine(localDir, rFile.Name);
                 if (!File.Exists(destFile))
                 {
+                    // ROADMAP #130: same MemoryStream-then-ToArray double-buffering as
+                    // DownloadFileAsync above, for every attachment/inline-image file individually
+                    // - streamed straight to a temp file and moved into place instead.
                     var dlReq = _driveService.Files.Get(rFile.Id);
-                    using var ms = new MemoryStream();
-                    await dlReq.DownloadAsync(ms);
-                    await File.WriteAllBytesAsync(destFile, ms.ToArray());
+                    var tempFile = destFile + ".download.tmp";
+                    await using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write))
+                    {
+                        await dlReq.DownloadAsync(fileStream);
+                    }
+                    File.Move(tempFile, destFile, overwrite: true);
                     AppLogger.Info("GoogleDriveService", $"Downloaded {dirName} file '{rFile.Name}' to '{destFile}'");
                 }
             }

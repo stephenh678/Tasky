@@ -236,4 +236,76 @@ public class TodoStoreTests : IDisposable
         Assert.Empty(loadedTask.Links);
         Assert.Empty(loadedTask.Photos);
     }
+
+    // ROADMAP #131: a task that's already been through migration (i.e. every task saved by this
+    // app in a long time) has Notes/Links/Photos permanently empty, but they used to still
+    // serialize into every save/sync payload regardless ("Notes":"","Links":[],"Photos":[] on
+    // every single task). Asserts they're actually gone from the wire format now, not just that
+    // the round-trip still works (SaveAsync_ThenLoadAsync_RoundTripsTasksAndTombstones already
+    // covers that).
+    [Fact]
+    public void Save_TaskWithEmptyLegacyFields_OmitsThemFromWireFormat()
+    {
+        var store = new TodoStore { AutoBackupEnabled = false };
+        var state = new AppState();
+        state.Tasks.Add(new TaskItem { Text = "Fresh task" });
+        store.Save(state, _dataFile);
+
+        var json = File.ReadAllText(_dataFile);
+
+        Assert.DoesNotContain("\"Notes\"", json);
+        Assert.DoesNotContain("\"Links\"", json);
+        Assert.DoesNotContain("\"Photos\"", json);
+    }
+
+    // The other half of #131: a still-populated legacy field must keep serializing (this is a
+    // migration path, not a deletion) - only the empty case should be omitted.
+    [Fact]
+    public void Save_TaskWithPopulatedLegacyFields_StillSerializesThem()
+    {
+        var store = new TodoStore { AutoBackupEnabled = false };
+        var state = new AppState();
+        var task = new TaskItem { Text = "Not yet migrated", Notes = "still here" };
+        task.Links.Add(new TaskLink { Label = "Docs", Url = "https://example.com" });
+        state.Tasks.Add(task);
+        store.Save(state, _dataFile);
+
+        var json = File.ReadAllText(_dataFile);
+
+        Assert.Contains("\"Notes\": \"still here\"", json);
+        Assert.Contains("\"Links\"", json);
+    }
+
+    // ROADMAP #125: ListBackups used to fully JsonSerializer.Deserialize<AppState> every backup
+    // file just to read its task count - CountTasksInBackupFile replaces that with a structural
+    // Utf8JsonReader scan. Asserts the count it reports is still correct.
+    [Fact]
+    public async Task ListBackups_ReportsCorrectTaskCountViaLazyScan()
+    {
+        var store = new TodoStore { AutoBackupEnabled = true, AutoBackupIntervalMinutes = 0 };
+        var state = new AppState();
+        state.Tasks.Add(new TaskItem { Text = "One" });
+        state.Tasks.Add(new TaskItem { Text = "Two" });
+        state.Tasks.Add(new TaskItem { Text = "Three" });
+
+        await store.SaveAsync(state, _dataFile); // nothing to back up yet
+        await store.SaveAsync(state, _dataFile); // backs up the 3-task snapshot above
+
+        var backup = Assert.Single(store.ListBackups(_dataFile));
+        Assert.Equal(3, backup.TaskCount);
+    }
+
+    [Fact]
+    public async Task ListBackups_MalformedBackupFile_ReportsZeroTaskCountInsteadOfThrowing()
+    {
+        var store = new TodoStore { AutoBackupEnabled = true, AutoBackupIntervalMinutes = 0 };
+        await store.SaveAsync(new AppState(), _dataFile);
+        await store.SaveAsync(new AppState(), _dataFile); // creates the backup file to corrupt
+
+        var backupPath = store.ListBackups(_dataFile).Single().FilePath;
+        File.WriteAllText(backupPath, "{ not valid json");
+
+        var backup = Assert.Single(store.ListBackups(_dataFile));
+        Assert.Equal(0, backup.TaskCount);
+    }
 }

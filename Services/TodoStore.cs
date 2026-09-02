@@ -16,6 +16,11 @@ public class TodoStore
 {
     private readonly SemaphoreSlim _saveLock = new(1, 1);
 
+    // ROADMAP #129: SaveAsync used to allocate a fresh JsonSerializerOptions on every call (every
+    // autosave, on a 700ms debounce while editing) just to set WriteIndented - hoisted to a shared
+    // static since the options themselves never vary between calls.
+    private static readonly JsonSerializerOptions SaveJsonOptions = new() { WriteIndented = true };
+
     // ROADMAP #62: ListBackups/BackupExistingFile used to each build a new Regex (with
     // Regex.Escape(name) baked into the pattern) on every single call. One generic, compiled
     // pattern shared by both instead - it captures the name/timestamp/extension structurally, and
@@ -221,7 +226,7 @@ public class TodoStore
             if (File.Exists(path) && AutoBackupEnabled)
                 await Task.Run(() => BackupExistingFile(path));
 
-            var json = await Task.Run(() => JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true }));
+            var json = await Task.Run(() => JsonSerializer.Serialize(snapshot, SaveJsonOptions));
             var tempPath = path + ".tmp";
             await File.WriteAllTextAsync(tempPath, json);
 
@@ -269,20 +274,64 @@ public class TodoStore
         {
             if (!TryMatchBackupFileName(Path.GetFileName(file), name, ext, out _)) continue;
 
-            var count = 0;
-            try
-            {
-                var json = File.ReadAllText(file);
-                count = JsonSerializer.Deserialize<AppState>(json)?.Tasks.Count ?? 0;
-            }
-            catch (JsonException)
-            {
-            }
-
-            result.Add(new BackupInfo { FilePath = file, Timestamp = File.GetLastWriteTime(file), TaskCount = count });
+            result.Add(new BackupInfo { FilePath = file, Timestamp = File.GetLastWriteTime(file), TaskCount = CountTasksInBackupFile(file) });
         }
 
         return result.OrderByDescending(b => b.Timestamp).ToList();
+    }
+
+    // ROADMAP #125: ListBackups used to fully JsonSerializer.Deserialize<AppState> every backup
+    // file (up to MaxBackupSafetyCount = 500 of them) just to read one number off it for the
+    // restore-backup dialog. Utf8JsonReader scans for the "Tasks" array and counts its elements
+    // structurally without ever materializing a TaskItem, so opening that dialog with a long
+    // backup history doesn't pay for 500 full object-graph deserializations up front.
+    private static int CountTasksInBackupFile(string filePath)
+    {
+        try
+        {
+            var bytes = File.ReadAllBytes(filePath);
+            var reader = new Utf8JsonReader(bytes);
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.PropertyName && reader.ValueTextEquals("Tasks"))
+                {
+                    reader.Read();
+                    return reader.TokenType == JsonTokenType.StartArray ? CountArrayElements(ref reader) : 0;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Malformed/unreadable backup file - matches the prior behavior of counting it as 0
+            // rather than letting the whole dialog fail to open over one bad snapshot.
+        }
+        return 0;
+    }
+
+    private static int CountArrayElements(ref Utf8JsonReader reader)
+    {
+        var count = 0;
+        var nestDepth = 0;
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                case JsonTokenType.StartArray:
+                    if (nestDepth == 0) count++;
+                    nestDepth++;
+                    break;
+                case JsonTokenType.EndObject:
+                case JsonTokenType.EndArray:
+                    if (nestDepth == 0) return count;
+                    nestDepth--;
+                    break;
+                default:
+                    if (nestDepth == 0) count++;
+                    break;
+            }
+        }
+        return count;
     }
 
     /// <summary>

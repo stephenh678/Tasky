@@ -673,7 +673,23 @@ public partial class MainWindow : Window
             }
         }
 
-        // 5. Regular Text: if focus is NOT inside an active editable control, focus the editor and paste
+        // 5. Plain text (no Html, no Rtf on the clipboard - e.g. Notepad, a plain-text email/SMS
+        // view) that has one or more URLs mixed into other text, as opposed to case 3's "clipboard
+        // is nothing but a URL". Native RichTextBox.Paste() has no notion of a URL inside plain
+        // text, so left to it the link would paste in as dead text.
+        if (!Clipboard.ContainsData(DataFormats.Html) && !Clipboard.ContainsData(DataFormats.Rtf) &&
+            Clipboard.ContainsText())
+        {
+            var plainText = Clipboard.GetText();
+            if (Keyboard.FocusedElement is not TextBox && RichTextBoxBehavior.ContainsEmbeddedUrl(plainText))
+            {
+                RichTextBoxBehavior.InsertPlainTextWithLinkedUrls(NoteEditor, plainText);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // 6. Regular Text: if focus is NOT inside an active editable control, focus the editor and paste
         if (Clipboard.ContainsText())
         {
             if (Keyboard.FocusedElement is not TextBox && Keyboard.FocusedElement is not RichTextBox)

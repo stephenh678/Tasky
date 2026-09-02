@@ -1686,7 +1686,7 @@ public static class RichTextBoxBehavior
         for (var i = 0; i < lines.Length; i++)
         {
             if (lines[i].Length > 0)
-                paragraph.Inlines.Add(new Run(lines[i]));
+                AppendLineWithLinkedUrls(paragraph, lines[i]);
 
             if (i < lines.Length - 1)
             {
@@ -1696,6 +1696,108 @@ public static class RichTextBoxBehavior
             }
         }
         return paragraph;
+    }
+
+    // Matches a bare URL sitting inside a run of otherwise-plain text (as opposed to a real <a
+    // href> element, which ParseHtmlSegments/HtmlAnchorOrImageRegex already turns into a proper
+    // Link segment). This is what catches a URL typed or pasted as plain text alongside other
+    // words - a Notepad copy, a plain-text email/SMS view, or a sentence inside an HTML paste that
+    // Slack/Teams/etc. never auto-linked in the first place.
+    private static readonly Regex EmbeddedUrlRegex = new(
+        @"(https?://[^\s<>""']+|www\.[^\s<>""']+)", RegexOptions.IgnoreCase);
+
+    private static readonly char[] UrlTrailingPunctuation = { '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'' };
+
+    public static bool ContainsEmbeddedUrl(string text) => EmbeddedUrlRegex.IsMatch(text);
+
+    // Trailing sentence punctuation (a period ending the sentence, a comma before "and", a
+    // closing paren wrapping a parenthetical) is almost never actually part of the URL - strip it
+    // so the link doesn't swallow a following ")." straight into its target.
+    private static string TrimTrailingPunctuation(string url)
+    {
+        var end = url.Length;
+        while (end > 0 && Array.IndexOf(UrlTrailingPunctuation, url[end - 1]) >= 0)
+            end--;
+        return url[..end];
+    }
+
+    // Public rather than private for the same testability reason as ParseHtmlSegments - this is
+    // the pure part of plain-text URL linkification (regex matching, punctuation trimming, scheme
+    // validation), split out so TodoApp.Tests can exercise it without a live RichTextBox/UI thread.
+    // Reuses HtmlSegment/HtmlSegmentKind (Text/Link only here) rather than inventing a parallel type.
+    public static List<HtmlSegment> ParsePlainTextUrlSegments(string line)
+    {
+        var segments = new List<HtmlSegment>();
+        var lastIndex = 0;
+        foreach (Match match in EmbeddedUrlRegex.Matches(line))
+        {
+            var rawUrl = TrimTrailingPunctuation(match.Value);
+            if (rawUrl.Length == 0) continue;
+
+            var absoluteUrl = rawUrl.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? "https://" + rawUrl : rawUrl;
+            if (!Uri.TryCreate(absoluteUrl, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                continue;
+            }
+
+            if (match.Index > lastIndex)
+                segments.Add(new HtmlSegment(HtmlSegmentKind.Text, line[lastIndex..match.Index], null));
+
+            segments.Add(new HtmlSegment(HtmlSegmentKind.Link, rawUrl, absoluteUrl));
+            lastIndex = match.Index + rawUrl.Length;
+        }
+
+        if (lastIndex < line.Length)
+            segments.Add(new HtmlSegment(HtmlSegmentKind.Text, line[lastIndex..], null));
+
+        return segments;
+    }
+
+    private static void AppendLineWithLinkedUrls(Paragraph paragraph, string line)
+    {
+        foreach (var segment in ParsePlainTextUrlSegments(line))
+        {
+            if (segment.Kind == HtmlSegmentKind.Text)
+            {
+                paragraph.Inlines.Add(new Run(segment.Text));
+                continue;
+            }
+
+            var hyperlink = new Hyperlink(new Run(segment.Text))
+            {
+                NavigateUri = new Uri(segment.Url!),
+                ToolTip = $"{segment.Text} (Click to open)"
+            };
+            HookHyperlink(hyperlink);
+            paragraph.Inlines.Add(hyperlink);
+        }
+    }
+
+    /// <summary>
+    /// Handles a plain-text paste (Ctrl+V where the clipboard carries only DataFormats.Text - no
+    /// Html, no Rtf) whose text has one or more URLs mixed in among other words: a sentence copied
+    /// from Notepad, a plain-text email or SMS view, etc. Native RichTextBox.Paste() has no concept
+    /// of "this substring is a URL" for plain text, so without this the link pastes in as
+    /// completely inert text. Distinct from InsertInlineHyperlink (clipboard is *only* a URL, no
+    /// surrounding text) and InsertHtmlClipboardContent (clipboard carries real HTML structure).
+    /// </summary>
+    public static void InsertPlainTextWithLinkedUrls(RichTextBox rtb, string text)
+    {
+        var caret = rtb.CaretPosition ?? rtb.Document.ContentEnd;
+        var paragraph = caret.Paragraph;
+        if (paragraph is null)
+        {
+            paragraph = new Paragraph();
+            rtb.Document.Blocks.Add(paragraph);
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        paragraph = AppendTextWithLineBreaks(rtb, paragraph, normalized);
+
+        rtb.CaretPosition = paragraph.ContentEnd;
+        rtb.Focus();
+        SaveContentToBlock(rtb);
     }
 
     private static Inline BuildImagePlaceholder(HtmlSegment segment)

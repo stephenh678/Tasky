@@ -29,4 +29,4 @@ export const DEFAULT_DATA_FILE_NAME = 'Tasky.tasky';
 // cache-bust build number (see app.js's versionString()). Deliberately NOT auto-derived itself -
 // keep this in sync with TodoApp.csproj's <Version> whenever the desktop app's version is bumped,
 // since Tasky Web ships inside the same tagged releases rather than on its own version track.
-export const DESKTOP_VERSION = '1.1.6';
+export const DESKTOP_VERSION = '1.1.7';

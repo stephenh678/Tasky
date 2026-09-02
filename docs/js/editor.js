@@ -7,11 +7,35 @@
 // NoteBlockType has no "Table" entry - the desktop app's tables are RTF content embedded inside
 // a Text block's Rtf, not a distinct block type, so there's nothing structural here to build
 // against. Left out entirely rather than half-supported.
-import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=17';
-import { icon } from './icons.js?v=17';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=17';
+import { NoteBlockType, newNoteBlock, newChecklistItem } from './model.js?v=18';
+import { icon } from './icons.js?v=18';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=18';
 
 const URL_RE = /^https?:\/\/\S+$/i;
+
+// Finds URLs sitting inside a run of otherwise-plain text (as opposed to URL_RE above, which only
+// matches when the ENTIRE string is nothing but a URL). Mirrors desktop's
+// RichTextBoxBehavior.ParsePlainTextUrlSegments - same regex shape, same trailing-punctuation
+// trim so a link doesn't swallow a sentence's closing "." or ")" into its target.
+const EMBEDDED_URL_RE = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
+const URL_TRAILING_PUNCT_RE = /[.,;:!?)\]}"']+$/;
+
+function splitTextIntoUrlSegments(text) {
+  const segments = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(EMBEDDED_URL_RE)) {
+    const raw = match[0].replace(URL_TRAILING_PUNCT_RE, '');
+    if (!raw) continue;
+    const absolute = raw.toLowerCase().startsWith('www.') ? `https://${raw}` : raw;
+    if (!URL_RE.test(absolute)) continue;
+
+    if (match.index > lastIndex) segments.push({ text: text.slice(lastIndex, match.index) });
+    segments.push({ url: absolute, label: raw });
+    lastIndex = match.index + raw.length;
+  }
+  if (lastIndex < text.length) segments.push({ text: text.slice(lastIndex) });
+  return segments;
+}
 
 // Sets an element's content to an icon glyph followed by plain text, without needing an
 // escapeHtml import - the text always goes in via a text node, never through innerHTML.
@@ -116,9 +140,28 @@ function renderTextBlock(block, task, index, onChange) {
   div.addEventListener('paste', (e) => {
     const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') ?? '';
     const trimmed = text.trim();
-    if (!URL_RE.test(trimmed)) return; // let normal paste happen
+    if (URL_RE.test(trimmed)) {
+      e.preventDefault();
+      task.Body.splice(index + 1, 0, newNoteBlock(NoteBlockType.Link, { url: trimmed, linkLabel: trimmed }));
+      onChange({ rerenderBody: true });
+      return;
+    }
+
+    // A chunk of text with one or more URLs mixed into other words - a sentence copied from
+    // Notes, a plain-text email/SMS view - rather than the clipboard being nothing but a URL
+    // (handled above). This app's block model has no concept of an inline link inside a Text
+    // block's plain-text content, so left alone the URL would land as dead characters; splitting
+    // it into alternating Text/Link blocks (same shape the bare-URL case above already produces)
+    // keeps it clickable.
+    const segments = splitTextIntoUrlSegments(text);
+    if (!segments.some((s) => s.url)) return; // no embedded URL - let normal paste happen
     e.preventDefault();
-    task.Body.splice(index + 1, 0, newNoteBlock(NoteBlockType.Link, { url: trimmed, linkLabel: trimmed }));
+    const newBlocks = segments
+      .filter((s) => s.url || s.text.trim())
+      .map((s) => (s.url
+        ? newNoteBlock(NoteBlockType.Link, { url: s.url, linkLabel: s.label })
+        : newNoteBlock(NoteBlockType.Text, { text: s.text.trim() })));
+    task.Body.splice(index + 1, 0, ...newBlocks);
     onChange({ rerenderBody: true });
   });
 

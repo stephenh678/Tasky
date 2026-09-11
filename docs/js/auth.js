@@ -26,8 +26,8 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=27';
-import { storage, sessionStore } from './storage.js?v=27';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=28';
+import { storage, sessionStore } from './storage.js?v=28';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';
@@ -279,8 +279,9 @@ export async function handleRedirectReturn() {
   if (!code && !error) return { status: 'none' };
 
   window.history.replaceState(null, '', window.location.pathname);
-  const expectedState = sessionStore.get(STATE_KEY);
+  const expectedState = sessionStore.get(STATE_KEY) || storage.get(STATE_KEY);
   sessionStore.remove(STATE_KEY);
+  storage.remove(STATE_KEY);
 
   if (error) {
     return {
@@ -288,7 +289,7 @@ export async function handleRedirectReturn() {
       message: error === 'access_denied' ? 'Sign-in was cancelled.' : `Sign-in failed: ${error}`,
     };
   }
-  if (!expectedState || returnedState !== expectedState) {
+  if (!expectedState || !returnedState || returnedState.trim() !== expectedState.trim()) {
     console.error('OAuth state mismatch - discarding response.');
     return { status: 'error', message: 'Sign-in failed: security check did not match. Please try again.' };
   }
@@ -327,8 +328,11 @@ export async function handleRedirectReturn() {
  * first - acceptable since silent refresh (below) should make explicit sign-ins rare.
  */
 export function signIn() {
-  const state = crypto.randomUUID();
+  const state = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : (Math.random().toString(36).slice(2) + Date.now().toString(36));
   sessionStore.set(STATE_KEY, state);
+  storage.set(STATE_KEY, state);
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: REDIRECT_URI,

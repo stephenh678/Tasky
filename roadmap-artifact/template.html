@@ -371,7 +371,7 @@
   <header class="masthead">
     <div class="eyebrow"><span class="dot"></span>Tasky Ecosystem</div>
     <h1>Roadmap Status</h1>
-    <p class="sub">117 recommendations across Tasky Desktop (WPF/.NET 9) and Tasky Web (PWA), reconciled from an independent Claude review against a parallel Gemini/Antigravity review. Numbering is stable — <code>#rank</code> is a permanent handle, not a sort order.</p>
+    <p class="sub">Every recommendation across Tasky Desktop (WPF/.NET 9) and Tasky Web (PWA), reconciled from an independent Claude review against a parallel Gemini/Antigravity review. Numbering is stable — <code>#rank</code> is a permanent handle, not a sort order.</p>
   </header>
 
   <nav class="stat-row" aria-label="Filter by status">
@@ -393,12 +393,13 @@
   </nav>
 
   <details class="gating">
-    <summary>The four gating decisions (all resolved)</summary>
+    <summary>The five gating decisions (all resolved)</summary>
     <ol>
       <li><strong>#12 Product positioning — Resolved: personal, single-user application.</strong> Not a team product, at least for now. #107 (team workspaces) deferred accordingly.</li>
       <li><strong>#11 Monetization model — Deferred.</strong> Focus stays on building the product first, not pricing it. #87 (licensing/entitlement engine) deferred accordingly.</li>
       <li><strong>#10 Platform architecture — Resolved: no framework migration.</strong> Desktop stays WPF, Web stays vanilla JS/PWA. #98 (native mobile apps) deferred accordingly. #51 (Mica/Acrylic theming) stays unblocked — WPF can get it via DWM interop.</li>
-      <li><strong>Offline PWA support — Deferred (2026-08-24).</strong> Tasky Web does not need to work offline; Drive is treated as always-reachable. #6, #7, #41, #106 deferred accordingly. #37 (install banner) stays active. #70 (thumbnail caching) stays active but builds its own IndexedDB usage.</li>
+      <li><strong>Offline PWA support — Reversed (2026-09-10; originally Deferred 2026-08-24).</strong> Real phone use showed a killed-and-relaunched PWA opening on an error and offline edits with nowhere to go, so Tasky Web now precaches its shell in a service worker and keeps an IndexedDB local copy. #6, #7 and #41 are Done; #106 Resolved without the Background Sync API.</li>
+      <li><strong>#29 Subtask hierarchy — Deferred (2026-08-25).</strong> User decided against building subtasks, independent of #30 (priority). Nothing else on the table assumes task hierarchy exists.</li>
     </ol>
   </details>
 
@@ -494,7 +495,7 @@
   const countEl = document.getElementById('result-count');
 
   // Pre-render every row's DOM once; render() only toggles visibility + expanded state,
-  // so filtering never re-parses markdown or rebuilds 117 subtrees on every keystroke.
+  // so filtering never re-parses markdown or rebuilds every subtree on every keystroke.
   const rowEls = new Map();
   for (const row of DATA) {
     const li = document.createElement('li');

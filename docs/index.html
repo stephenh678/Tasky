@@ -27,15 +27,17 @@
   <!-- Colours the browser/OS chrome above the app header, so it tracks the header's --pane-bg
        (styles.css) per theme rather than a fixed accent blue that matched neither. app.js's
        updateThemeColorMeta() keeps both in step with an explicit in-app Light/Dark override. -->
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#0b0f17" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#262629" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0f17" />
   <!-- ROADMAP.md #72: iOS Safari doesn't read manifest.json's display:standalone, so the
        PWA-install experience (status bar, launch as its own app) needs these too - Android/Chrome
        already gets everything it needs from the manifest alone. -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=28" />
+  <link rel="stylesheet" href="css/styles.css?v=29" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -502,7 +504,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=28"></script>
-  <script type="module" src="js/app.js?v=28"></script>
+  <script src="js/boot-guard.js?v=29"></script>
+  <script type="module" src="js/app.js?v=29"></script>
 </body>
 </html>

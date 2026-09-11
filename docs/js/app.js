@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=28';
-import * as drive from './drive.js?v=28';
+﻿import * as auth from './auth.js?v=29';
+import * as drive from './drive.js?v=29';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -17,14 +17,14 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
-} from './model.js?v=28';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=28';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=28';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=28';
-import { icon } from './icons.js?v=28';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=28';
-import { storage } from './storage.js?v=28';
-import { openDialog, trapFocus } from './dialog.js?v=28';
+} from './model.js?v=29';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=29';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=29';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=29';
+import { icon } from './icons.js?v=29';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=29';
+import { storage } from './storage.js?v=29';
+import { openDialog, trapFocus } from './dialog.js?v=29';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -580,6 +580,7 @@ async function startGuestMode() {
   isGuestMode = true;
   signinScreen.classList.add('hidden');
   appEl.classList.remove('hidden');
+  updateThemeColorMeta();
   setStatus('Loading local workspace…');
   signedOutModalShown = false;
   accountBtn.textContent = 'G';
@@ -885,15 +886,27 @@ function applyTheme(choice) {
 }
 
 // <meta name="theme-color"> colours the browser/OS chrome directly above the app header (Android
-// Chrome's toolbar, the installed PWA's status bar), so it should match the header's own
-// background - which is --pane-bg, and depends on the resolved theme. index.html ships one meta
-// per prefers-color-scheme for the moment before this runs; from here on both carry the colour of
-// whatever theme is actually in effect, including an explicit Light/Dark override of the OS
-// setting, which the static media attributes alone can't express.
+// Chrome's toolbar, the installed PWA's status bar), so it should match the active header/screen
+// background - which is --bg on the signin screen and --pane-bg in the main app.
+// An unconstrained meta tag without media is updated first so Android WebAPK/Chrome reacts
+// immediately, followed by media-scoped tags.
 function updateThemeColorMeta() {
-  const color = getComputedStyle(document.documentElement).getPropertyValue('--pane-bg').trim();
+  const isSignIn = signinScreen && !signinScreen.classList.contains('hidden');
+  const varName = isSignIn ? '--bg' : '--pane-bg';
+  const color = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
   if (!color) return;
-  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = color;
+
+  let unconstrainedMeta = document.querySelector('meta[name="theme-color"]:not([media])');
+  if (!unconstrainedMeta) {
+    unconstrainedMeta = document.createElement('meta');
+    unconstrainedMeta.name = 'theme-color';
+    document.head.appendChild(unconstrainedMeta);
+  }
+  unconstrainedMeta.content = color;
+
+  for (const meta of document.querySelectorAll('meta[name="theme-color"][media]')) {
+    meta.content = color;
+  }
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateThemeColorMeta);
 themeSwitch.addEventListener('click', (e) => {
@@ -1099,6 +1112,7 @@ paneResizer.addEventListener('pointerdown', (e) => {
 async function onSignedIn() {
   signinScreen.classList.add('hidden');
   appEl.classList.remove('hidden');
+  updateThemeColorMeta();
   setStatus('Loading…');
   signedOutModalShown = false;
 

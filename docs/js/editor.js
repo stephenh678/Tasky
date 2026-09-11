@@ -13,11 +13,11 @@ import {
   newChecklistItem,
   extractInlineImageFileNames,
   extractInlineFileNames,
-} from './model.js?v=28';
-import { icon } from './icons.js?v=28';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=28';
-import { storage } from './storage.js?v=28';
-import { openDialog, trapFocus } from './dialog.js?v=28';
+} from './model.js?v=29';
+import { icon } from './icons.js?v=29';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=29';
+import { storage } from './storage.js?v=29';
+import { openDialog, trapFocus } from './dialog.js?v=29';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.

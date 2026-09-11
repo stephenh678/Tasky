@@ -32,7 +32,7 @@
     --accent-2: #60a5fa;
     --accent-text: #0b0f17;
     --hover: #1e293b;
-    --selected: #1e3a8a45;
+    --selected: #1b2a47;
     --danger: #ef4444;
     --danger-text: #f87171;
     --success: #34d399;
@@ -53,7 +53,7 @@
   --accent-2: #60a5fa;
   --accent-text: #0b0f17;
   --hover: #1e293b;
-  --selected: #1e3a8a45;
+  --selected: #1b2a47;
   --danger: #ef4444;
   --danger-text: #f87171;
   --success: #34d399;
@@ -870,6 +870,7 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-content {
   position: relative;
   z-index: 1;
+  width: 100%;
   background: var(--pane-bg);
   padding: 11px 14px;
   display: flex;

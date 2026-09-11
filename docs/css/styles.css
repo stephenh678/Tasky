@@ -1,99 +1,65 @@
 :root {
-  /* Without this, native form controls (text inputs, selects, checkboxes, the mobile keyboard's
-     own chrome) render with the browser's default light UA styling regardless of the custom
-     --bg/--text colors above - normally invisible since inputs here are transparent and inherit
-     the pane behind them, but some mobile browsers (seen on Android Chrome) intermittently paint
-     a plain white background under a freshly-focused/newly-created input before the page's own
-     styles are considered, which read as an unstyled white box with black text. Declaring the
-     supported schemes (and pinning it to match an explicit theme override below) tells the
-     browser which native palette to use up front instead of guessing. */
   color-scheme: light dark;
-  --bg: #f3f4f7;
+  --bg: #f8fafc;
   --pane-bg: #ffffff;
-  --border: #e3e6eb;
-  --text: #1a1d23;
-  --text-dim: #6b7280;
-  --accent: #3861d6;
-  --accent-2: #5b7ff0;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-dim: #64748b;
+  --accent: #2563eb;
+  --accent-2: #3b82f6;
   --accent-text: #ffffff;
-  --hover: #eef1f7;
-  --selected: #e6ecfd;
-  --danger: #d64545;
-  /* --danger itself fails WCAG AA (4.5:1) as *text* on --pane-bg in both themes (~4.38:1 light,
-     ~3.44:1 dark) - it was only ever contrast-checked for background/border use. --danger-text is
-     a separate, theme-tuned token for actual error text with different contrast math/requirements.
-     --danger does get its own dark-mode value below (was missing one for a while - the swipe-to-
-     trash background stayed exactly this light-mode red in dark mode while --success correctly
-     brightened, reported live as the swipe colors not fitting the theme), tuned to roughly the same
-     lightness as dark mode's --success so the two read as a matched pair again. */
-  --danger-text: #c0392b;
-  --success: #2f9e5c;
-  /* Priority indicator (ROADMAP #30/parity pass) - reuses desktop's WarningBrush hex exactly
-     (Themes/LightTheme.xaml, Themes/DarkTheme.xaml) since there's no pre-existing web token for
-     "orange" to diverge from the way --danger/--accent already mildly do. High priority reuses
-     --danger, Low reuses --accent - only Medium needed a new token. */
+  --hover: #f1f5f9;
+  --selected: #eff6ff;
+  --danger: #ef4444;
+  --danger-text: #dc2626;
+  --success: #10b981;
   --warning: #b45309;
-  --shadow: 0 4px 16px rgba(20, 24, 33, 0.08);
-  --shadow-lg: 0 12px 32px rgba(20, 24, 33, 0.16);
+  --shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px -1px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 10px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.06);
   --radius: 12px;
 }
 
-/* Dark palette leans on Google Cloud Console's flat near-black grays rather than a blue-tinted
-   dark theme - fewer distinct surface colors, borders doing more of the separation than shadows.
-
-   !! These same values are duplicated verbatim in the plain :root[data-theme="dark"] block right
-   below - a media query can't be combined with an attribute selector in one rule, and this
-   project deliberately has no build step/preprocessor to define the palette once and share it.
-   If you change a color here, change it there too, or "match system" and "force dark" will
-   silently drift apart. `node check-dark-palette.js` (run in CI next to check-cache-version.js)
-   fails if the two blocks disagree; `node check-dark-palette.js --fix` regenerates the second
-   block from this one. */
-/* Pins native controls to light even when the OS is dark - otherwise color-scheme:"light dark" on
-   :root leaves the browser free to render inputs/selects/checkboxes in dark UA styling by OS
-   preference alone, while everything else on the page (correctly, via the :not([data-theme="light"])
-   guard below) stays on the explicitly-chosen light palette. No matching dark-palette values needed
-   here since :root's own light defaults already apply whenever this attribute is set. */
 :root[data-theme="light"] { color-scheme: light; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1f1f1f;
-    --pane-bg: #262629;
-    --border: #3c4043;
-    --text: #e8eaed;
-    --text-dim: #9aa0a6;
-    --accent: #8ab4f8;
-    --accent-2: #669df6;
-    --accent-text: #202124;
-    --hover: #303134;
-    --selected: #37383b;
-    --danger: #e06666;
-    --danger-text: #f28b82;
-    --success: #6ac789;
+    --bg: #0b0f17;
+    --pane-bg: #111827;
+    --border: #1e293b;
+    --text: #f8fafc;
+    --text-dim: #94a3b8;
+    --accent: #3b82f6;
+    --accent-2: #60a5fa;
+    --accent-text: #0b0f17;
+    --hover: #1e293b;
+    --selected: #1e3a8a45;
+    --danger: #ef4444;
+    --danger-text: #f87171;
+    --success: #34d399;
     --warning: #faa754;
-    --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.65);
   }
 }
 /* Duplicates the @media (prefers-color-scheme: dark) block above - see its comment. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1f1f1f;
-  --pane-bg: #262629;
-  --border: #3c4043;
-  --text: #e8eaed;
-  --text-dim: #9aa0a6;
-  --accent: #8ab4f8;
-  --accent-2: #669df6;
-  --accent-text: #202124;
-  --hover: #303134;
-  --selected: #37383b;
-  --danger: #e06666;
-  --danger-text: #f28b82;
-  --success: #6ac789;
+  --bg: #0b0f17;
+  --pane-bg: #111827;
+  --border: #1e293b;
+  --text: #f8fafc;
+  --text-dim: #94a3b8;
+  --accent: #3b82f6;
+  --accent-2: #60a5fa;
+  --accent-text: #0b0f17;
+  --hover: #1e293b;
+  --selected: #1e3a8a45;
+  --danger: #ef4444;
+  --danger-text: #f87171;
+  --success: #34d399;
   --warning: #faa754;
-  --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.65);
 }
 
 * { box-sizing: border-box; }
@@ -113,7 +79,9 @@ html { font-size: 100%; touch-action: manipulation; }
 :root[data-font-size="xlarge"] { font-size: 130%; }
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   background: var(--bg);
   color: var(--text);
 }
@@ -207,15 +175,17 @@ a { color: var(--accent); }
   border-radius: 8px;
   padding: 10px 20px;
   font-size: 1em;
+  font-weight: 500;
   cursor: pointer;
-  transition: transform 0.05s ease, background 0.15s ease;
+  transition: transform 0.08s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 .btn:active { transform: scale(0.98); }
 .btn:disabled { opacity: 0.6; cursor: default; }
-.btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-text); box-shadow: var(--shadow); }
+.btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-text); box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
+.btn-primary:hover { box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 45%, transparent); }
 .btn-ghost { background: none; border: 1px solid var(--border); color: var(--text); }
 .btn-ghost:hover { background: var(--hover); }
-.btn.small { padding: 4px 10px; font-size: 0.85em; }
+.btn.small { padding: 5px 12px; font-size: 0.85em; border-radius: 6px; }
 .btn.danger { color: var(--danger-text); border-color: var(--danger); }
 
 /* App shell */
@@ -223,10 +193,12 @@ a { color: var(--accent); }
 .app-header {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: calc(8px + env(safe-area-inset-top, 0px)) 14px 8px; /* see .offline-banner */
+  gap: 6px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px; /* see .offline-banner */
   border-bottom: 1px solid var(--border);
-  background: var(--pane-bg);
+  background: color-mix(in srgb, var(--pane-bg) 88%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   flex-shrink: 0;
   position: relative;
   z-index: 30;
@@ -234,22 +206,23 @@ a { color: var(--accent); }
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex: 1;
   margin: 0 0 0 6px;
   min-width: 0;
   background: none;
   border: none;
-  padding: 4px 6px;
+  padding: 4px 8px;
   border-radius: var(--radius);
   cursor: pointer;
   color: inherit;
   font: inherit;
   text-align: left;
+  transition: background 0.15s ease;
 }
 .brand:hover, .brand:focus-visible { background: var(--hover); }
-.brand-logo { width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; }
-.header-title { font-size: 1.05em; font-weight: 600; margin: 0; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-logo { width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12); }
+.header-title { font-size: 1.1em; font-weight: 700; margin: 0; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .save-status { font-size: 0.82em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
 .save-status-action { color: var(--accent); text-decoration: underline; cursor: pointer; }
 /* ROADMAP.md #57: mirrors desktop's ProgressBar next to SaveStatusText - width transition makes
@@ -268,8 +241,10 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.06s ease;
 }
 .icon-btn:hover { background: var(--hover); }
+.icon-btn:active { transform: scale(0.96); }
 .filter-toggle-btn { flex-shrink: 0; }
 .filter-badge {
   position: absolute;
@@ -296,7 +271,7 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   gap: 2px;
-  background: var(--bg);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 3px;
@@ -646,13 +621,15 @@ a { color: var(--accent); }
   padding: 14px 16px 4px;
 }
 .sidebar-list li {
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 8px;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 0.95em;
+  font-size: 0.92em;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .sidebar-list li .sidebar-item-label { flex: 1; }
 .sidebar-list li .icon { flex-shrink: 0; color: var(--text-dim); }
@@ -670,9 +647,20 @@ a { color: var(--accent); }
 .view-delete-btn:hover { color: var(--danger-text); }
 .sidebar-list li:hover, .sidebar-list li:focus-visible, .sidebar-list li:has(.view-label:focus-visible) { background: var(--hover); }
 .view-label:focus-visible { outline: none; }
-.sidebar-list li.active { background: var(--selected); font-weight: 600; }
+.sidebar-list li.active { background: var(--selected); color: var(--accent); font-weight: 600; }
 .sidebar-list li.active .icon { color: var(--accent); }
-.sidebar-list .count { color: var(--text-dim); font-size: 0.85em; }
+.sidebar-list .count {
+  color: var(--text-dim);
+  font-size: 0.8em;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+.sidebar-list li.active .count {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
 
 .sidebar-collapsed .sidebar-section-label,
 .sidebar-collapsed .tag-list,
@@ -681,19 +669,27 @@ a { color: var(--accent); }
 .sidebar-collapsed .count { display: none; }
 .sidebar-collapsed .sidebar-list li { justify-content: center; padding: 10px; }
 
-.list-toolbar { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.list-toolbar { padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
 .search-box-wrap { position: relative; flex: 1; display: flex; }
 .search-box {
   flex: 1;
-  padding: 8px 30px 8px 14px;
+  padding: 8px 32px 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
+  font-size: 0.92em;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.search-box:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--pane-bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .search-clear-btn {
   position: absolute;
-  right: 4px;
+  right: 6px;
   top: 50%;
   transform: translateY(-50%);
   border: none;
@@ -707,17 +703,24 @@ a { color: var(--accent); }
 .search-clear-btn:hover { background: var(--hover); color: var(--text); }
 .search-clear-btn .icon { width: 14px; height: 14px; }
 
-.quick-add-row { padding: 0 10px 10px; }
+.quick-add-row { padding: 0 14px 10px; }
 .quick-add-input {
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-radius: 8px;
   border: 1px dashed var(--border);
   background: var(--bg);
   color: var(--text);
   font-size: 0.92em;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
-.quick-add-input:focus { outline: none; border-style: solid; border-color: var(--accent); }
+.quick-add-input:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--pane-bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
 .quick-add-input::placeholder { color: var(--text-dim); }
 /* ROADMAP.md #135: mirrors desktop's QuickAddWindow PreviewText styling (TertiaryBrush, small). */
 .quick-add-preview { font-size: 0.78em; color: var(--text-dim); padding: 4px 12px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -821,10 +824,16 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-list li {
   position: relative;
   overflow: hidden;
-  margin: 3px 8px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  margin: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+}
+.task-list li:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 /* Both are long-press targets (rows start multi-select, the New Task button opens quick-add) - without
    this iOS pops its text-selection callout over the row at the same moment the hold fires. */
@@ -862,7 +871,7 @@ html.hide-done-checkbox .editor-done-field { display: none; }
   position: relative;
   z-index: 1;
   background: var(--pane-bg);
-  padding: 10px 14px;
+  padding: 11px 14px;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -878,10 +887,13 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-row-info { flex: 1; min-width: 0; }
 .task-list li:hover .task-content, .task-list li:has(.task-row-info:focus-visible) .task-content { background: var(--hover); }
 .task-row-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-.task-list li.selected .task-content { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
-.task-list li.selected { border-color: transparent; }
-.task-list li.pinned:not(.selected) { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-.task-title { font-weight: 500; }
+.task-list li.selected .task-content { background: var(--selected); }
+.task-list li.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 2px 8px color-mix(in srgb, var(--accent) 15%, transparent); }
+.task-list li.pinned:not(.selected) {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 3%, var(--pane-bg));
+}
+.task-title { font-weight: 500; font-size: 0.94em; line-height: 1.35; color: var(--text); }
 .task-title .icon.pin-inline { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; color: var(--accent); display: inline-block; }
 /* Priority dot - mirrors desktop's row-level Ellipse (MainWindow.xaml/PriorityColorConverter):
    same three colors, same "hidden entirely at None" rule, just an inline dot before the title
@@ -892,35 +904,53 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-priority-dot.priority-high { background: var(--danger); }
 .tag-chip button .icon { width: 10px; height: 10px; }
 .sidebar-list li .icon { width: 17px; height: 17px; }
-.task-title.done { text-decoration: line-through; color: var(--text-dim); }
-.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.task-due-overdue { color: var(--danger-text); font-weight: 600; }
+.task-title.done { text-decoration: line-through; color: var(--text-dim); opacity: 0.75; }
+.task-sub { font-size: 0.8em; color: var(--text-dim); margin-top: 3px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.task-due-overdue { color: var(--danger-text); font-weight: 600; background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 1px 6px; border-radius: 6px; }
 .task-indicators { display: flex; align-items: center; gap: 4px; }
 .task-indicators .icon { width: 12px; height: 12px; }
 .task-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.task-tag-chip { background: var(--selected); border-radius: 8px; padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px; }
+.task-tag-chip {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 0.8em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 96px;
+}
 
 .empty-state { color: var(--text-dim); text-align: center; padding: 40px 16px; }
 
-.editor-empty-dashboard { max-width: 360px; margin: 0 auto; }
-.empty-dashboard-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 24px; }
+.editor-empty-dashboard { max-width: 380px; margin: 0 auto; }
+.empty-dashboard-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
 .empty-dashboard-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 16px 8px;
+  gap: 6px;
+  padding: 18px 12px;
   background: var(--pane-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font: inherit;
   color: inherit;
   cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.empty-dashboard-card:hover, .empty-dashboard-card:focus-visible { border-color: var(--accent); background: var(--hover); }
-.empty-dashboard-count { font-size: 1.6em; font-weight: 700; color: var(--accent); }
+.empty-dashboard-card:hover, .empty-dashboard-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-lg);
+  background: var(--hover);
+}
+.empty-dashboard-count { font-size: 1.8em; font-weight: 800; color: var(--accent); letter-spacing: -0.03em; }
 .empty-dashboard-count.overdue { color: var(--danger-text); }
-.empty-dashboard-label { font-size: 0.75em; color: var(--text-dim); }
+.empty-dashboard-label { font-size: 0.78em; font-weight: 500; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
 .empty-dashboard-hint { margin-bottom: 20px; }
 /* Desktop/tablet already has New Task in the list pane and sidebar, both visible alongside this
    dashboard - shown only on mobile (see the max-width:767px block below), where the dashboard is
@@ -1101,17 +1131,22 @@ kbd {
    compact, icon-led controls rather than always-open labeled form rows. */
 .editor-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .editor-field {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  background: var(--selected);
-  border: none;
-  border-radius: 12px;
-  padding: 3px 10px;
+  gap: 6px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
   color: var(--text);
   font: inherit;
   cursor: pointer;
   min-height: 32px;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.editor-field:hover {
+  background: var(--selected);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .editor-field-icon { display: flex; flex-shrink: 0; }
 .editor-field-icon .icon { width: 14px; height: 14px; color: var(--text-dim); }
@@ -1147,7 +1182,7 @@ kbd {
 /* Priority "None" / Repeat "Never" pills collapse to their icon (app.js updateMetaPillState) -
    the <select> is stretched invisibly over the pill, same trick as the due fields above, so a tap
    anywhere still opens it and keyboard focus still lands on it. */
-.editor-field.unset { position: relative; }
+.editor-field.unset { position: relative; border-style: dashed; }
 .editor-field.unset select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; }
 .editor-field.unset .editor-field-arrow { display: none; }
 .editor-field:has(select:focus-visible), .editor-field:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1155,7 +1190,10 @@ kbd {
 .editor-field.overdue .editor-due-label { color: var(--danger-text); }
 .editor-due-clear { padding: 3px 7px; min-width: 32px; justify-content: center; }
 .editor-due-clear .icon { width: 14px; height: 14px; color: var(--text-dim); }
-.editor-field.overdue { background: color-mix(in srgb, var(--danger) 16%, var(--selected)); }
+.editor-field.overdue {
+  background: color-mix(in srgb, var(--danger) 14%, var(--selected));
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
 .editor-field.overdue .editor-field-icon .icon,
 .editor-field.overdue .editor-field-arrow .icon,
 .editor-field.overdue input { color: var(--danger-text); }
@@ -1177,14 +1215,20 @@ kbd {
   appearance: none;
   -webkit-appearance: none;
   margin: 0;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1.6px solid var(--text-dim);
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1.8px solid var(--text-dim);
   background: transparent;
   cursor: pointer;
   position: relative;
   flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.done-checkbox-wrap input[type="checkbox"]:hover,
+.editor-field input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .done-checkbox-wrap input[type="checkbox"]:checked,
 .editor-field input[type="checkbox"]:checked {
@@ -1195,36 +1239,56 @@ kbd {
 .editor-field input[type="checkbox"]:checked::after {
   content: "";
   position: absolute;
-  left: 4px;
+  left: 5px;
   top: 1px;
   width: 4px;
-  height: 8px;
+  height: 9px;
   border: solid var(--accent-text);
-  border-width: 0 1.6px 1.6px 0;
+  border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-.editor-field:has(#editor-done:checked) { background: var(--accent); color: var(--accent-text); }
+.editor-field:has(#editor-done:checked) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
 .editor-field#editor-pin-btn .editor-field-icon .icon { width: 15px; height: 15px; }
-.editor-field#editor-pin-btn.active { background: var(--accent); color: var(--accent-text); }
+.editor-field#editor-pin-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
 .editor-field#editor-pin-btn.active .editor-field-icon .icon { color: var(--accent-text); }
 .editor-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag-chip {
-  background: var(--selected);
-  border-radius: 12px;
-  padding: 2px 10px;
-  font-size: 0.8em;
-  display: flex;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 0.82em;
+  font-weight: 500;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.tag-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .tag-chip button { border: none; background: none; cursor: pointer; color: var(--text-dim); }
 .tag-input {
   border: 1px solid var(--border);
   background: var(--pane-bg);
   color: var(--text);
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: 8px;
+  padding: 5px 10px;
   font-size: 0.85em;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tag-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 /* Tag picker dropdown (mirrors desktop's tag popup - TaskDetailViewModel's IsTagPopupOpen/
    FilteredAvailableTags/CanCreateNewTag) - web previously had only the raw text input with no way
@@ -1263,11 +1327,12 @@ kbd {
 .tag-suggest-empty { padding: 6px 8px; font-size: 0.82em; color: var(--text-dim); }
 
 .editor-body {
-  line-height: 1.5;
+  line-height: 1.6;
   background: var(--pane-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 20px;
+  box-shadow: var(--shadow);
 }
 .block-wrap { position: relative; margin-bottom: 8px; padding-right: 24px; }
 .block-remove {
@@ -1341,20 +1406,37 @@ kbd {
   cursor: pointer;
 }
 .block-file-link:hover { text-decoration: underline; }
-.block-checklist-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.block-checklist-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .block-checklist-item.editable input[type="text"] {
   flex: 1;
   border: none;
   background: none;
   color: var(--text);
   font: inherit;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+.block-checklist-item.editable input[type="text"]:focus {
+  outline: 2px solid var(--accent);
+  background: var(--hover);
 }
 .checklist-add {
   width: 100%;
   border: none;
   background: none;
   color: var(--text-dim);
-  padding: 4px 0 4px 22px;
+  padding: 6px 0 6px 26px;
+  font: inherit;
+  font-size: 0.9em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.checklist-add:hover {
+  color: var(--accent);
+  background: var(--hover);
 }
 .insert-toolbar { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 
@@ -1471,7 +1553,10 @@ kbd {
     padding-bottom: env(safe-area-inset-bottom, 0px);
     box-sizing: border-box;
     border-top: 1px solid var(--border);
-    background: var(--pane-bg);
+    background: color-mix(in srgb, var(--pane-bg) 85%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.04);
     z-index: 26;
   }
   /* position:fixed anchors to the layout viewport, not the shrunk-by-the-keyboard visual
@@ -1493,13 +1578,15 @@ kbd {
     border: none;
     background: none;
     color: var(--text-dim);
-    font-size: 0.65em;
+    font-size: 0.68em;
     font-weight: 500;
     padding: 0;
     cursor: pointer;
+    transition: color 0.15s ease;
   }
-  .mobile-tab .icon { width: 20px; height: 20px; }
-  .mobile-tab.active { color: var(--accent); }
+  .mobile-tab .icon { width: 22px; height: 22px; transition: transform 0.15s ease; }
+  .mobile-tab.active { color: var(--accent); font-weight: 600; }
+  .mobile-tab.active .icon { transform: scale(1.08); }
 
   /* Touch targets: Apple HIG / Material Design both call for a ~44-48px minimum tap target.
      min-width/min-height (not extra padding) grows the box symmetrically around the existing
@@ -1553,14 +1640,25 @@ kbd {
   .list-toolbar { position: relative; }
   #list-pane > .new-task-btn {
     position: fixed;
-    right: 16px;
+    right: 20px;
     bottom: calc(var(--mobile-bottom-chrome) + 16px);
-    width: 52px;
-    height: 52px;
+    width: 56px;
+    height: 56px;
     padding: 0;
     margin: 0;
     border-radius: 50%;
     z-index: 24;
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: var(--shadow-lg), 0 4px 16px color-mix(in srgb, var(--accent) 45%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  #list-pane > .new-task-btn:hover, #list-pane > .new-task-btn:active {
+    transform: scale(1.06);
+    box-shadow: var(--shadow-lg), 0 6px 20px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   #list-pane > .new-task-btn .sidebar-item-label { display: none; }
 

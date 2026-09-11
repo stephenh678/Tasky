@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=25';
-import * as drive from './drive.js?v=25';
+﻿import * as auth from './auth.js?v=26';
+import * as drive from './drive.js?v=26';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -17,19 +17,18 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
-} from './model.js?v=25';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=25';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=25';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=25';
-import { icon } from './icons.js?v=25';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=25';
-import { storage } from './storage.js?v=25';
-import { openDialog, trapFocus } from './dialog.js?v=25';
+} from './model.js?v=26';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=26';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=26';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=26';
+import { icon } from './icons.js?v=26';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=26';
+import { storage } from './storage.js?v=26';
+import { openDialog, trapFocus } from './dialog.js?v=26';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
 const signinBtn = el('signin-btn');
-const guestBtn = el('guest-btn');
 const signinStatus = el('signin-status');
 const signinVersionEl = el('signin-version');
 const aboutVersionEl = el('about-version');
@@ -628,7 +627,15 @@ async function boot() {
   }
 
   const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (isLocalHost && !isRedirectReturn) {
+  if (isLocalHost && !isRedirectReturn && !document.getElementById('guest-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'guest-btn';
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.style.cssText = 'margin-top: 10px; width: 100%; border: 1px solid var(--border);';
+    btn.textContent = 'Continue as Guest (Local Test Mode)';
+    btn.addEventListener('click', startGuestMode);
+    signinBtn.insertAdjacentElement('afterend', btn);
     signinStatus.innerHTML = '<span style="color:var(--accent); font-weight:600;">Running locally:</span> Google OAuth requires registered domains. Click <strong>Continue as Guest</strong> to test all features locally.';
   }
 
@@ -708,10 +715,6 @@ function armHistoryTrap() {
     plantAnchor();
   });
 }
-
-guestBtn?.addEventListener('click', () => {
-  startGuestMode();
-});
 
 signinBtn.addEventListener('click', () => {
   signinStatus.textContent = '';

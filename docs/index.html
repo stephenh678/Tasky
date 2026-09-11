@@ -35,7 +35,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=25" />
+  <link rel="stylesheet" href="css/styles.css?v=26" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -47,7 +47,6 @@
       <h1>Tasky</h1>
       <p class="signin-sub">Sign in with Google to open your synced tasks.</p>
       <button id="signin-btn" class="btn btn-primary" disabled>Loading…</button>
-      <button id="guest-btn" type="button" class="btn" style="margin-top: 10px; width: 100%; border: 1px solid var(--border);">Continue as Guest (Local Test Mode)</button>
       <!-- Filled in by app.js once the app has actually booted, or by js/boot-guard.js if it
            never does (a browser too old to parse the ES modules, JavaScript disabled). -->
       <p id="signin-status" class="signin-status"><noscript>Tasky Web needs JavaScript enabled to run.</noscript></p>
@@ -503,7 +502,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=25"></script>
-  <script type="module" src="js/app.js?v=25"></script>
+  <script src="js/boot-guard.js?v=26"></script>
+  <script type="module" src="js/app.js?v=26"></script>
 </body>
 </html>

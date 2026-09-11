@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Regenerates the live, filterable roadmap page from ROADMAP.md's master table.
 //
-// Run after any edit to ROADMAP.md's Status column (or the table generally):
+// Run after any edit to ROADMAP.md's Status column (or the table generally), and after a version
+// bump - the masthead's "Current release" line is read from TodoApp.csproj's <Version>:
 //   node roadmap-artifact/build.js
 // then publish roadmap-artifact/out.html via Claude's Artifact tool with
 // url: https://claude.ai/code/artifact/d1cad8b5-5463-485b-9a6c-9e8f8f3f3584
@@ -17,6 +18,7 @@
 // that JSON and splicing it in - it does not know or care about styling.
 const fs = require('fs');
 const path = require('path');
+const { readCsprojVersion } = require('../version-utils');
 
 const ROOT = path.join(__dirname, '..');
 const ROADMAP_PATH = path.join(ROOT, 'ROADMAP.md');
@@ -65,7 +67,9 @@ if (rows.length === 0) {
 }
 
 const template = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
-const html = template.replace('__ROADMAP_DATA__', JSON.stringify(rows));
+const html = template
+  .replace('__ROADMAP_DATA__', JSON.stringify(rows))
+  .replace('__RELEASE_VERSION__', readCsprojVersion());
 fs.writeFileSync(OUT_PATH, html);
 
 const byStatus = {};

@@ -5,6 +5,12 @@ A Windows desktop task manager built with WPF (.NET 9). Tasky is a single-window
 document — mix in notes, photos, links, files, and checklists, tag it, give it a due date, and
 let the app take care of not losing your work.
 
+**Current release: v1.2.0** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
+**Help → Check for Updates** from an installed copy). v1.2.0 is a Tasky Web / Mobile release — offline
+launch with a local copy, a phone-first UX pass, sign-in robustness and a set of data-safety fixes,
+all detailed under [Tasky Web](#tasky-web) below. The desktop app is unchanged from v1.1.9 apart from
+its version number; it ships in the release so Desktop, Web and the shared version stay in step.
+
 ## Features
 
 ### Task organization
@@ -209,6 +215,8 @@ per-task-merge sync and `.tasky` file the desktop app uses (no separate data sto
 your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
 Needs a current browser: Safari / iOS 16.4 or newer, or a recent Chrome, Edge or Firefox — older
 browsers get a plain "Tasky couldn't start" message on the sign-in screen instead of a blank page.
+Everything below is live as of **v1.2.0** (10 Sep 2026), the first release where Tasky Web works
+offline; the review it came out of is in `review_web_mobile.md`.
 
 It works offline the same way the desktop app does: the app shell is cached by a service worker and
 a local copy of your tasks lives in the browser's IndexedDB, so an installed PWA launches with no

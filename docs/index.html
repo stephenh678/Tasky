@@ -37,7 +37,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=31" />
+  <link rel="stylesheet" href="css/styles.css?v=29" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -242,60 +242,74 @@
                row below instead (see its own comment). -->
           <div class="editor-title-row">
             <textarea id="editor-title" class="editor-title" rows="1" placeholder="Task title"></textarea>
-            <div class="editor-title-actions">
-              <button type="button" id="editor-pin-btn" class="icon-btn editor-pin-btn" title="Pin" aria-label="Pin">
-                <span id="editor-pin-icon" class="editor-field-icon"></span>
-                <span id="editor-pin-label" class="visually-hidden">Pin</span>
-              </button>
-              <div class="editor-more-wrap">
-                <button type="button" id="editor-more-btn" class="icon-btn" aria-label="More actions" title="More actions"></button>
-                <div id="editor-more-dropdown" class="dropdown dropdown-right hidden">
-                  <button id="editor-done-btn" class="dropdown-item">Mark Done</button>
-                  <button id="editor-share-btn" class="dropdown-item">Share Task</button>
-                  <button id="editor-trash-btn" class="dropdown-item">Move to Trash</button>
-                  <button id="editor-delete-btn" class="dropdown-item danger hidden">Delete Permanently</button>
-                </div>
+            <div class="editor-more-wrap">
+              <button type="button" id="editor-more-btn" class="icon-btn" aria-label="More actions" title="More actions"></button>
+              <div id="editor-more-dropdown" class="dropdown dropdown-right hidden">
+                <!-- Reported live on mobile: "there is not a way to close/done the task" - the
+                     Done checkbox lives down in the metadata pill row (see the comment above this
+                     block), easy to miss when you've just opened a task from the list. This gives
+                     the same action a second, more discoverable home next to the other task-level
+                     actions. -->
+                <button id="editor-done-btn" class="dropdown-item">Mark Done</button>
+                <!-- Mobile counterpart of desktop's Export/Print Note: the task as Markdown via
+                     the Web Share sheet, or the clipboard where there's no share sheet. -->
+                <button id="editor-share-btn" class="dropdown-item">Share Task</button>
+                <button id="editor-trash-btn" class="dropdown-item">Move to Trash</button>
+                <button id="editor-delete-btn" class="dropdown-item danger hidden">Delete Permanently</button>
               </div>
             </div>
           </div>
           <!-- Shown for a Done or Trashed task, which is read-only here exactly as on desktop
                (TaskDetailViewModel.IsEditable) - text set in renderEditor per state. -->
           <div id="editor-locked-notice" class="editor-locked-notice hidden" role="status"></div>
-          <!-- Streamlined, scannable metadata chips row: only set properties are shown, while unset
-               properties live behind the "+ Add…" menu or quick-toggle chips. -->
+          <!-- One compact metadata strip (Done/Pin/Due/Repeat/Tags) instead of a separate action
+               bar plus a labeled-field stack - Done/Pin/Due/Repeat all share the tag chips' pill
+               styling (see styles.css), so every piece of task state reads as the same scannable
+               row instead of competing visual styles. Reported live as feeling "busy and
+               unorganized" (the original version of this note, before Done/Pin joined it) and "out
+               of place" (the separate bar Done/Pin used to live in, above). -->
           <div class="editor-meta-row">
             <label class="editor-field editor-done-field" id="editor-done-field" title="Mark as done" aria-label="Mark as done">
               <input type="checkbox" id="editor-done" />
               <span>Done</span>
             </label>
-            <div class="editor-due-group" id="editor-due-group">
-              <label class="editor-field editor-due-field" id="editor-due-field" title="Due date" aria-label="Due date">
-                <span id="editor-due-icon" class="editor-field-icon"></span>
-                <span id="editor-due-label" class="editor-due-label">Due date</span>
-                <input id="editor-due" type="date" />
-                <span class="editor-field-arrow"></span>
-              </label>
-              <button type="button" id="editor-due-clear" class="editor-due-clear-btn hidden" title="Clear due date" aria-label="Clear due date"></button>
-            </div>
+            <button type="button" id="editor-pin-btn" class="editor-field" title="Pin" aria-label="Pin">
+              <span id="editor-pin-icon" class="editor-field-icon"></span>
+              <span id="editor-pin-label">Pin</span>
+            </button>
+            <!-- The native date input is stretched invisibly over the pill (styles.css
+                 .editor-due-field) so a tap anywhere opens the OS picker, while the visible text
+                 is a relative label (Today · Tomorrow · Mon · Sep 24) that the native control
+                 can't render. Time gets its own pill once a date is set - the model, quick-add's
+                 @3pm and desktop reminders all carry one - and × clears the date outright, since
+                 iOS's date wheel has no Clear button of its own. -->
+            <label class="editor-field editor-due-field" id="editor-due-field" title="Due date" aria-label="Due date">
+              <span id="editor-due-icon" class="editor-field-icon"></span>
+              <span id="editor-due-label" class="editor-due-label">Due date</span>
+              <input id="editor-due" type="date" />
+              <span class="editor-field-arrow"></span>
+            </label>
             <label class="editor-field editor-due-field editor-due-time-field hidden" id="editor-due-time-field" title="Due time" aria-label="Due time">
               <span id="editor-due-time-icon" class="editor-field-icon"></span>
               <span id="editor-due-time-label" class="editor-due-label">Add time</span>
               <input id="editor-due-time" type="time" />
               <span class="editor-field-arrow"></span>
             </label>
-            <!-- Priority pill (hidden when None, accented when set) -->
-            <label class="editor-field editor-priority-field hidden" id="editor-priority-field" title="Priority" aria-label="Priority">
+            <button type="button" id="editor-due-clear" class="editor-field editor-due-clear hidden" title="Clear due date" aria-label="Clear due date"></button>
+            <!-- ROADMAP #30 web-parity follow-up: Priority existed in the data model/sync/search
+                 (is:highpriority) since #30 shipped, but had no web UI - desktop-only until now.
+                 Mirrors desktop's TaskDetailViewModel.PriorityOptions/MainWindow's Priority ComboBox. -->
+            <label class="editor-field" title="Priority" aria-label="Priority">
               <span id="editor-priority-icon" class="editor-field-icon"></span>
               <select id="editor-priority">
                 <option value="0">None</option>
-                <option value="1">Low Priority</option>
-                <option value="2">Medium Priority</option>
-                <option value="3">High Priority</option>
+                <option value="1">Low</option>
+                <option value="2">Medium</option>
+                <option value="3">High</option>
               </select>
               <span class="editor-field-arrow"></span>
             </label>
-            <!-- Repeat pill (hidden when Never, accented when set) -->
-            <label class="editor-field editor-repeat-field hidden" id="editor-repeat-field" title="Repeat" aria-label="Repeat">
+            <label class="editor-field" title="Repeat" aria-label="Repeat">
               <span id="editor-repeat-icon" class="editor-field-icon"></span>
               <select id="editor-recurrence">
                 <option value="0">Never</option>
@@ -306,33 +320,17 @@
               </select>
               <span class="editor-field-arrow"></span>
             </label>
+            <!-- ROADMAP.md #31: "every N" interval, only shown once a recurrence unit is picked -
+                 mirrors desktop's TaskDetailViewModel.RecurrenceIntervalOptions (1-30). -->
             <label id="editor-recurrence-interval-field" class="editor-field hidden" title="Repeat every" aria-label="Repeat every">
               <span>every</span>
               <select id="editor-recurrence-interval"></select>
               <span class="editor-field-arrow"></span>
             </label>
             <span id="editor-tags" class="editor-tags"></span>
-            <div class="tag-input-wrap" id="tag-input-wrap">
-              <button type="button" id="editor-tag-add-btn" class="editor-field tag-add-chip" title="Add tag" aria-label="Add tag">
-                <span class="editor-field-icon" id="editor-tag-add-icon"></span>
-                <span>Tag</span>
-              </button>
-              <input id="editor-tag-input" class="tag-input hidden" type="text" placeholder="+ tag, Enter to add" enterkeyhint="done" autocomplete="off" />
+            <div class="tag-input-wrap">
+              <input id="editor-tag-input" class="tag-input" type="text" placeholder="+ tag, Enter to add" enterkeyhint="done" autocomplete="off" />
               <div id="tag-suggest-popup" class="tag-suggest-popup hidden"></div>
-            </div>
-            <!-- + Add… detail menu for adding properties without cluttering the screen -->
-            <div class="editor-add-prop-wrap" id="editor-add-prop-wrap">
-              <button type="button" id="editor-add-prop-btn" class="editor-field editor-add-prop-btn" title="Add property" aria-label="Add property">
-                <span class="editor-field-icon" id="editor-add-prop-icon"></span>
-                <span>Add…</span>
-              </button>
-              <div id="editor-add-prop-dropdown" class="dropdown dropdown-left hidden">
-                <button type="button" class="dropdown-item" id="add-prop-due-btn"><span class="dropdown-item-icon" id="add-prop-due-icon"></span> <span id="add-prop-due-text">Due date</span></button>
-                <button type="button" class="dropdown-item" id="add-prop-time-btn"><span class="dropdown-item-icon" id="add-prop-time-icon"></span> <span>Time</span></button>
-                <button type="button" class="dropdown-item" id="add-prop-priority-btn"><span class="dropdown-item-icon" id="add-prop-priority-icon"></span> <span>Priority…</span></button>
-                <button type="button" class="dropdown-item" id="add-prop-repeat-btn"><span class="dropdown-item-icon" id="add-prop-repeat-icon"></span> <span>Repeat…</span></button>
-                <button type="button" class="dropdown-item" id="add-prop-tag-btn"><span class="dropdown-item-icon" id="add-prop-tag-icon"></span> <span>Tag</span></button>
-              </div>
             </div>
           </div>
           <div id="editor-body" class="editor-body"></div>
@@ -506,7 +504,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=31"></script>
-  <script type="module" src="js/app.js?v=31"></script>
+  <script src="js/boot-guard.js?v=29"></script>
+  <script type="module" src="js/app.js?v=29"></script>
 </body>
 </html>

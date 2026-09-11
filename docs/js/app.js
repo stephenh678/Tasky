@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=31';
-import * as drive from './drive.js?v=31';
+﻿import * as auth from './auth.js?v=29';
+import * as drive from './drive.js?v=29';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -17,14 +17,14 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
-} from './model.js?v=31';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=31';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=31';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=31';
-import { icon } from './icons.js?v=31';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=31';
-import { storage } from './storage.js?v=31';
-import { openDialog, trapFocus } from './dialog.js?v=31';
+} from './model.js?v=29';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=29';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=29';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=29';
+import { icon } from './icons.js?v=29';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=29';
+import { storage } from './storage.js?v=29';
+import { openDialog, trapFocus } from './dialog.js?v=29';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -112,17 +112,6 @@ const editorDueTime = el('editor-due-time');
 const editorDueTimeField = el('editor-due-time-field');
 const editorDueTimeLabel = el('editor-due-time-label');
 const editorDueClear = el('editor-due-clear');
-const editorPriorityField = el('editor-priority-field');
-const editorRepeatField = el('editor-repeat-field');
-const editorTagAddBtn = el('editor-tag-add-btn');
-const editorAddPropWrap = el('editor-add-prop-wrap');
-const editorAddPropBtn = el('editor-add-prop-btn');
-const editorAddPropDropdown = el('editor-add-prop-dropdown');
-const addPropDueBtn = el('add-prop-due-btn');
-const addPropTimeBtn = el('add-prop-time-btn');
-const addPropPriorityBtn = el('add-prop-priority-btn');
-const addPropRepeatBtn = el('add-prop-repeat-btn');
-const addPropTagBtn = el('add-prop-tag-btn');
 const syncIndicator = el('sync-indicator');
 const moreSheetRecurringBtn = el('more-sheet-recurring');
 const moreSheetTrashBtn = el('more-sheet-trash');
@@ -304,13 +293,6 @@ el('editor-due-time-icon').innerHTML = icon('clock');
 el('editor-due-icon').innerHTML = icon('calendar');
 el('editor-priority-icon').innerHTML = icon('flag');
 el('editor-repeat-icon').innerHTML = icon('repeat');
-if (el('editor-tag-add-icon')) el('editor-tag-add-icon').innerHTML = icon('plus');
-if (el('editor-add-prop-icon')) el('editor-add-prop-icon').innerHTML = icon('plus');
-if (el('add-prop-due-icon')) el('add-prop-due-icon').innerHTML = icon('calendar');
-if (el('add-prop-time-icon')) el('add-prop-time-icon').innerHTML = icon('clock');
-if (el('add-prop-priority-icon')) el('add-prop-priority-icon').innerHTML = icon('flag');
-if (el('add-prop-repeat-icon')) el('add-prop-repeat-icon').innerHTML = icon('repeat');
-if (el('add-prop-tag-icon')) el('add-prop-tag-icon').innerHTML = icon('plus');
 // Native date/select controls each draw their own tiny, OS-styled open affordance (a calendar
 // glyph, a dropdown arrow) at the far right of these pills - low-contrast in dark mode and
 // reported live as "hard to read" and "a difficult workflow" (the exact pixel had to be tapped,
@@ -849,18 +831,12 @@ function closeOpenPopups() {
   listFilterRow.classList.add('hidden');
   closeBulkTagPopup();
   closeTagSuggest();
-  if (typeof hideTagInput === 'function') hideTagInput();
   quickAddPopup.classList.add('hidden');
   if (!onboardingModal.classList.contains('hidden')) closeOnboarding();
 }
 function closeDropdowns({ except }) {
-  for (const d of [menuDropdown, accountDropdown, settingsDropdown, aboutDropdown, editorMoreDropdown, editorAddPropDropdown]) {
-    if (d && d !== except) {
-      d.classList.add('hidden');
-      if (d === editorAddPropDropdown || d === editorMoreDropdown) {
-        d.style.left = d.style.right = d.style.top = d.style.bottom = '';
-      }
-    }
+  for (const d of [menuDropdown, accountDropdown, settingsDropdown, aboutDropdown, editorMoreDropdown]) {
+    if (d !== except) d.classList.add('hidden');
   }
 }
 
@@ -3115,12 +3091,8 @@ function renderEditor(task) {
     control.closest('.editor-field').classList.toggle('disabled', locked);
   }
   editorTagInput.disabled = locked;
-  editorTagAddBtn.classList.toggle('hidden', locked || task.Tags.length === 0);
-  editorAddPropWrap.classList.toggle('hidden', locked);
-  if (locked) {
-    hideTagInput();
-    closeTagSuggest();
-  }
+  editorTagInput.closest('.tag-input-wrap').classList.toggle('hidden', locked);
+  if (locked) closeTagSuggest();
 
   editorTags.innerHTML = '';
   for (const tag of task.Tags) {
@@ -3206,13 +3178,14 @@ editorTitle.addEventListener('input', (e) => {
 function renderDueFields(task, locked) {
   const due = task.DueDate ? parseDotNetDate(task.DueDate) : null;
   editorDue.value = due ? toDateInputValue(due) : '';
-  const hasTime = !!due && (due.getHours() !== 0 || due.getMinutes() !== 0);
-  editorDueLabel.textContent = due ? formatDueLabel(due, { includeTime: hasTime }) : 'Due date';
+  editorDueLabel.textContent = due ? formatDueLabel(due, { includeTime: false }) : 'Due date';
   editorDueField.classList.toggle('empty', !due);
   editorDueField.classList.toggle('overdue', isTaskOverdue(task));
+  const hasTime = !!due && (due.getHours() !== 0 || due.getMinutes() !== 0);
   editorDueTime.value = hasTime ? `${String(due.getHours()).padStart(2, '0')}:${String(due.getMinutes()).padStart(2, '0')}` : '';
   editorDueTimeLabel.textContent = hasTime ? formatTimeOfDay(due) : 'Add time';
-  editorDueTimeField.classList.toggle('hidden', true);
+  editorDueTimeField.classList.toggle('hidden', !due);
+  editorDueTimeField.classList.toggle('empty', !hasTime);
   editorDueClear.classList.toggle('hidden', !due || locked);
 }
 
@@ -3240,30 +3213,19 @@ editorDueTime.addEventListener('change', () => {
   commitDueChange(task);
 });
 
-editorDueClear.addEventListener('click', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
+editorDueClear.addEventListener('click', () => {
   const task = findTask(selectedTaskId);
   if (!task) return;
   task.DueDate = null;
   commitDueChange(task);
 });
 
-// Priority "None" and Repeat "Never" are hidden from the chips row by default to keep the task
-// uncluttered, accessible via "+ Add…". When set, they display as scannable, accented pills.
+// Priority "None" and Repeat "Never" say nothing, so those pills collapse to their icon until a
+// value is picked (styles.css .editor-field.unset) - the meta row on a phone was five text pills
+// wide before anything had been set. The pill still opens its picker and keeps its title/aria-label.
 function updateMetaPillState(task) {
-  const priority = task.Priority ?? TaskPriority.None;
-  const hasPriority = priority !== TaskPriority.None;
-  editorPriorityField.classList.toggle('hidden', !hasPriority);
-  editorPriorityField.classList.remove('priority-high', 'priority-medium', 'priority-low');
-  if (priority === TaskPriority.High) editorPriorityField.classList.add('priority-high');
-  else if (priority === TaskPriority.Medium) editorPriorityField.classList.add('priority-medium');
-  else if (priority === TaskPriority.Low) editorPriorityField.classList.add('priority-low');
-
-  const hasRecurrence = task.Recurrence !== RecurrenceRule.None;
-  editorRepeatField.classList.toggle('hidden', !hasRecurrence);
-  editorRepeatField.classList.toggle('has-recurrence', hasRecurrence);
-  editorRecurrenceIntervalField.classList.toggle('hidden', !hasRecurrence);
+  editorPriority.closest('.editor-field').classList.toggle('unset', (task.Priority ?? TaskPriority.None) === TaskPriority.None);
+  editorRecurrence.closest('.editor-field').classList.toggle('unset', task.Recurrence === RecurrenceRule.None);
 }
 
 editorPriority.addEventListener('change', () => {
@@ -3295,131 +3257,27 @@ editorRecurrenceInterval.addEventListener('change', () => {
   markDirty();
 });
 
-// Expanding tag input: collapses to "+ Tag" chip to save vertical space; expands when activated
-function showTagInput() {
-  editorTagAddBtn.classList.add('hidden');
-  editorTagInput.classList.remove('hidden');
-  editorTagInput.focus();
-  renderTagSuggestions();
-}
-function hideTagInput() {
-  if (!editorTagInput.value.trim()) {
-    editorTagInput.classList.add('hidden');
-    const task = findTask(selectedTaskId);
-    const locked = task?.IsDone || task?.IsClosed;
-    editorTagAddBtn.classList.toggle('hidden', locked || (task && task.Tags.length === 0));
-    closeTagSuggest();
-  }
-}
-editorTagAddBtn.addEventListener('click', () => {
-  showTagInput();
-});
-editorTagInput.addEventListener('blur', () => {
-  setTimeout(() => {
-    if (!tagSuggestPopup || tagSuggestPopup.classList.contains('hidden')) hideTagInput();
-  }, 180);
-});
-
 function commitTagInput() {
-  if (!editorTagInput.value.trim()) {
-    hideTagInput();
-    return;
-  }
+  if (!editorTagInput.value.trim()) return;
   const task = findTask(selectedTaskId);
   if (!task) return;
   addTag(task, editorTagInput.value);
   editorTagInput.value = '';
   renderTagSuggestions();
-  hideTagInput();
 }
 editorTagInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') commitTagInput();
-  else if (e.key === 'Escape') {
-    editorTagInput.value = '';
-    closeTagSuggest();
-    hideTagInput();
-  }
+  else if (e.key === 'Escape') closeTagSuggest();
 });
+// Many Android on-screen keyboards (Gboard included, with word prediction active) never fire a
+// real keydown for the Enter/Done key - they only surface it here, as an input event carrying
+// inputType "insertLineBreak". Without this, Enter silently did nothing on those keyboards even
+// though the exact same code path worked fine everywhere else. Reuses commitTagInput()'s own
+// guard (empty value after the keydown handler already ran) so a keyboard that fires both isn't
+// double-handled.
 editorTagInput.addEventListener('input', (e) => {
   if (e.inputType === 'insertLineBreak') commitTagInput();
   else renderTagSuggestions();
-});
-
-// "+ Add…" dropdown for adding properties without cluttering the screen
-editorAddPropBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const opening = editorAddPropDropdown.classList.contains('hidden');
-  closeDropdowns({});
-  if (opening) {
-    const task = findTask(selectedTaskId);
-    if (task) {
-      const hasDue = !!task.DueDate;
-      const due = hasDue ? parseDotNetDate(task.DueDate) : null;
-      const hasTime = !!due && (due.getHours() !== 0 || due.getMinutes() !== 0);
-      const dueTextEl = el('add-prop-due-text');
-      if (dueTextEl) dueTextEl.textContent = hasDue ? 'Change due date' : 'Due date';
-      else addPropDueBtn.innerHTML = `${icon('calendar')} ${hasDue ? 'Change due date' : 'Due date'}`;
-      addPropTimeBtn.classList.toggle('hidden', hasTime);
-      addPropPriorityBtn.classList.toggle('hidden', (task.Priority ?? TaskPriority.None) !== TaskPriority.None);
-      addPropRepeatBtn.classList.toggle('hidden', task.Recurrence !== RecurrenceRule.None);
-    }
-    editorAddPropDropdown.style.left = editorAddPropDropdown.style.right = editorAddPropDropdown.style.top = editorAddPropDropdown.style.bottom = '';
-    editorAddPropDropdown.classList.remove('hidden');
-    const rect = editorAddPropDropdown.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 8) {
-      editorAddPropDropdown.style.left = 'auto';
-      editorAddPropDropdown.style.right = '0';
-    } else {
-      editorAddPropDropdown.style.left = '0';
-      editorAddPropDropdown.style.right = 'auto';
-    }
-  }
-});
-
-addPropDueBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  try { editorDue.showPicker(); } catch { editorDue.click(); }
-});
-
-addPropTimeBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  const task = findTask(selectedTaskId);
-  if (!task) return;
-  if (!task.DueDate) {
-    task.DueDate = formatDotNetDate(new Date());
-    commitDueChange(task);
-  }
-  try { editorDueTime.showPicker(); } catch { editorDueTime.click(); }
-});
-
-addPropPriorityBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  const task = findTask(selectedTaskId);
-  if (!task) return;
-  editorPriorityField.classList.remove('hidden');
-  try { editorPriority.showPicker(); } catch {}
-  editorPriority.focus();
-});
-
-addPropRepeatBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  const task = findTask(selectedTaskId);
-  if (!task) return;
-  editorRepeatField.classList.remove('hidden');
-  if (task.Recurrence === RecurrenceRule.None) {
-    task.Recurrence = RecurrenceRule.Weekly;
-    editorRecurrence.value = String(RecurrenceRule.Weekly);
-    touch(task);
-    markDirty();
-    updateMetaPillState(task);
-  }
-  try { editorRecurrence.showPicker(); } catch {}
-  editorRecurrence.focus();
-});
-
-addPropTagBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  showTagInput();
 });
 
 // Tag picker dropdown (mirrors desktop's tag popup - TaskDetailViewModel's IsTagPopupOpen/
@@ -3510,18 +3368,7 @@ editorMoreBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   const opening = editorMoreDropdown.classList.contains('hidden');
   closeDropdowns({});
-  if (opening) {
-    editorMoreDropdown.style.left = editorMoreDropdown.style.right = editorMoreDropdown.style.top = editorMoreDropdown.style.bottom = '';
-    editorMoreDropdown.classList.remove('hidden');
-    const rect = editorMoreDropdown.getBoundingClientRect();
-    if (rect.left < 8) {
-      editorMoreDropdown.style.left = '0';
-      editorMoreDropdown.style.right = 'auto';
-    } else {
-      editorMoreDropdown.style.left = 'auto';
-      editorMoreDropdown.style.right = '0';
-    }
-  }
+  if (opening) editorMoreDropdown.classList.remove('hidden');
 });
 
 editorDoneBtn.addEventListener('click', () => {

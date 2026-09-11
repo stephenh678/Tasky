@@ -1,4 +1,4 @@
-// Tasky Web service worker: precaches the app shell so an installed PWA launches with no
+﻿// Tasky Web service worker: precaches the app shell so an installed PWA launches with no
 // connection (ROADMAP.md #6/#7 - previously a deliberate pass-through that existed only to satisfy
 // Chrome's installability check). Together with docs/js/snapshot.js (the local copy of the task
 // data) this gives the same launch-offline, sync-when-you-can model the desktop app has.
@@ -22,7 +22,7 @@
 // already-open page only ever asks for its own version's assets: those are served cache-first from
 // whichever cache still has them, or from the network - never silently swapped for newer bytes.
 
-const SHELL_VERSION = '?v=24';
+const SHELL_VERSION = '?v=25';
 const CACHE_NAME = `tasky-shell-${SHELL_VERSION.replace('?v=', '')}`;
 
 const SHELL_FILES = [

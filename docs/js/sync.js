@@ -1,8 +1,8 @@
-// Port of MainViewModel.cs's per-task 3-way merge (MergeRemoteState / ApplyTaskFields /
+﻿// Port of MainViewModel.cs's per-task 3-way merge (MergeRemoteState / ApplyTaskFields /
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=24';
+import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=25';
 
 // ROADMAP.md #140: DeletedTasks used to grow unbounded on both platforms - every permanent delete
 // added a record that got merged and re-uploaded forever. Tombstones older than RETENTION_MS are

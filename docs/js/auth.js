@@ -1,4 +1,4 @@
-// Google sign-in via the Authorization Code + redirect flow - the only way to get a genuine
+﻿// Google sign-in via the Authorization Code + redirect flow - the only way to get a genuine
 // full-page redirect (no popup window at all) while still ending with a usable access token.
 //
 // The token model (initTokenClient) was tried first since it needs no backend at all, but it's
@@ -26,8 +26,8 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=24';
-import { storage, sessionStore } from './storage.js?v=24';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=25';
+import { storage, sessionStore } from './storage.js?v=25';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';

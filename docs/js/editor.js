@@ -1,4 +1,4 @@
-// Renders a task's Body as editable blocks. Rtf (WPF's rich-text format for a block) is
+﻿// Renders a task's Body as editable blocks. Rtf (WPF's rich-text format for a block) is
 // desktop-only - there's no browser engine for it, so the web editor works purely off each
 // block's plain-text mirror. Reading a desktop-authored block still shows its Text fine; editing
 // it here just never repopulates Rtf, so the desktop app falls back to unformatted text for
@@ -13,11 +13,11 @@ import {
   newChecklistItem,
   extractInlineImageFileNames,
   extractInlineFileNames,
-} from './model.js?v=24';
-import { icon } from './icons.js?v=24';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=24';
-import { storage } from './storage.js?v=24';
-import { openDialog, trapFocus } from './dialog.js?v=24';
+} from './model.js?v=25';
+import { icon } from './icons.js?v=25';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=25';
+import { storage } from './storage.js?v=25';
+import { openDialog, trapFocus } from './dialog.js?v=25';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.

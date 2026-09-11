@@ -29,6 +29,7 @@ import { openDialog, trapFocus } from './dialog.js?v=24';
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
 const signinBtn = el('signin-btn');
+const guestBtn = el('guest-btn');
 const signinStatus = el('signin-status');
 const signinVersionEl = el('signin-version');
 const aboutVersionEl = el('about-version');
@@ -501,6 +502,110 @@ const SECTIONS = [
   { kind: 'trash', label: 'Trash' },
 ];
 
+let isGuestMode = false;
+
+function initGuestSampleTasks() {
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const tomorrow = new Date(now.getTime() + 86400000);
+  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+  appState = {
+    Tasks: [
+      {
+        Id: crypto.randomUUID(),
+        Title: 'Welcome to Tasky! Tap this task to explore the modern UI',
+        IsCompleted: false,
+        Priority: 2,
+        DueDate: todayStr,
+        DueTime: '10:00',
+        Tags: ['welcome', 'ui-modern'],
+        CreatedDate: new Date().toISOString(),
+        ModifiedDate: new Date().toISOString(),
+        Body: [
+          { Id: crypto.randomUUID(), Type: 'Text', Content: 'Tasky Desktop and Web/Mobile have been modernized with frosted glass headers, elevated task cards, and modern theme palettes.' },
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Test task creation with + button', Checked: true },
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Test mobile responsive tab bar', Checked: false },
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Switch between Light and Dark themes', Checked: false }
+        ]
+      },
+      {
+        Id: crypto.randomUUID(),
+        Title: 'Quarterly Project Plan & Review',
+        IsCompleted: false,
+        Priority: 1,
+        DueDate: tomorrowStr,
+        DueTime: '14:30',
+        Tags: ['work', 'planning'],
+        CreatedDate: new Date().toISOString(),
+        ModifiedDate: new Date().toISOString(),
+        Body: [
+          { Id: crypto.randomUUID(), Type: 'Text', Content: 'Draft design spec and coordinate with team members.' }
+        ]
+      },
+      {
+        Id: crypto.randomUUID(),
+        Title: 'Weekly grocery list',
+        IsCompleted: false,
+        Priority: 0,
+        DueDate: null,
+        DueTime: null,
+        Tags: ['personal'],
+        CreatedDate: new Date().toISOString(),
+        ModifiedDate: new Date().toISOString(),
+        Body: [
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Almond milk', Checked: true },
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Fresh fruit & berries', Checked: false },
+          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Coffee beans', Checked: false }
+        ]
+      },
+      {
+        Id: crypto.randomUUID(),
+        Title: 'Reviewed Tasky v1.2 release notes',
+        IsCompleted: true,
+        Priority: 0,
+        DueDate: todayStr,
+        Tags: ['release'],
+        CreatedDate: new Date().toISOString(),
+        ModifiedDate: new Date().toISOString(),
+        Body: []
+      }
+    ],
+    DeletedTasks: [],
+    SavedViews: [],
+    DeletedSavedViewIds: []
+  };
+}
+
+async function startGuestMode() {
+  isGuestMode = true;
+  signinScreen.classList.add('hidden');
+  appEl.classList.remove('hidden');
+  setStatus('Loading local workspace…');
+  signedOutModalShown = false;
+  accountBtn.textContent = 'G';
+  accountBtn.title = 'Local Test Mode (Saved in browser storage)';
+  accountNameEl.textContent = 'Local Guest';
+  accountEmailEl.textContent = 'local.guest@tasky';
+
+  const snap = await readSnapshot();
+  if (snap?.appState?.Tasks && snap.appState.Tasks.length > 0) {
+    appState = snap.appState;
+    appState.Tasks.forEach(normalizeTask);
+    appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
+    appState.SavedViews ??= [];
+    appState.DeletedSavedViewIds ??= [];
+  } else {
+    initGuestSampleTasks();
+  }
+  setSyncState('local', 'Saved locally in browser');
+  setStatus(`Loaded ${appState.Tasks.length} task(s) (Local Mode)`, { autoHide: true });
+  renderSidebar();
+  renderList();
+  scheduleSnapshot();
+  restorePlace();
+}
+
 // --- Boot: first check whether this load is Google redirecting back from sign-in, then fall
 // back to the localStorage cache. Neither path ever risks a surprise redirect on page load -
 // handleRedirectReturn() only acts on ?code=/?error= params that Google itself put there.
@@ -513,29 +618,21 @@ const SECTIONS = [
 // endpoint and substitute its own streamlined "Sign in with Google" identity-only flow, silently
 // dropping the Drive scope no matter what was actually requested.
 async function boot() {
-  // handleRedirectReturn() below does a real network round-trip (code-for-token exchange, plus a
-  // userinfo fetch - possibly a Cloud Run cold start) before it resolves, and signin-screen starts
-  // visible with no JS needed to show it. Flipping the button straight to its normal "ready to
-  // sign in" state here, before that await, meant it looked completely unchanged - full sign-in
-  // screen, active "Sign in with Google" button - for that whole multi-second window right after
-  // the user finished Google's consent screen and got redirected back. Reported live: "the sign in
-  // still shows for a few moments then disappears... strange that this is displayed even after I
-  // signed in." Detecting a redirect return up front (cheap, synchronous) and showing a distinct
-  // "completing" state instead fixes that - it's still the same screen, but it no longer looks
-  // like sign-in silently didn't register.
   const params = new URLSearchParams(window.location.search);
   const isRedirectReturn = params.has('code') || params.has('error');
-  // manifest.json's "New Task" shortcut (long-press the installed PWA's icon on a phone home
-  // screen, or right-click it on a desktop install's taskbar/Start menu) launches straight to this
-  // URL - the actual web/PWA equivalent of the desktop app's tray-icon menu item and Ctrl+Alt+T
-  // global hotkey, both reachable without the app already being open. Checked once here rather than
-  // read fresh after sign-in, since a redirect round-trip through Google's consent screen (see
-  // isRedirectReturn above) could plausibly rewrite location.search by the time onSignedIn resolves.
+  const isTestMode = params.get('test') === '1' || params.get('demo') === '1' || params.get('guest') === '1';
+
+  if (isTestMode) {
+    await startGuestMode();
+    return;
+  }
+
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocalHost && !isRedirectReturn) {
+    signinStatus.innerHTML = '<span style="color:var(--accent); font-weight:600;">Running locally:</span> Google OAuth requires registered domains. Click <strong>Continue as Guest</strong> to test all features locally.';
+  }
+
   const quickAddRequested = params.get('quickadd') === '1';
-  // Cleared up front so a later page refresh doesn't reopen the popup every time - but only in the
-  // direct-launch case, since auth.js's own handleRedirectReturn() below still needs to read
-  // ?code=/?error= off window.location.search itself when isRedirectReturn is true (and already
-  // clears the whole query string once it's done, taking quickadd along with it).
   if (quickAddRequested && !isRedirectReturn) history.replaceState(null, '', location.pathname);
 
   if (isRedirectReturn) {
@@ -612,8 +709,21 @@ function armHistoryTrap() {
   });
 }
 
+guestBtn?.addEventListener('click', () => {
+  startGuestMode();
+});
+
 signinBtn.addEventListener('click', () => {
   signinStatus.textContent = '';
+  if (window.self !== window.top) {
+    signinStatus.textContent = 'Google Sign-In is blocked inside embedded frames. Click "Continue as Guest" below or open in a full tab.';
+    return;
+  }
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocalHost) {
+    signinStatus.textContent = 'Google OAuth restricts logins to https://stephenh678.github.io. Use "Continue as Guest" for local testing.';
+    return;
+  }
   try {
     auth.signIn(); // navigates the tab to Google's consent screen - nothing to await here
   } catch (err) {
@@ -635,6 +745,14 @@ accountSignoutBtn.addEventListener('click', async () => {
     const confirmed = await confirmModal('You have unsaved changes that will be lost if you sign out now. Sign out anyway?',
       { title: 'Unsaved Changes', confirmLabel: 'Sign out', danger: true });
     if (!confirmed) return;
+  }
+  if (isGuestMode) {
+    isGuestMode = false;
+    clearTimeout(snapshotTimer);
+    await clearSnapshot();
+    storage.remove(PLACE_KEY);
+    location.href = location.pathname;
+    return;
   }
   auth.signOut();
   clearTimeout(snapshotTimer);
@@ -1003,6 +1121,28 @@ async function onSignedIn() {
 }
 
 async function loadFromDrive() {
+  if (isGuestMode) {
+    const snap = await readSnapshot();
+    if (snap?.appState?.Tasks && snap.appState.Tasks.length > 0) {
+      appState = snap.appState;
+      appState.Tasks.forEach(normalizeTask);
+      appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
+      appState.SavedViews ??= [];
+      appState.DeletedSavedViewIds ??= [];
+    } else {
+      initGuestSampleTasks();
+    }
+    loadError = null;
+    loadErrorIsAuthFailure = false;
+    loadErrorNeedsDriveConsent = false;
+    renderSidebar();
+    renderList();
+    scheduleSnapshot();
+    restorePlace();
+    setSyncState('local');
+    setStatus(`Loaded ${appState.Tasks.length} task(s) (Local Mode)`, { autoHide: true });
+    return;
+  }
   // Already running on the local copy (Retry button, or a second call): a fresh download would
   // overwrite whatever was edited offline. A forced sync merges instead, and its success path
   // clears bootedFromSnapshot.
@@ -1573,7 +1713,9 @@ async function performSave({ force, statusVerb }) {
       ? `Synced - ${conflicted} edit${conflicted === 1 ? '' : 's'} conflicted with a remote change and ` +
         `${conflicted === 1 ? 'was' : 'were'} kept as "(conflicted copy)".`
       : null;
-    if (conflictText || notice) {
+    if (isGuestMode) {
+      setStatus('Saved locally', { autoHide: true });
+    } else if (conflictText || notice) {
       setStatus([conflictText ?? 'Saved', notice].filter(Boolean).join(' '));
     } else {
       setStatus('Saved', { autoHide: true });
@@ -1582,7 +1724,7 @@ async function performSave({ force, statusVerb }) {
     setLastSynced(new Date());
     bootedFromSnapshot = false; // the local copy has been reconciled with Drive - back to normal
     scheduleSnapshot();
-    setSyncState(dirty ? 'pending' : 'synced');
+    setSyncState(isGuestMode ? 'local' : (dirty ? 'pending' : 'synced'));
   } catch (err) {
     dirty = hadLocalEdits; // don't invent an unsaved edit that was never there (e.g. a pull-only Sync Now)
     scheduleSnapshot(); // keep the local copy's dirty flag truthful for a killed tab
@@ -1815,6 +1957,19 @@ function setCaretOffset(el, offset) {
 // below (see mergeFromRemote), so performSave can tell the user rather than silently uploading
 // over a conflict resolution nobody saw happen.
 async function saveToDrive() {
+  if (isGuestMode) {
+    await writeSnapshot({
+      appState,
+      currentFileId: 'local-demo',
+      currentFileName: DEFAULT_DATA_FILE_NAME,
+      taskyFolderId: 'local-folder',
+      noRemoteFileYet: false,
+      dirty: false,
+      accountEmail: 'guest@local',
+    });
+    setSyncState('local');
+    return 0;
+  }
   // A photo/file that's been picked but not yet fully uploaded is already referenced by name in
   // task.Body - serializing now would publish a pointer to bytes that aren't on Drive yet (and
   // never will be, if this page dies mid-upload). editor.js tracks every in-flight upload,

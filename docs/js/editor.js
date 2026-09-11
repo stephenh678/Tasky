@@ -13,11 +13,11 @@ import {
   newChecklistItem,
   extractInlineImageFileNames,
   extractInlineFileNames,
-} from './model.js?v=29';
-import { icon } from './icons.js?v=29';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=29';
-import { storage } from './storage.js?v=29';
-import { openDialog, trapFocus } from './dialog.js?v=29';
+} from './model.js?v=30';
+import { icon } from './icons.js?v=30';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=30';
+import { storage } from './storage.js?v=30';
+import { openDialog, trapFocus } from './dialog.js?v=30';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.
@@ -188,7 +188,7 @@ function renderTextBlock(block, task, index, onChange, readOnly) {
     // SyntaxError from an engine that rejects the value outright.
   }
   if (!plainTextOnly) div.contentEditable = 'true';
-  div.dataset.placeholder = 'Type…';
+  div.dataset.placeholder = 'Notes…';
   div.addEventListener('input', () => {
     block.Text = div.innerText;
     // Desktop's loader checks Rtf first and, if present, displays THAT instead of Text - Rtf is

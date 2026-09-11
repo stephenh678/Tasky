@@ -1083,7 +1083,12 @@ kbd {
 /* Title carries at most one lightweight header action (the overflow menu) - see index.html's
    comment on .editor-title-row for why Done/Pin moved out of here and into the pill row below,
    leaving only the rare/destructive Trash/Delete actions behind the "more" button. */
-.editor-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.editor-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
 /* Read-only lock for Done/Trashed tasks (renderEditor in app.js sets .locked on #editor-content
    and fills this notice) - same rule as desktop's TaskDetailViewModel.IsEditable. Locked pills and
    the body dim rather than disappear, so the task still reads normally; only the affordances go. */
@@ -1106,13 +1111,14 @@ kbd {
 /* Trash section: the Done checkbox is meaningless on a trashed row (see renderList's in-trash
    toggle); swipe/bulk Restore and Delete are the row's actions there. */
 .task-list.in-trash .done-checkbox-wrap { display: none; }
+.editor-title-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-top: -2px; }
 .editor-more-wrap { position: relative; flex-shrink: 0; }
 .dropdown-item.danger { color: var(--danger-text); }
 
 .editor-title {
   flex: 1;
   min-width: 0;
-  font-size: 1.5em;
+  font-size: 1.4em;
   font-weight: 700;
   font-family: inherit;
   border: none;
@@ -1120,17 +1126,29 @@ kbd {
   color: var(--text);
   letter-spacing: -0.01em;
   padding: 0;
-  line-height: 1.25;
+  line-height: 1.3;
   resize: none;
   overflow: hidden;
 }
-/* One compact metadata strip (Due/Repeat/Tags) instead of three separate labeled rows - Due/Repeat
-   share the tag chips' exact pill styling (background/radius/padding below) so every piece of task
-   metadata reads as the same small family of scannable pills, icon-led instead of text-labeled
-   ("Due"/"Repeats" read as form labels; a calendar/repeat icon says the same thing in less width
-   and less visual noise). Mirrors how Google Tasks/Apple Reminders keep due-date and repeat as
-   compact, icon-led controls rather than always-open labeled form rows. */
-.editor-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.editor-pin-btn {
+  color: var(--text-dim);
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+.editor-pin-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.editor-pin-btn.active {
+  color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
+}
+.editor-pin-btn.active .icon {
+  fill: currentColor;
+}
+
+/* Streamlined metadata chips row */
+.editor-meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .editor-field {
   display: inline-flex;
   align-items: center;
@@ -1151,11 +1169,6 @@ kbd {
 }
 .editor-field-icon { display: flex; flex-shrink: 0; }
 .editor-field-icon .icon { width: 14px; height: 14px; color: var(--text-dim); }
-/* Replaces the native calendar-icon/dropdown-arrow indicators (hidden below) - those render as a
-   tiny, OS-drawn, low-contrast glyph that's easy to miss in dark mode and, on the date field, was
-   the one exact spot that had to be tapped for the picker to open. This single higher-contrast
-   chevron is the field's only "opens a picker" affordance now; the whole-pill click handler in
-   app.js is what actually opens it regardless of where within the pill was tapped. */
 .editor-field-arrow { display: flex; flex-shrink: 0; margin-left: auto; pointer-events: none; }
 .editor-field-arrow .icon { width: 12px; height: 12px; color: var(--text-dim); }
 .editor-field input, .editor-field select {
@@ -1169,9 +1182,8 @@ kbd {
 }
 .editor-field select { appearance: none; -webkit-appearance: none; }
 .editor-field input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0; }
-/* Due date/time pills: the native control is stretched invisibly over the whole pill so a tap
-   anywhere opens the OS picker, while the visible text is the relative label app.js renders
-   (Today 3:00 PM · Tomorrow · Mon · Sep 24). See #editor-due-field's comment in index.html. */
+
+.editor-due-group { display: inline-flex; align-items: center; position: relative; }
 .editor-due-field { position: relative; }
 .editor-due-field input[type="date"],
 .editor-due-field input[type="time"] {
@@ -1180,17 +1192,34 @@ kbd {
 }
 .editor-due-field.disabled input { cursor: default; }
 .editor-due-label { white-space: nowrap; }
-/* Priority "None" / Repeat "Never" pills collapse to their icon (app.js updateMetaPillState) -
-   the <select> is stretched invisibly over the pill, same trick as the due fields above, so a tap
-   anywhere still opens it and keyboard focus still lands on it. */
-.editor-field.unset { position: relative; border-style: dashed; }
-.editor-field.unset select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; }
-.editor-field.unset .editor-field-arrow { display: none; }
+
+.editor-due-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--pane-bg);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+  z-index: 2;
+  box-shadow: var(--shadow);
+}
+.editor-due-clear-btn:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.editor-due-clear-btn .icon { width: 10px; height: 10px; }
+
 .editor-field:has(select:focus-visible), .editor-field:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .editor-due-field.empty .editor-due-label { color: var(--text-dim); }
 .editor-field.overdue .editor-due-label { color: var(--danger-text); }
-.editor-due-clear { padding: 3px 7px; min-width: 32px; justify-content: center; }
-.editor-due-clear .icon { width: 14px; height: 14px; color: var(--text-dim); }
 .editor-field.overdue {
   background: color-mix(in srgb, var(--danger) 14%, var(--selected));
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
@@ -1198,6 +1227,48 @@ kbd {
 .editor-field.overdue .editor-field-icon .icon,
 .editor-field.overdue .editor-field-arrow .icon,
 .editor-field.overdue input { color: var(--danger-text); }
+
+/* Priority badges */
+.editor-priority-field.priority-high {
+  background: color-mix(in srgb, var(--danger) 14%, var(--pane-bg));
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  color: var(--danger-text);
+}
+.editor-priority-field.priority-high .editor-field-icon .icon,
+.editor-priority-field.priority-high select {
+  color: var(--danger-text);
+  font-weight: 500;
+}
+.editor-priority-field.priority-medium {
+  background: color-mix(in srgb, var(--warning) 14%, var(--pane-bg));
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+  color: var(--warning);
+}
+.editor-priority-field.priority-medium .editor-field-icon .icon,
+.editor-priority-field.priority-medium select {
+  color: var(--warning);
+  font-weight: 500;
+}
+.editor-priority-field.priority-low {
+  background: color-mix(in srgb, var(--accent) 12%, var(--pane-bg));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+}
+.editor-priority-field.priority-low .editor-field-icon .icon,
+.editor-priority-field.priority-low select {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Repeat badge */
+.editor-repeat-field.has-recurrence {
+  background: color-mix(in srgb, var(--accent) 12%, var(--pane-bg));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
+}
+.editor-repeat-field.has-recurrence .editor-field-icon .icon {
+  color: var(--accent);
+}
 /* Done and Pin share the same pill as Due/Repeat (see .editor-meta-row's comment) instead of the
    checkbox+label / bare icon button they used to be - a checked/pinned state reuses the same
    "active" treatment as everywhere else a pill or chip can be toggled on (sidebar selection, sort
@@ -1253,14 +1324,7 @@ kbd {
   border-color: var(--accent);
   color: var(--accent-text);
 }
-.editor-field#editor-pin-btn .editor-field-icon .icon { width: 15px; height: 15px; }
-.editor-field#editor-pin-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
-.editor-field#editor-pin-btn.active .editor-field-icon .icon { color: var(--accent-text); }
-.editor-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.editor-tags { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .tag-chip {
   background: var(--hover);
   border: 1px solid var(--border);
@@ -1277,25 +1341,60 @@ kbd {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .tag-chip button { border: none; background: none; cursor: pointer; color: var(--text-dim); }
+
+.tag-add-chip {
+  color: var(--text-dim);
+  border-style: dashed;
+}
+.tag-add-chip:hover {
+  border-style: solid;
+  color: var(--text);
+  background: var(--selected);
+}
+.tag-add-chip .icon { width: 12px; height: 12px; }
+
+.editor-add-prop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.editor-add-prop-btn {
+  color: var(--text-dim);
+  border-style: dashed;
+}
+.editor-add-prop-btn:hover {
+  border-style: solid;
+  color: var(--text);
+  background: var(--selected);
+}
+.editor-add-prop-btn .icon { width: 12px; height: 12px; }
+
+.dropdown-item-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 8px;
+}
+.dropdown-item-icon .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+}
+
 .tag-input {
   border: 1px solid var(--border);
   background: var(--pane-bg);
   color: var(--text);
   border-radius: 8px;
-  padding: 5px 10px;
+  padding: 4px 10px;
   font-size: 0.85em;
   outline: none;
+  min-height: 32px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .tag-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
-/* Tag picker dropdown (mirrors desktop's tag popup - TaskDetailViewModel's IsTagPopupOpen/
-   FilteredAvailableTags/CanCreateNewTag) - web previously had only the raw text input with no way
-   to browse or click an existing tag, reported live as "tag dropdown is not working." Opens on
-   focus, filters live as you type, closes on blur/outside-click/Escape/commit. */
-.tag-input-wrap { position: relative; }
+.tag-input-wrap { position: relative; display: inline-flex; align-items: center; }
 .tag-suggest-popup {
   position: absolute;
   top: calc(100% + 4px);
@@ -1332,8 +1431,13 @@ kbd {
   background: var(--pane-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 18px 20px;
   box-shadow: var(--shadow);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.editor-body:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 .block-wrap { position: relative; margin-bottom: 8px; padding-right: 24px; }
 .block-remove {
@@ -1537,8 +1641,10 @@ kbd {
     max-width: none;
     word-break: break-word;
   }
-  .save-status:empty { display: none; }
   .sidebar, .list-pane, .editor-pane { padding-bottom: var(--mobile-bottom-chrome); }
+  .editor-pane { padding: 14px 14px var(--mobile-bottom-chrome); }
+  .editor-body { padding: 14px; border-radius: 12px; }
+  .editor-title { font-size: 1.3em; }
 
   :root {
     --mobile-tabbar-height: calc(50px + env(safe-area-inset-bottom, 0px));

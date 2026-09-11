@@ -37,7 +37,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=30" />
+  <link rel="stylesheet" href="css/styles.css?v=31" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -327,11 +327,11 @@
                 <span>Add…</span>
               </button>
               <div id="editor-add-prop-dropdown" class="dropdown dropdown-left hidden">
-                <button type="button" class="dropdown-item" id="add-prop-due-btn"><span class="dropdown-item-icon" id="add-prop-due-icon"></span> Due date</button>
-                <button type="button" class="dropdown-item" id="add-prop-time-btn"><span class="dropdown-item-icon" id="add-prop-time-icon"></span> Time</button>
-                <button type="button" class="dropdown-item" id="add-prop-priority-btn"><span class="dropdown-item-icon" id="add-prop-priority-icon"></span> Priority…</button>
-                <button type="button" class="dropdown-item" id="add-prop-repeat-btn"><span class="dropdown-item-icon" id="add-prop-repeat-icon"></span> Repeat…</button>
-                <button type="button" class="dropdown-item" id="add-prop-tag-btn"><span class="dropdown-item-icon" id="add-prop-tag-icon"></span> Tag</button>
+                <button type="button" class="dropdown-item" id="add-prop-due-btn"><span class="dropdown-item-icon" id="add-prop-due-icon"></span> <span id="add-prop-due-text">Due date</span></button>
+                <button type="button" class="dropdown-item" id="add-prop-time-btn"><span class="dropdown-item-icon" id="add-prop-time-icon"></span> <span>Time</span></button>
+                <button type="button" class="dropdown-item" id="add-prop-priority-btn"><span class="dropdown-item-icon" id="add-prop-priority-icon"></span> <span>Priority…</span></button>
+                <button type="button" class="dropdown-item" id="add-prop-repeat-btn"><span class="dropdown-item-icon" id="add-prop-repeat-icon"></span> <span>Repeat…</span></button>
+                <button type="button" class="dropdown-item" id="add-prop-tag-btn"><span class="dropdown-item-icon" id="add-prop-tag-icon"></span> <span>Tag</span></button>
               </div>
             </div>
           </div>
@@ -506,7 +506,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=30"></script>
-  <script type="module" src="js/app.js?v=30"></script>
+  <script src="js/boot-guard.js?v=31"></script>
+  <script type="module" src="js/app.js?v=31"></script>
 </body>
 </html>

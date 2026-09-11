@@ -13,11 +13,11 @@ import {
   newChecklistItem,
   extractInlineImageFileNames,
   extractInlineFileNames,
-} from './model.js?v=30';
-import { icon } from './icons.js?v=30';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=30';
-import { storage } from './storage.js?v=30';
-import { openDialog, trapFocus } from './dialog.js?v=30';
+} from './model.js?v=31';
+import { icon } from './icons.js?v=31';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=31';
+import { storage } from './storage.js?v=31';
+import { openDialog, trapFocus } from './dialog.js?v=31';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.
@@ -94,17 +94,21 @@ export function renderEditableBody(container, task, onChange, { readOnly = false
     wrap.appendChild(renderBlock(block, task, index, onChange, readOnly));
 
     if (!readOnly) {
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'block-remove';
-      removeBtn.innerHTML = icon('x');
-      removeBtn.title = 'Remove block';
-      removeBtn.addEventListener('click', () => {
-        releaseBlockMedia(block);
-        deleteRemoteAttachmentIfAny(block);
-        task.Body.splice(index, 1);
-        onChange({ rerenderBody: true });
-      });
-      wrap.appendChild(removeBtn);
+      const isOnlyEmptyText = task.Body.length === 1 && block.Type === NoteBlockType.Text && !block.Text?.trim();
+      if (!isOnlyEmptyText) {
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'block-remove';
+        removeBtn.innerHTML = icon('x');
+        removeBtn.title = 'Remove block';
+        removeBtn.setAttribute('aria-label', 'Remove block');
+        removeBtn.addEventListener('click', () => {
+          releaseBlockMedia(block);
+          deleteRemoteAttachmentIfAny(block);
+          task.Body.splice(index, 1);
+          onChange({ rerenderBody: true });
+        });
+        wrap.appendChild(removeBtn);
+      }
     }
 
     container.appendChild(wrap);
@@ -894,119 +898,74 @@ function promptForLink() {
   });
 }
 
-// Rebuilt fully on every render (renderEditableBody clears and re-renders the whole body on most
-// edits), so the outside-click-closes listener below is registered once at module load rather
-// than once per render - it just checks whichever bar/toggle are current at click time instead of
-// accumulating a fresh document-level listener (and matching leaked closure) on every edit.
-let activeInsertBar = null;
-let activeInsertToggle = null;
-document.addEventListener('click', (e) => {
-  if (!activeInsertBar || activeInsertBar.classList.contains('hidden')) return;
-  if (activeInsertBar.contains(e.target) || e.target === activeInsertToggle) return;
-  activeInsertBar.classList.add('hidden');
-});
-
 function renderInsertToolbar(task, onChange) {
-  const wrap = document.createElement('div');
-  wrap.className = 'insert-toolbar-wrap';
-
-  // Desktop has room for all four buttons in a row (unchanged, always visible - see the
-  // min-width:768px override that forces .hidden off regardless of this class). On mobile they
-  // don't fit, so this doubles as a menu trigger there: standard mobile pattern for 3+ actions
-  // that don't fit a toolbar is one trigger with an overflow menu rather than letting them spill
-  // off-screen.
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.className = 'icon-btn insert-toggle-btn';
-  toggleBtn.setAttribute('aria-label', 'Add content');
-  toggleBtn.title = 'Add content';
-  toggleBtn.innerHTML = icon('plus');
-  toggleBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    bar.classList.toggle('hidden');
-  });
-
   const bar = document.createElement('div');
-  bar.className = 'insert-toolbar hidden';
+  bar.className = 'insert-toolbar';
 
-  const addText = document.createElement('button');
-  addText.className = 'btn btn-ghost';
-  addText.textContent = '+ Text';
-  addText.addEventListener('click', () => {
-    task.Body.push(newNoteBlock(NoteBlockType.Text, {}));
-    onChange({ rerenderBody: true });
-  });
+  const makeBtn = (iconName, label, onClick) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'insert-pill-btn';
+    btn.innerHTML = `${icon(iconName)} <span>${label}</span>`;
+    btn.addEventListener('click', onClick);
+    return btn;
+  };
 
-  const addChecklist = document.createElement('button');
-  addChecklist.className = 'btn btn-ghost';
-  addChecklist.textContent = '+ Checklist';
-  addChecklist.addEventListener('click', () => {
+  const addChecklist = makeBtn('checklist', 'Checklist', () => {
     task.Body.push(newNoteBlock(NoteBlockType.Checklist, {}));
     onChange({ rerenderBody: true });
   });
 
-  const addLink = document.createElement('button');
-  addLink.className = 'btn btn-ghost';
-  addLink.textContent = '+ Link';
-  addLink.addEventListener('click', async () => {
+  const addText = makeBtn('fileText', 'Note', () => {
+    task.Body.push(newNoteBlock(NoteBlockType.Text, {}));
+    onChange({ rerenderBody: true });
+  });
+
+  const photoInput = document.createElement('input');
+  photoInput.type = 'file';
+  photoInput.accept = 'image/*';
+  photoInput.className = 'hidden';
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files?.[0];
+    photoInput.value = '';
+    if (file) handlePhotoPick(task, file, onChange);
+  });
+  const addPhoto = makeBtn('image', 'Photo', () => photoInput.click());
+
+  const cameraInput = document.createElement('input');
+  cameraInput.type = 'file';
+  cameraInput.accept = 'image/*';
+  cameraInput.setAttribute('capture', 'environment');
+  cameraInput.className = 'hidden';
+  cameraInput.addEventListener('change', () => {
+    const file = cameraInput.files?.[0];
+    cameraInput.value = '';
+    if (file) handlePhotoPick(task, file, onChange);
+  });
+  const addCamera = makeBtn('camera', 'Camera', () => cameraInput.click());
+
+  const addLink = makeBtn('link', 'Link', async () => {
     const result = await promptForLink();
     if (!result) return;
     task.Body.push(newNoteBlock(NoteBlockType.Link, { url: result.url, linkLabel: result.label }));
     onChange({ rerenderBody: true });
   });
 
-  const addPhoto = document.createElement('button');
-  addPhoto.className = 'btn btn-ghost';
-  addPhoto.textContent = '+ Photo';
-  const photoInput = document.createElement('input');
-  photoInput.type = 'file';
-  photoInput.accept = 'image/*';
-  photoInput.className = 'hidden';
-  addPhoto.addEventListener('click', () => photoInput.click());
-  // "Take Photo" - a second file input with capture="environment", which phones open straight on
-  // the rear camera instead of the gallery picker. Only offered on touch devices; a laptop's
-  // webcam prompt for the same attribute is more confusing than useful.
-  const addCamera = document.createElement('button');
-  addCamera.className = 'btn btn-ghost';
-  addCamera.textContent = '+ Take Photo';
-  const cameraInput = document.createElement('input');
-  cameraInput.type = 'file';
-  cameraInput.accept = 'image/*';
-  cameraInput.setAttribute('capture', 'environment');
-  cameraInput.className = 'hidden';
-  addCamera.addEventListener('click', () => cameraInput.click());
-  cameraInput.addEventListener('change', () => {
-    const file = cameraInput.files?.[0];
-    cameraInput.value = '';
-    if (file) handlePhotoPick(task, file, onChange);
-  });
-
-  photoInput.addEventListener('change', () => {
-    const file = photoInput.files?.[0];
-    photoInput.value = ''; // lets the same file be picked again later
-    if (file) handlePhotoPick(task, file, onChange);
-  });
-
-  const addFile = document.createElement('button');
-  addFile.className = 'btn btn-ghost';
-  addFile.textContent = '+ File';
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.className = 'hidden';
-  addFile.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
-    fileInput.value = ''; // lets the same file be picked again later
+    fileInput.value = '';
     if (file) handleFilePick(task, file, onChange);
   });
+  const addFile = makeBtn('paperclip', 'File', () => fileInput.click());
 
-  bar.append(addText, addChecklist, addLink, addPhoto, photoInput);
+  bar.append(addChecklist, addText, addPhoto, photoInput);
   if (isTouchDevice) bar.append(addCamera, cameraInput);
-  bar.append(addFile, fileInput);
-  wrap.append(toggleBtn, bar);
-  activeInsertBar = bar;
-  activeInsertToggle = toggleBtn;
-  return wrap;
+  bar.append(addLink, addFile, fileInput);
+
+  return bar;
 }
 
 // Every attachment upload still in flight, including its rollback-on-failure. The block for a

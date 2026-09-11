@@ -286,15 +286,21 @@ a { color: var(--accent); }
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  min-width: 220px;
+  min-width: 200px;
   background: var(--pane-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
-  padding: 8px;
-  z-index: 40;
+  padding: 6px;
+  z-index: 50;
+  animation: dropdown-pop 0.15s ease-out;
+}
+@keyframes dropdown-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .dropdown-right { left: auto; right: 0; }
+.dropdown-left { left: 0; right: auto; }
 .dropdown-section-label {
   font-size: 0.72em;
   text-transform: uppercase;
@@ -303,18 +309,32 @@ a { color: var(--accent); }
   padding: 6px 8px 2px;
 }
 .dropdown-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   background: none;
   border: none;
   color: var(--text);
-  padding: 8px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 0.9em;
+  font-size: 0.88em;
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.dropdown-item:hover { background: var(--hover); }
+.dropdown-item:hover { background: var(--hover); color: var(--text); }
+.dropdown-item .icon, .dropdown-item-icon .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
+.dropdown-item:hover .icon, .dropdown-item:hover .dropdown-item-icon .icon {
+  color: var(--accent);
+}
 .dropdown-divider { height: 1px; background: var(--border); margin: 6px 4px; }
 .dropdown-email { padding: 8px; font-size: 0.85em; color: var(--text-dim); word-break: break-all; }
 /* Icon-only segmented control (like an OS appearance picker) rather than three bordered text
@@ -1104,7 +1124,7 @@ kbd {
 .editor-field.disabled { opacity: 0.55; cursor: default; }
 .editor-field.disabled input, .editor-field.disabled select { cursor: default; }
 .editor-content.locked .editor-title { cursor: default; }
-.editor-body.read-only { background: color-mix(in srgb, var(--pane-bg) 60%, var(--bg)); }
+.editor-body.read-only { background: transparent; opacity: 0.85; }
 .editor-body.read-only .block-text { cursor: default; }
 .editor-body.read-only .block-text:empty::before { content: ''; }
 .editor-body.read-only .block-checklist-item.editable input[type="text"] { cursor: default; }
@@ -1118,17 +1138,24 @@ kbd {
 .editor-title {
   flex: 1;
   min-width: 0;
-  font-size: 1.4em;
+  font-size: 1.55em;
   font-weight: 700;
   font-family: inherit;
   border: none;
   background: none;
   color: var(--text);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   padding: 0;
-  line-height: 1.3;
+  line-height: 1.35;
   resize: none;
   overflow: hidden;
+}
+.editor-title::placeholder {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+.editor-title:focus {
+  outline: none;
 }
 .editor-pin-btn {
   color: var(--text-dim);
@@ -1148,7 +1175,15 @@ kbd {
 }
 
 /* Streamlined metadata chips row */
-.editor-meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.editor-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
 .editor-field {
   display: inline-flex;
   align-items: center;
@@ -1427,47 +1462,70 @@ kbd {
 .tag-suggest-empty { padding: 6px 8px; font-size: 0.82em; color: var(--text-dim); }
 
 .editor-body {
-  line-height: 1.6;
-  background: var(--pane-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  box-shadow: var(--shadow);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  line-height: 1.65;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 0 28px;
+  box-shadow: none;
 }
 .editor-body:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: transparent;
+  box-shadow: none;
 }
-.block-wrap { position: relative; margin-bottom: 8px; padding-right: 24px; }
+.block-wrap { position: relative; margin-bottom: 6px; padding-right: 28px; }
 .block-remove {
   position: absolute;
-  top: 2px;
+  top: 4px;
   right: 0;
   border: none;
   background: none;
   color: var(--text-dim);
   cursor: pointer;
-  opacity: 0.5;
+  opacity: 0;
+  padding: 4px;
+  border-radius: 6px;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
-.block-remove:hover { opacity: 1; }
-.block-remove.small { position: static; margin-left: 4px; }
+.block-wrap:hover .block-remove,
+.block-wrap:focus-within .block-remove {
+  opacity: 0.65;
+}
+.block-remove:hover {
+  opacity: 1;
+  color: var(--danger-text);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.block-remove.small { position: static; margin-left: 4px; opacity: 0.5; }
+.block-remove.small:hover { opacity: 1; }
 .block-text {
-  min-height: 1.5em;
+  min-height: 1.6em;
   outline: none;
   padding: 4px 0;
+  font-size: 0.96em;
+  line-height: 1.65;
+  color: var(--text);
   white-space: pre-wrap;
 }
-/* outline:none above drops the browser default with nothing replacing it - a keyboard/external-
-   keyboard user editing text had no visual cue which block currently had focus. Outline doesn't
-   take layout space, so this can't shift anything else on focus. */
-.block-text:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); }
+.block-text:focus { outline: none; }
+.block-text:empty::before { content: attr(data-placeholder); color: var(--text-dim); opacity: 0.55; }
 .block-photo, .block-file { color: var(--text-dim); font-style: italic; }
 .block-photo .icon.inline-icon, .block-file-link .icon.inline-icon {
   width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px;
 }
-.block-photo-img { max-width: 100%; border-radius: 8px; display: block; cursor: zoom-in; }
+.block-photo-img {
+  max-width: 100%;
+  border-radius: 12px;
+  display: block;
+  cursor: zoom-in;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.block-photo-img:hover {
+  transform: scale(1.01);
+  box-shadow: var(--shadow-lg);
+}
 .block-photo-error { color: var(--danger-text); cursor: pointer; }
 /* Tap-to-open full-size viewer (editor.js openPhotoLightbox) - the web counterpart of desktop's
    PhotoViewerWindow. Sits on the shared .modal-overlay; the image is the whole card. */
@@ -1505,13 +1563,65 @@ kbd {
 }
 .block-photo-error:hover { text-decoration: underline; }
 .block-file-link {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--hover);
+  border: 1px solid var(--border);
   color: var(--accent);
   text-decoration: none;
   cursor: pointer;
+  font-size: 0.88em;
+  font-weight: 500;
+  transition: all 0.15s ease;
 }
-.block-file-link:hover { text-decoration: underline; }
-.block-checklist-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.block-file-link:hover {
+  background: var(--selected);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  text-decoration: none;
+}
+.block-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  transition: opacity 0.15s ease;
+}
+.block-checklist-item input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.8px solid var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.block-checklist-item input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.block-checklist-item input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.block-checklist-item input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 9px;
+  border: solid var(--accent-text);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
 .block-checklist-item.editable input[type="text"] {
   flex: 1;
   border: none;
@@ -1520,11 +1630,16 @@ kbd {
   font: inherit;
   padding: 2px 6px;
   border-radius: 4px;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .block-checklist-item.editable input[type="text"]:focus {
-  outline: 2px solid var(--accent);
+  outline: none;
   background: var(--hover);
+}
+.block-checklist-item:has(input[type="checkbox"]:checked) input[type="text"] {
+  text-decoration: line-through;
+  color: var(--text-dim);
+  opacity: 0.65;
 }
 .checklist-add {
   width: 100%;
@@ -1543,7 +1658,51 @@ kbd {
   color: var(--accent);
   background: var(--hover);
 }
-.insert-toolbar { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.checklist-add:focus {
+  outline: none;
+  color: var(--text);
+  background: var(--hover);
+}
+.insert-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  padding: 14px 0 6px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.insert-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--hover);
+  color: var(--text);
+  font-size: 0.84em;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.insert-pill-btn:hover {
+  background: var(--selected);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
+}
+.insert-pill-btn .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+  transition: color 0.15s ease;
+}
+.insert-pill-btn:hover .icon {
+  color: var(--accent);
+}
 
 /* Tablet: sidebar becomes an overlay drawer, list+editor share the width */
 @media (max-width: 1023px) {
@@ -1783,39 +1942,15 @@ kbd {
   /* Same reasoning, for the hamburger menu's own "Keyboard Shortcuts" entry. */
   .shortcuts-menu-item { display: none; }
 
-  /* Insert-block toolbar (+ Text/Checklist/Link/Photo): four buttons that fit fine on desktop's
-     wider editor pane overflow a mobile-width one. Standard fix for 3+ actions that don't fit a
-     toolbar is one trigger with an overflow menu rather than letting them spill off-screen - same
-     idiom as the Sort/Filter popup above, reused here for consistency. */
-  .insert-toolbar-wrap { position: relative; display: inline-block; }
-  .insert-toggle-btn { display: flex; }
+  /* Insert-block toolbar: clean horizontal accessory row */
   .insert-toolbar {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    margin: 0;
-    padding: 6px;
-    border-top: none;
-    background: var(--pane-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-lg);
-    z-index: 22;
-    min-width: 170px;
+    margin-top: 18px;
+    padding: 10px 0 4px;
+    gap: 6px;
   }
-  .insert-toolbar .btn { width: 100%; text-align: left; }
-}
-
-/* .insert-toolbar (the block editor's + Text/Checklist/Link/Photo row) always starts with a
-   "hidden" class in the markup - see renderInsertToolbar in editor.js - since only mobile needs it
-   collapsed behind .insert-toggle-btn (four buttons fit fine in desktop's wider editor pane). This
-   forces it visible on tablet/desktop regardless of that class, unlike .list-filter-row above which
-   now stays collapsed at every width. */
-@media (min-width: 768px) {
-  .insert-toolbar.hidden { display: flex !important; }
+  .insert-pill-btn {
+    padding: 6px 12px;
+  }
 }
 
 /* Roadmap #36: the About/Shortcuts (and Add-Link, which shares .modal-card) modals become bottom

@@ -174,7 +174,9 @@ public class TodoStoreTests : IDisposable
     {
         var store = new TodoStore { AutoBackupEnabled = true, AutoBackupIntervalMinutes = 0 };
         await store.SaveAsync(new AppState(), _dataFile);
+        await Task.Delay(5);
         await store.SaveAsync(new AppState(), _dataFile);
+        await Task.Delay(5);
         await store.SaveAsync(new AppState(), _dataFile);
 
         Assert.Equal(2, store.ListBackups(_dataFile).Count);

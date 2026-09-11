@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=30';
-import * as drive from './drive.js?v=30';
+﻿import * as auth from './auth.js?v=31';
+import * as drive from './drive.js?v=31';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -17,14 +17,14 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
-} from './model.js?v=30';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=30';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=30';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=30';
-import { icon } from './icons.js?v=30';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=30';
-import { storage } from './storage.js?v=30';
-import { openDialog, trapFocus } from './dialog.js?v=30';
+} from './model.js?v=31';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=31';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=31';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=31';
+import { icon } from './icons.js?v=31';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=31';
+import { storage } from './storage.js?v=31';
+import { openDialog, trapFocus } from './dialog.js?v=31';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -855,7 +855,12 @@ function closeOpenPopups() {
 }
 function closeDropdowns({ except }) {
   for (const d of [menuDropdown, accountDropdown, settingsDropdown, aboutDropdown, editorMoreDropdown, editorAddPropDropdown]) {
-    if (d && d !== except) d.classList.add('hidden');
+    if (d && d !== except) {
+      d.classList.add('hidden');
+      if (d === editorAddPropDropdown || d === editorMoreDropdown) {
+        d.style.left = d.style.right = d.style.top = d.style.bottom = '';
+      }
+    }
   }
 }
 
@@ -3110,7 +3115,7 @@ function renderEditor(task) {
     control.closest('.editor-field').classList.toggle('disabled', locked);
   }
   editorTagInput.disabled = locked;
-  editorTagAddBtn.classList.toggle('hidden', locked);
+  editorTagAddBtn.classList.toggle('hidden', locked || task.Tags.length === 0);
   editorAddPropWrap.classList.toggle('hidden', locked);
   if (locked) {
     hideTagInput();
@@ -3300,7 +3305,9 @@ function showTagInput() {
 function hideTagInput() {
   if (!editorTagInput.value.trim()) {
     editorTagInput.classList.add('hidden');
-    editorTagAddBtn.classList.remove('hidden');
+    const task = findTask(selectedTaskId);
+    const locked = task?.IsDone || task?.IsClosed;
+    editorTagAddBtn.classList.toggle('hidden', locked || (task && task.Tags.length === 0));
     closeTagSuggest();
   }
 }
@@ -3349,12 +3356,23 @@ editorAddPropBtn.addEventListener('click', (e) => {
       const hasDue = !!task.DueDate;
       const due = hasDue ? parseDotNetDate(task.DueDate) : null;
       const hasTime = !!due && (due.getHours() !== 0 || due.getMinutes() !== 0);
-      addPropDueBtn.innerHTML = `${icon('calendar')} ${hasDue ? 'Change due date' : 'Due date'}`;
+      const dueTextEl = el('add-prop-due-text');
+      if (dueTextEl) dueTextEl.textContent = hasDue ? 'Change due date' : 'Due date';
+      else addPropDueBtn.innerHTML = `${icon('calendar')} ${hasDue ? 'Change due date' : 'Due date'}`;
       addPropTimeBtn.classList.toggle('hidden', hasTime);
       addPropPriorityBtn.classList.toggle('hidden', (task.Priority ?? TaskPriority.None) !== TaskPriority.None);
       addPropRepeatBtn.classList.toggle('hidden', task.Recurrence !== RecurrenceRule.None);
     }
-    openAnchoredPopup(editorAddPropDropdown, editorAddPropBtn);
+    editorAddPropDropdown.style.left = editorAddPropDropdown.style.right = editorAddPropDropdown.style.top = editorAddPropDropdown.style.bottom = '';
+    editorAddPropDropdown.classList.remove('hidden');
+    const rect = editorAddPropDropdown.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      editorAddPropDropdown.style.left = 'auto';
+      editorAddPropDropdown.style.right = '0';
+    } else {
+      editorAddPropDropdown.style.left = '0';
+      editorAddPropDropdown.style.right = 'auto';
+    }
   }
 });
 
@@ -3492,7 +3510,18 @@ editorMoreBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   const opening = editorMoreDropdown.classList.contains('hidden');
   closeDropdowns({});
-  if (opening) editorMoreDropdown.classList.remove('hidden');
+  if (opening) {
+    editorMoreDropdown.style.left = editorMoreDropdown.style.right = editorMoreDropdown.style.top = editorMoreDropdown.style.bottom = '';
+    editorMoreDropdown.classList.remove('hidden');
+    const rect = editorMoreDropdown.getBoundingClientRect();
+    if (rect.left < 8) {
+      editorMoreDropdown.style.left = '0';
+      editorMoreDropdown.style.right = 'auto';
+    } else {
+      editorMoreDropdown.style.left = 'auto';
+      editorMoreDropdown.style.right = '0';
+    }
+  }
 });
 
 editorDoneBtn.addEventListener('click', () => {

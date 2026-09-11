@@ -206,10 +206,107 @@ export function blockHasInlineFile(block) {
   return /<Grid[^>]*\sTag="(?!ImageContainer")/.test(block.Rtf);
 }
 
+// Mirrors Models/TaskMediaHelper.cs's HasLink: a Link block, any block carrying a Url, a hyperlink
+// embedded in desktop-authored Rtf, or a bare http(s)://, www. address typed into note text.
+// The legacy top-level Links list (pre-Body files) counts too, same as desktop. Without the Rtf
+// and Text checks, a task whose only link was typed or pasted on desktop showed no link badge
+// here and never matched has:link, while the same task did both on desktop.
+export function taskHasLink(task) {
+  if (!task) return false;
+  if (Array.isArray(task.Links) && task.Links.length > 0) return true;
+  return (task.Body ?? []).some((block) => {
+    if (block.Type === NoteBlockType.Link || (block.Url && block.Url.trim())) return true;
+    if (block.Rtf && /<Hyperlink|NavigateUri/i.test(block.Rtf)) return true;
+    return !!block.Text && /https?:\/\/|www\./i.test(block.Text);
+  });
+}
+
+// Mirrors TaskMediaHelper.HasChecklist: a Checklist block, any block with checklist items, or a
+// desktop-authored Rtf paragraph containing inline <CheckBox> controls.
+export function taskHasChecklist(task) {
+  if (!task) return false;
+  return (task.Body ?? []).some((block) => {
+    if (block.Type === NoteBlockType.Checklist) return true;
+    if (Array.isArray(block.ChecklistItems) && block.ChecklistItems.length > 0) return true;
+    return !!block.Rtf && /<CheckBox/i.test(block.Rtf);
+  });
+}
+
+// Fills in whatever a task read from a .tasky file might be missing, in place, and returns it.
+// A pre-Body legacy desktop file, or a hand-edited one, can lack Tags/Body/Priority entirely -
+// every render path here assumes those exist (renderList's `t.Tags.some(...)` threw and blanked
+// the whole app on such a file). Mirrors what the desktop model's property initializers give a
+// deserialized TaskItem for free; sync.js's applyTaskFields already guards the merge-update path,
+// this covers load and merge-add.
+export function normalizeTask(task) {
+  if (!Array.isArray(task.Tags)) task.Tags = [];
+  if (!Array.isArray(task.Body)) task.Body = [];
+  task.Text = typeof task.Text === 'string' ? task.Text : '';
+  task.IsDone = !!task.IsDone;
+  task.IsClosed = !!task.IsClosed;
+  task.IsPinned = !!task.IsPinned;
+  task.DueDate ??= null;
+  task.Recurrence = Number(task.Recurrence) || RecurrenceRule.None;
+  task.RecurrenceInterval = Math.max(1, Number(task.RecurrenceInterval) || 1);
+  task.Priority = Number(task.Priority) || TaskPriority.None;
+  for (const block of task.Body) {
+    block.Type = Number(block.Type) || NoteBlockType.Text;
+    if (block.Type === NoteBlockType.Checklist && !Array.isArray(block.ChecklistItems)) block.ChecklistItems = [];
+  }
+  return task;
+}
+
 function fileNameFromPath(path) {
   if (!path) return '';
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] ?? '';
+}
+
+// Every attachment filename a Text block's Rtf references inline - the exact shape
+// TaskMediaHelper.CollectReferencedFileNames matches on desktop. A pasted image is an
+// <Image UriSource="..."> (the file lives in the InlineImages folder); an Insert-File chip is a
+// <Grid Tag="<local path>"> (Attachments folder). The Grid Tag is also used for a handful of
+// fixed internal markers rather than a path; those aren't real attachment references.
+const INLINE_IMAGE_RE = /UriSource="([^"]+)"/g;
+const INLINE_FILE_RE = /<Grid[^>]*\sTag="([^"]+)"/g;
+const NON_FILE_TAG_MARKERS = new Set(['ImageContainer', 'CardBody', 'DeleteAttachmentBtn']);
+
+export function extractInlineImageFileNames(rtf) {
+  if (!rtf) return [];
+  const names = [];
+  for (const m of rtf.matchAll(INLINE_IMAGE_RE)) {
+    const name = fileNameFromPath(m[1]);
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+export function extractInlineFileNames(rtf) {
+  if (!rtf) return [];
+  const names = [];
+  for (const m of rtf.matchAll(INLINE_FILE_RE)) {
+    if (NON_FILE_TAG_MARKERS.has(m[1])) continue;
+    const name = fileNameFromPath(m[1]);
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+// Every attachment filename a task references anywhere - its Photo/File blocks plus anything
+// embedded inline in a Text block's Rtf. Mirrors what desktop's CleanupTaskAttachments feeds
+// through ExtractTaskMediaFilenames, so both platforms agree on what "this task's files" means
+// when deciding what a permanent delete may remove from Drive.
+export function collectTaskFileNames(task, into = new Set()) {
+  for (const block of task.Body ?? []) {
+    if (block.FileName) into.add(block.FileName);
+    else if (block.PhotoPath) into.add(fileNameFromPath(block.PhotoPath));
+    if (block.Type === NoteBlockType.Text && block.Rtf) {
+      for (const name of extractInlineImageFileNames(block.Rtf)) into.add(name);
+      for (const name of extractInlineFileNames(block.Rtf)) into.add(name);
+    }
+  }
+  into.delete('');
+  return into;
 }
 
 // Mirrors Services/QuickEntryParser.cs exactly (see its comment for the "why a fixed token
@@ -217,9 +314,17 @@ function fileNameFromPath(path) {
 // A token is only ever consumed when it actually matches one of these forms, so an unrecognized
 // "!due:whenever" or an email-address-shaped "@" is left untouched in the title instead of
 // silently mangled.
-const QUICK_ADD_TAG_RE = /(?<!\S)#([\w-]+)/g;
-const QUICK_ADD_DUE_RE = /(?<!\S)!due:(\S+)/gi;
-const QUICK_ADD_TIME_RE = /(?<!\S)@(\S+)/g;
+//
+// Each token must start the string or follow whitespace. That used to be a `(?<!\S)` lookbehind,
+// but regex lookbehind is a parse-time SyntaxError on Safari < 16.4 - and since this module is
+// in every page's import graph, one unparseable regex literal here meant the whole app failed to
+// load on those browsers with nothing but a stuck "Loading…" button (see docs/js/boot-guard.js).
+// A captured `(^|\s)` prefix is the same test in universally-supported syntax; the replace
+// callbacks below hand that captured prefix back so consuming a token never eats the space that
+// separated it from the previous word (a lookbehind never included it in the match to begin with).
+const QUICK_ADD_TAG_RE = /(^|\s)#([\w-]+)/g;
+const QUICK_ADD_DUE_RE = /(^|\s)!due:(\S+)/gi;
+const QUICK_ADD_TIME_RE = /(^|\s)@(\S+)/g;
 const QUICK_ADD_TIME_TOKEN_RE = /^(\d{1,2})(?::(\d{2}))?(am|pm)$|^(\d{1,2}):(\d{2})$/i;
 const QUICK_ADD_WEEKDAYS = {
   sun: 0, sunday: 0,
@@ -238,25 +343,25 @@ export function parseQuickAdd(input, now = new Date()) {
   let text = input ?? '';
 
   const tags = [];
-  text = text.replace(QUICK_ADD_TAG_RE, (m, tag) => {
+  text = text.replace(QUICK_ADD_TAG_RE, (m, lead, tag) => {
     if (!tags.some((t) => t.toLowerCase() === tag.toLowerCase())) tags.push(tag);
-    return '';
+    return lead;
   });
 
   let datePart = null;
-  text = text.replace(QUICK_ADD_DUE_RE, (m, token) => {
+  text = text.replace(QUICK_ADD_DUE_RE, (m, lead, token) => {
     const parsed = parseQuickAddDueToken(token, now);
     if (!parsed) return m; // unrecognized - leave it in the title rather than silently eating it
     datePart = parsed;
-    return '';
+    return lead;
   });
 
   let timePart = null;
-  text = text.replace(QUICK_ADD_TIME_RE, (m, token) => {
+  text = text.replace(QUICK_ADD_TIME_RE, (m, lead, token) => {
     const parsed = parseQuickAddTimeToken(token);
     if (!parsed) return m;
     timePart = parsed;
-    return '';
+    return lead;
   });
 
   let dueDate = null;
@@ -286,16 +391,27 @@ function parseQuickAddDueToken(token, reference) {
     const offset = (target - today.getDay() + 7) % 7;
     return addDays(today, offset);
   }
-  // A literal yyyy-mm-dd date - built from parts rather than `new Date(token)` since that form
-  // is parsed as UTC midnight by spec, which can land on the wrong local day near a timezone
-  // boundary. Any other shape falls back to the native parser (e.g. "8/25/2026").
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(token);
-  if (iso) {
-    const [, y, mo, d] = iso;
-    return new Date(Number(y), Number(mo) - 1, Number(d));
-  }
-  const d = new Date(token);
-  return isNaN(d.getTime()) ? null : startOfDay(d);
+  // Explicit numeric dates only: yyyy-mm-dd (also with slashes), m/d/yyyy and d.m.yyyy - all
+  // built from parts rather than `new Date(token)`. The ISO form is parsed as UTC midnight by
+  // spec (wrong local day near a timezone boundary), and the native parser's fallback for
+  // anything else was far too generous: Chrome read "!due:march" as 1 Mar 2001 and "!due:5" as
+  // 1 Jan 2005, silently attaching a nonsense due date where desktop's DateOnly.TryParse
+  // (invariant culture) rejects both. An unrecognized token is now left in the title instead,
+  // exactly like desktop.
+  const numeric =
+    /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(token) // y-m-d
+    ?? swapToYmd(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(token), 3, 1, 2) // m/d/yyyy
+    ?? swapToYmd(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(token), 3, 2, 1); // d.m.yyyy
+  if (!numeric) return null;
+  const [, y, mo, d] = numeric.map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const date = new Date(y, mo - 1, d);
+  // new Date() rolls an impossible day forward (31 Feb -> 3 Mar); reject that rather than guess.
+  return date.getMonth() === mo - 1 && date.getDate() === d ? date : null;
+}
+
+function swapToYmd(match, yi, mi, di) {
+  return match ? [match[0], match[yi], match[mi], match[di]] : null;
 }
 
 function parseQuickAddTimeToken(token) {

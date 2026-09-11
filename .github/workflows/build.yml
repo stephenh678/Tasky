@@ -52,3 +52,8 @@ jobs:
 
       - name: Cache-bust / desktop version consistency
         run: node check-cache-version.js
+
+      - name: Dark palette consistency (styles.css)
+        # The dark palette is written twice in styles.css (media query + forced [data-theme="dark"])
+        # because there's no preprocessor to share it - this catches the two drifting apart.
+        run: node check-dark-palette.js

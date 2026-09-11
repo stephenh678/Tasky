@@ -26,7 +26,8 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=22';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=23';
+import { storage, sessionStore } from './storage.js?v=23';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';
@@ -53,10 +54,13 @@ let accountName = null;
 let accountPicture = null;
 let sessionId = null;
 let refreshTimer = null;
+let refreshInFlight = null;
 
+// All storage access goes through storage.js's guarded helpers: a failed cache write just means
+// the next reload needs a real reauth, and unreadable storage reads as "nothing cached".
 function loadCachedToken() {
   try {
-    const raw = localStorage.getItem(TOKEN_CACHE_KEY);
+    const raw = storage.get(TOKEN_CACHE_KEY);
     if (!raw) return false;
     const cached = JSON.parse(raw);
     if (!cached.accessToken || !cached.expiresAt || Date.now() >= cached.expiresAt) return false;
@@ -67,47 +71,44 @@ function loadCachedToken() {
     accountPicture = cached.accountPicture ?? null;
     return true;
   } catch {
-    return false;
+    return false; // malformed JSON in the cache - treat as absent
   }
 }
 
 function persistToken() {
-  try {
-    localStorage.setItem(
-      TOKEN_CACHE_KEY,
-      JSON.stringify({ accessToken, expiresAt: tokenExpiresAt, accountEmail, accountName, accountPicture })
-    );
-  } catch {
-    // Best-effort - a failed cache write just means the next reload needs a real reauth.
-  }
+  storage.set(
+    TOKEN_CACHE_KEY,
+    JSON.stringify({ accessToken, expiresAt: tokenExpiresAt, accountEmail, accountName, accountPicture })
+  );
 }
 
 function clearCachedToken() {
-  try {
-    localStorage.removeItem(TOKEN_CACHE_KEY);
-  } catch {
-    // Nothing to clean up if this fails.
-  }
+  storage.remove(TOKEN_CACHE_KEY);
 }
 
 // sessionId lives under its own key, separate from the access-token cache above, because it must
 // survive an expired/missing access token - it's exactly what lets a stale/cleared token cache
 // still be silently recovered via refreshAccessToken() instead of falling back to a real signIn().
 function loadSessionId() {
-  try {
-    return localStorage.getItem(SESSION_ID_KEY);
-  } catch {
-    return null;
-  }
+  return storage.get(SESSION_ID_KEY);
 }
 
 function persistSessionId(id) {
-  try {
-    if (id) localStorage.setItem(SESSION_ID_KEY, id);
-    else localStorage.removeItem(SESSION_ID_KEY);
-  } catch {
-    // Best-effort, same as the token cache.
-  }
+  if (id) storage.set(SESSION_ID_KEY, id);
+  else storage.remove(SESSION_ID_KEY);
+}
+
+/**
+ * Forgets the current access token (in memory and in the localStorage cache) without touching
+ * the refresh session. drive.js calls this when Google rejects a token that still looked valid by
+ * its local expiry (clock skew, an early server-side invalidation) - the very next
+ * getAccessToken() then goes through a silent refresh instead of handing back the same rejected
+ * token, and only if THAT fails does the user see a sign-in prompt.
+ */
+export function invalidateAccessToken() {
+  accessToken = null;
+  tokenExpiresAt = 0;
+  clearCachedToken();
 }
 
 /**
@@ -131,57 +132,102 @@ function scheduleRefresh() {
  * Silently exchanges the server-held refresh token for a new access token - a plain background
  * fetch, never a redirect. Returns true and updates all in-memory/cached token state on success.
  *
- * On an explicit rejection from the server (session unknown, or Google itself invalidated the
- * refresh token) the session is treated as permanently dead: sessionId is cleared so nothing
- * keeps retrying with it, and the caller falls back to the pre-#117 behavior of requiring a real
- * signIn(). On a network-level failure (offline, a Cloud Run cold start, a brief DNS blip) the
- * session is left intact - the refresh token itself is presumably still good - and this retries
- * once immediately (isRetry) before falling back to the slower unattended 60s retry loop.
+ * Only a 401 from the server means the session is gone (session unknown, past its max age, or
+ * Google itself invalidated the refresh token - see functions/refresh-token/): then sessionId is
+ * cleared so nothing keeps retrying with it, and the caller falls back to the pre-#117 behavior
+ * of requiring a real signIn(). Everything else is treated as transient and the session is left
+ * intact, since the refresh token itself is presumably still good: a network-level failure
+ * (offline, a brief DNS blip), a 429 from the Cloud Function's own rate limiter, a 5xx or a
+ * Cloud Run cold start. Those used to be lumped in with 401 and cleared the session too, which
+ * meant one rate-limited request forced a full re-consent round trip through Google.
  *
- * That immediate retry matters because getAccessToken() (below) calls this synchronously and
- * reports NOT_SIGNED_IN to its caller the moment this returns false - without it, a single
- * transient blip here surfaced as "signed out" (e.g. an inline photo failing to load) even though
- * the user never actually signed out and the very next attempt, 60s later, would likely have
- * succeeded on its own.
+ * A transient failure retries once shortly (isRetry) - honoring Retry-After on a 429 - before
+ * falling back to the slower unattended 60s retry loop. That immediate retry matters because
+ * getAccessToken() (below) calls this synchronously and reports back to its caller the moment
+ * this returns false - without it, a single blip here surfaced as an error (e.g. an inline photo
+ * failing to load) even though the very next attempt would likely have succeeded on its own.
+ *
+ * Concurrent callers share one in-flight request: the pre-expiry timer, the visibilitychange
+ * catch-up below and any number of getAccessToken() callers (a save racing an attachment
+ * download) can all want a refresh at the same instant, and firing one request per caller is
+ * exactly what trips the rate limiter in the first place.
  */
-async function refreshAccessToken(isRetry = false) {
-  if (!sessionId) return false;
+function refreshAccessToken() {
+  if (!sessionId) return Promise.resolve(false);
+  if (!refreshInFlight) {
+    refreshInFlight = doRefreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+const REFRESH_RETRY_MS = 1500;
+const REFRESH_RATE_LIMITED_RETRY_MS = 5000;
+const REFRESH_RETRY_AFTER_CAP_MS = 10 * 1000;
+const REFRESH_UNATTENDED_RETRY_MS = 60 * 1000;
+
+async function doRefreshAccessToken(isRetry = false) {
+  let res;
+  let data;
   try {
-    const res = await fetch(TOKEN_REFRESH_URL, {
+    res = await fetch(TOKEN_REFRESH_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId }),
     });
-    if (!res.ok) {
-      console.warn('Tasky: silent token refresh rejected, session cleared', res.status);
-      sessionId = null;
-      persistSessionId(null);
-      return false;
-    }
-    const data = await res.json();
-    accessToken = data.access_token;
-    tokenExpiresAt = Date.now() + (Number(data.expires_in) || 3600) * 1000;
-    // This path runs whenever the cached access token itself had already expired (loadCachedToken()
-    // bails out before ever reading its accountEmail/Name/Picture fields in that case) - without
-    // this, accountEmail/Name/Picture stay at their fresh-page-load `null`, onSignedIn() has
-    // nothing to show, and the header avatar is stuck on its bare "?" fallback for the rest of the
-    // session even though the refresh above just proved the user is genuinely still signed in
-    // (reported live: the "?" read as "signed out" when the account was fine and tasks loaded
-    // normally). persistToken() below would otherwise also bake those nulls back into the cache.
-    if (!accountEmail) await fetchAccountInfo();
-    persistToken();
-    scheduleRefresh();
-    return true;
+    if (res.ok) data = await res.json();
   } catch (err) {
-    if (!isRetry) {
-      console.warn('Tasky: silent token refresh failed once, retrying shortly', err);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      return refreshAccessToken(true);
-    }
-    console.warn('Tasky: silent token refresh request failed, will retry shortly', err);
-    refreshTimer = setTimeout(() => refreshAccessToken(), 60 * 1000);
+    return retryRefreshLater(isRetry, `request failed: ${err.message}`, REFRESH_RETRY_MS);
+  }
+  if (res.status === 401) {
+    console.warn('Tasky: silent token refresh rejected, session cleared');
+    sessionId = null;
+    persistSessionId(null);
     return false;
   }
+  if (!res.ok) {
+    const delay = res.status === 429
+      ? retryAfterMs(res) ?? REFRESH_RATE_LIMITED_RETRY_MS
+      : REFRESH_RETRY_MS;
+    return retryRefreshLater(isRetry, `HTTP ${res.status}`, delay);
+  }
+  accessToken = data.access_token;
+  tokenExpiresAt = Date.now() + (Number(data.expires_in) || 3600) * 1000;
+  // This path runs whenever the cached access token itself had already expired (loadCachedToken()
+  // bails out before ever reading its accountEmail/Name/Picture fields in that case) - without
+  // this, accountEmail/Name/Picture stay at their fresh-page-load `null`, onSignedIn() has
+  // nothing to show, and the header avatar is stuck on its bare "?" fallback for the rest of the
+  // session even though the refresh above just proved the user is genuinely still signed in
+  // (reported live: the "?" read as "signed out" when the account was fine and tasks loaded
+  // normally). persistToken() below would otherwise also bake those nulls back into the cache.
+  if (!accountEmail) await fetchAccountInfo();
+  persistToken();
+  scheduleRefresh();
+  return true;
+}
+
+async function retryRefreshLater(isRetry, reason, delayMs) {
+  if (!isRetry) {
+    console.warn(`Tasky: silent token refresh failed once (${reason}), retrying in ${delayMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return doRefreshAccessToken(true);
+  }
+  console.warn(`Tasky: silent token refresh failed (${reason}), will retry in ${REFRESH_UNATTENDED_RETRY_MS / 1000}s`);
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refreshAccessToken(), REFRESH_UNATTENDED_RETRY_MS);
+  return false;
+}
+
+// Retry-After can be delay-seconds or an HTTP date; capped so a getAccessToken() caller that's
+// waiting on this (a save in progress) never hangs for longer than a few seconds.
+function retryAfterMs(res) {
+  const header = res.headers.get('Retry-After');
+  if (!header) return null;
+  const seconds = Number(header);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(ms, REFRESH_RETRY_AFTER_CAP_MS);
 }
 
 // A tab that's been backgrounded (laptop asleep, phone locked) can have its timers throttled or
@@ -233,8 +279,8 @@ export async function handleRedirectReturn() {
   if (!code && !error) return { status: 'none' };
 
   window.history.replaceState(null, '', window.location.pathname);
-  const expectedState = sessionStorage.getItem(STATE_KEY);
-  sessionStorage.removeItem(STATE_KEY);
+  const expectedState = sessionStore.get(STATE_KEY);
+  sessionStore.remove(STATE_KEY);
 
   if (error) {
     return {
@@ -282,7 +328,7 @@ export async function handleRedirectReturn() {
  */
 export function signIn() {
   const state = crypto.randomUUID();
-  sessionStorage.setItem(STATE_KEY, state);
+  sessionStore.set(STATE_KEY, state);
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
     redirect_uri: REDIRECT_URI,
@@ -327,6 +373,16 @@ export function isSignedIn() {
   return !!accessToken && Date.now() < tokenExpiresAt;
 }
 
+/**
+ * True while a refresh session exists, even if the access token itself has lapsed - i.e. the
+ * next getAccessToken() can be expected to succeed silently. Lets UI that only wants to know
+ * "would a Drive call need a redirect sign-in first?" avoid sending an expired-but-refreshable
+ * session through the consent screen.
+ */
+export function hasRefreshSession() {
+  return !!sessionId;
+}
+
 export function getAccountEmail() {
   return accountEmail;
 }
@@ -349,7 +405,14 @@ export function getAccountPicture() {
  */
 export async function getAccessToken() {
   if (isSignedIn()) return accessToken;
-  if (sessionId && (await refreshAccessToken())) return accessToken;
+  if (sessionId) {
+    if (await refreshAccessToken()) return accessToken;
+    // The refresh failed but the session survived it, so it was a transient failure (offline,
+    // rate-limited, the Cloud Function briefly down) rather than a dead session - the user is
+    // still signed in and nothing they do at Google's consent screen would help. Callers treat
+    // this like any other network error (retry later) instead of showing the sign-in prompt.
+    if (sessionId) throw new Error('AUTH_UNAVAILABLE');
+  }
   throw new Error('NOT_SIGNED_IN');
 }
 

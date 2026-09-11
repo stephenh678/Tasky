@@ -23,8 +23,16 @@ import {
   recurrenceAnchor,
   spawnNextOccurrence,
   RecurrenceRule,
+  NoteBlockType,
+  newNoteBlock,
+  extractInlineImageFileNames,
+  extractInlineFileNames,
+  collectTaskFileNames,
+  normalizeTask,
+  taskHasLink,
+  taskHasChecklist,
 } from '../model.js';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from '../sync.js';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from '../sync.js';
 
 // --- parseDotNetDate / formatDotNetDate round-trips (mirrors the .NET JSON date shape) ---------
 
@@ -293,6 +301,46 @@ describe('mergeRemoteState', () => {
 
     assert.equal(result.conflicted, 0);
     assert.equal(local.Tasks.length, 1);
+  });
+
+  // updatedIds/removedIds are a Web-only addition on top of the C# return shape - app.js needs to
+  // know whether the task open in the editor was one of them (its Body objects get swapped by
+  // applyTaskFields, or it vanishes from appState entirely), so the counts alone aren't enough.
+  test('reports the IDs behind the updated and removed counts', () => {
+    const deletedAt = new Date(2026, 0, 5);
+    const local = {
+      Tasks: [
+        taskWithId('kept', formatDotNetDate(new Date(2026, 0, 1)), 'kept'),
+        taskWithId('updated', formatDotNetDate(new Date(2026, 0, 1)), 'old'),
+        taskWithId('removed', formatDotNetDate(new Date(2026, 0, 1)), 'gone'),
+      ],
+      DeletedTasks: [],
+    };
+    const remote = {
+      Tasks: [
+        taskWithId('kept', formatDotNetDate(new Date(2026, 0, 1)), 'kept'),
+        taskWithId('updated', formatDotNetDate(new Date(2026, 0, 2)), 'new'),
+      ],
+      DeletedTasks: [{ TaskId: 'removed', Timestamp: formatDotNetDate(deletedAt) }],
+    };
+
+    const result = mergeRemoteState(local, remote);
+
+    assert.equal(result.updated, 1);
+    assert.deepEqual(result.updatedIds, ['updated']);
+    assert.equal(result.removed, 1);
+    assert.deepEqual(result.removedIds, ['removed']);
+    assert.deepEqual(local.Tasks.map((t) => t.Id), ['kept', 'updated']);
+  });
+
+  test('untouched merge reports empty ID lists', () => {
+    const local = { Tasks: [taskWithId('id-1', formatDotNetDate(new Date(2026, 0, 1)), 'same')], DeletedTasks: [] };
+    const remote = { Tasks: [taskWithId('id-1', formatDotNetDate(new Date(2026, 0, 1)), 'same')], DeletedTasks: [] };
+
+    const result = mergeRemoteState(local, remote);
+
+    assert.deepEqual(result.updatedIds, []);
+    assert.deepEqual(result.removedIds, []);
   });
 });
 
@@ -628,5 +676,233 @@ describe('spawnNextOccurrence with a stale DueDate (ROADMAP.md #31 fix)', () => 
     const next = spawnNextOccurrence(completed);
 
     assert.deepEqual(dateOnly(parseDotNetDate(next.DueDate)), dateOnly(daysFromToday(14)));
+  });
+});
+
+// --- Attachment references (mirrors TaskMediaHelper.CollectReferencedFileNames) ----------------
+// Feeds app.js's permanentlyRemoveTasks, which deletes a removed task's attachments from Drive
+// unless another remaining task still references the same filename - so the "what does this task
+// reference" answer has to match desktop's ExtractTaskMediaFilenames exactly. Same test vectors as
+// GoogleDriveServiceTests / RichTextBoxMediaPathRewriteTests on the C# side.
+
+describe('inline attachment references in Rtf', () => {
+  test('a pasted image is found via its UriSource attribute, by bare filename', () => {
+    const rtf = '<Image><BitmapImage UriSource="C:\\Users\\me\\Tasky\\InlineImages\\inline_photo123.png"/></Image>';
+    assert.deepEqual(extractInlineImageFileNames(rtf), ['inline_photo123.png']);
+  });
+
+  test('an inserted file chip is found via its Grid Tag, by bare filename (either slash style)', () => {
+    assert.deepEqual(extractInlineFileNames('<Grid Tag="/home/me/Tasky/Attachments/report.pdf">card</Grid>'), ['report.pdf']);
+    assert.deepEqual(extractInlineFileNames('<Grid Tag="C:\\Users\\me\\Documents\\Tasky\\Attachments\\report (1).xlsx" />'), ['report (1).xlsx']);
+  });
+
+  test('internal Grid Tag markers are not attachment references', () => {
+    const rtf = '<Grid Tag="ImageContainer"><Border Tag="CardBody" /></Grid><Grid Tag="DeleteAttachmentBtn" />';
+    assert.deepEqual(extractInlineFileNames(rtf), []);
+  });
+
+  test('empty/missing Rtf yields nothing', () => {
+    assert.deepEqual(extractInlineImageFileNames(''), []);
+    assert.deepEqual(extractInlineFileNames(undefined), []);
+  });
+});
+
+describe('collectTaskFileNames', () => {
+  test('gathers Photo/File block filenames and inline Rtf references, deduplicated', () => {
+    const task = newTaskItem({ text: 'with media' });
+    task.Body = [
+      newNoteBlock(NoteBlockType.Photo, { photoPath: 'a1b2.jpg' }),
+      newNoteBlock(NoteBlockType.File, { photoPath: 'C:\\somewhere\\notes.pdf' }),
+      newNoteBlock(NoteBlockType.Text, {
+        text: 'see attached',
+        rtf: '<BitmapImage UriSource="C:\\x\\InlineImages\\inline.png"/><Grid Tag="C:\\x\\Attachments\\a1b2.jpg" />',
+      }),
+    ];
+    assert.deepEqual([...collectTaskFileNames(task)].sort(), ['a1b2.jpg', 'inline.png', 'notes.pdf']);
+  });
+
+  test('a task with only text references nothing', () => {
+    const task = newTaskItem({ text: 'plain' });
+    assert.equal(collectTaskFileNames(task).size, 0);
+  });
+
+  test('accumulates into a caller-supplied set across tasks', () => {
+    const a = newTaskItem({ text: 'a' });
+    a.Body = [newNoteBlock(NoteBlockType.Photo, { photoPath: 'shared.jpg' })];
+    const b = newTaskItem({ text: 'b' });
+    b.Body = [newNoteBlock(NoteBlockType.Photo, { photoPath: 'shared.jpg' }), newNoteBlock(NoteBlockType.File, { photoPath: 'only-b.zip' })];
+    const into = new Set();
+    collectTaskFileNames(a, into);
+    collectTaskFileNames(b, into);
+    assert.deepEqual([...into].sort(), ['only-b.zip', 'shared.jpg']);
+  });
+});
+
+// --- parseQuickAdd token boundaries ----------------------------------------------------------------
+// The "token must start the string or follow whitespace" rule used to be a regex lookbehind; it is
+// now a captured (^|\s) prefix (Safari < 16.4 can't parse lookbehind). These pin down the cases
+// where the two could plausibly diverge: adjacent tokens sharing one separator, and non-space
+// whitespace.
+
+describe('parseQuickAdd token boundaries', () => {
+  const Reference = new Date(2026, 2, 4, 10, 0, 0); // Wed 4 Mar 2026
+
+  test('adjacent tokens separated by a single space are all consumed', () => {
+    const result = parseQuickAdd('#a #b #c', Reference);
+    assert.deepEqual(result.tags, ['a', 'b', 'c']);
+    assert.equal(result.text, '');
+  });
+
+  test('tab and newline count as separators', () => {
+    const tab = String.fromCharCode(9);
+    const nl = String.fromCharCode(10);
+    const result = parseQuickAdd(`Buy milk${tab}#groceries${nl}!due:today @2pm`, Reference);
+    assert.deepEqual(result.tags, ['groceries']);
+    assert.equal(result.text, 'Buy milk');
+    assert.ok(result.dueDate);
+  });
+
+  test('consuming a token keeps the words either side of it apart', () => {
+    const result = parseQuickAdd('Call #bank about @2pm the loan', Reference);
+    assert.deepEqual(result.tags, ['bank']);
+    assert.equal(result.text, 'Call about the loan');
+  });
+
+  test('a recognized token glued to the previous word is left in the title', () => {
+    const result = parseQuickAdd('Report!due:today done@2pm', Reference);
+    assert.equal(result.text, 'Report!due:today done@2pm');
+    assert.equal(result.dueDate, null);
+  });
+});
+
+// --- parseQuickAdd !due: strictness (mirrors DateOnly.TryParse rejecting non-dates) ----------------
+
+describe('parseQuickAdd !due: numeric forms', () => {
+  const Reference = new Date(2026, 2, 4, 10, 0, 0);
+
+  test('rejects words and bare numbers the native Date parser used to accept', () => {
+    for (const token of ['march', '5', '2026', 'next', '12/25', '25-12-2026']) {
+      const result = parseQuickAdd(`Task !due:${token}`, Reference);
+      assert.equal(result.dueDate, null, token);
+      assert.equal(result.text, `Task !due:${token}`, token);
+    }
+  });
+
+  test('accepts d.m.yyyy and yyyy/mm/dd', () => {
+    assert.ok(parseQuickAdd('Task !due:25.12.2026', Reference).dueDate.startsWith('2026-12-25'));
+    assert.ok(parseQuickAdd('Task !due:2026/12/25', Reference).dueDate.startsWith('2026-12-25'));
+  });
+
+  test('rejects an impossible calendar day instead of rolling it forward', () => {
+    assert.equal(parseQuickAdd('Task !due:2/31/2026', Reference).dueDate, null);
+    assert.equal(parseQuickAdd('Task !due:13/1/2026', Reference).dueDate, null);
+  });
+});
+
+// --- normalizeTask (load-time shape guard) -------------------------------------------------------
+
+describe('normalizeTask', () => {
+  test('fills in every field a legacy or hand-edited task can lack', () => {
+    const task = normalizeTask({ Id: 'x', Text: 'legacy' });
+    assert.deepEqual(task.Tags, []);
+    assert.deepEqual(task.Body, []);
+    assert.equal(task.RecurrenceInterval, 1);
+    assert.equal(task.Priority, 0);
+    assert.equal(task.Recurrence, RecurrenceRule.None);
+    assert.equal(task.IsDone, false);
+    assert.equal(task.DueDate, null);
+  });
+
+  test('leaves a complete task untouched', () => {
+    const task = newTaskItem({ text: 'ok' });
+    task.Tags = ['a'];
+    task.RecurrenceInterval = 3;
+    const before = JSON.stringify(task);
+    normalizeTask(task);
+    assert.equal(JSON.stringify(task), before);
+  });
+
+  test('gives a checklist block its items array', () => {
+    const task = normalizeTask({ Id: 'x', Body: [{ Id: 'b', Type: NoteBlockType.Checklist }] });
+    assert.deepEqual(task.Body[0].ChecklistItems, []);
+  });
+});
+
+describe('deduplicateTombstones with malformed records', () => {
+  test('skips records missing TaskId or Timestamp instead of throwing', () => {
+    const good = newTaskSyncRecord('t1');
+    const result = deduplicateTombstones([null, {}, { TaskId: 't2' }, { Timestamp: good.Timestamp }, good]);
+    assert.deepEqual(result.map((t) => t.TaskId), ['t1']);
+  });
+});
+
+// --- taskHasLink / taskHasChecklist (mirror Models/TaskMediaHelper.cs) ---------------------------
+
+describe('taskHasLink / taskHasChecklist', () => {
+  test('a Link block, a block Url, an Rtf hyperlink and a typed URL all count as a link', () => {
+    const withLinkBlock = newTaskItem({ text: 'a' });
+    withLinkBlock.Body = [newNoteBlock(NoteBlockType.Link, { url: 'https://x.test' })];
+    assert.equal(taskHasLink(withLinkBlock), true);
+
+    const withRtf = newTaskItem({ text: 'b' });
+    withRtf.Body = [{ ...newNoteBlock(NoteBlockType.Text, {}), Rtf: '<Paragraph><Hyperlink NavigateUri="https://x.test">x</Hyperlink></Paragraph>' }];
+    assert.equal(taskHasLink(withRtf), true);
+
+    const withText = newTaskItem({ text: 'c' });
+    withText.Body = [newNoteBlock(NoteBlockType.Text, { text: 'see www.example.com for details' })];
+    assert.equal(taskHasLink(withText), true);
+
+    const legacy = newTaskItem({ text: 'd' });
+    legacy.Links = ['https://legacy.test'];
+    assert.equal(taskHasLink(legacy), true);
+
+    const plain = newTaskItem({ text: 'e' });
+    plain.Body = [newNoteBlock(NoteBlockType.Text, { text: 'nothing here' })];
+    assert.equal(taskHasLink(plain), false);
+  });
+
+  test('a Checklist block or an Rtf <CheckBox> counts as a checklist', () => {
+    const block = newTaskItem({ text: 'a' });
+    block.Body = [newNoteBlock(NoteBlockType.Checklist, {})];
+    assert.equal(taskHasChecklist(block), true);
+
+    const rtf = newTaskItem({ text: 'b' });
+    rtf.Body = [{ ...newNoteBlock(NoteBlockType.Text, {}), Rtf: '<Paragraph><InlineUIContainer><CheckBox IsChecked="True"/></InlineUIContainer>done</Paragraph>' }];
+    assert.equal(taskHasChecklist(rtf), true);
+
+    const plain = newTaskItem({ text: 'c' });
+    assert.equal(taskHasChecklist(plain), false);
+  });
+});
+
+// --- reconcileLocalSnapshot (boot-time recovery of a dirty local copy) ---------------------------
+
+describe('reconcileLocalSnapshot', () => {
+  test('an offline edit survives against an unchanged remote and a remote-only task is picked up', () => {
+    const lastSync = new Date(2026, 0, 1, 12, 0, 0);
+    const shared = newTaskItem({ text: 'shared' });
+    shared.ModifiedAt = formatDotNetDate(new Date(2025, 11, 31));
+
+    const remote = newAppState();
+    remote.Tasks = [{ ...shared }, newTaskItem({ text: 'added elsewhere' })];
+
+    const snapshot = newAppState();
+    snapshot.Tasks = [{ ...shared, Text: 'shared (edited offline)', ModifiedAt: formatDotNetDate(new Date(2026, 0, 2)) }];
+
+    const { state, added, conflicted } = reconcileLocalSnapshot(snapshot, remote, lastSync);
+
+    assert.equal(state, snapshot);
+    assert.equal(added, 1);
+    assert.equal(conflicted, 0);
+    assert.equal(state.Tasks.find((t) => t.Id === shared.Id).Text, 'shared (edited offline)');
+    assert.equal(state.Tasks.length, 2);
+  });
+
+  test('a saved view created elsewhere is merged into the recovered state', () => {
+    const remote = newAppState();
+    remote.SavedViews = [{ Id: 'v1', Label: 'Overdue', Query: 'is:overdue' }];
+    const snapshot = newAppState();
+    reconcileLocalSnapshot(snapshot, remote, null);
+    assert.deepEqual(snapshot.SavedViews.map((v) => v.Id), ['v1']);
   });
 });

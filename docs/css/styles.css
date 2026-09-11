@@ -45,7 +45,9 @@
    below - a media query can't be combined with an attribute selector in one rule, and this
    project deliberately has no build step/preprocessor to define the palette once and share it.
    If you change a color here, change it there too, or "match system" and "force dark" will
-   silently drift apart. */
+   silently drift apart. `node check-dark-palette.js` (run in CI next to check-cache-version.js)
+   fails if the two blocks disagree; `node check-dark-palette.js --fix` regenerates the second
+   block from this one. */
 /* Pins native controls to light even when the OS is dark - otherwise color-scheme:"light dark" on
    :root leaves the browser free to render inputs/selects/checkboxes in dark UA styling by OS
    preference alone, while everything else on the page (correctly, via the :not([data-theme="light"])
@@ -122,6 +124,10 @@ body {
   left: 0;
   right: 0;
   z-index: 1000;
+  /* Installed iOS PWA: black-translucent + viewport-fit=cover (index.html) draw the page under the
+     status bar/notch, so anything pinned to the top edge needs the top inset (the bottom inset
+     was already handled for the tab bar). Zero everywhere else. */
+  padding-top: env(safe-area-inset-top, 0px);
   /* A literal color, not var(--danger)/(--danger-text) - this is white text ON a red background,
      which needs a darker, non-theme-varying red to stay AA-compliant regardless of app theme
      (--danger-text is tuned the opposite way - lighter in dark mode - for the reverse case of
@@ -175,7 +181,7 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: calc(24px + env(safe-area-inset-top, 0px)) 24px 24px; /* see .offline-banner */
   background:
     radial-gradient(circle at 20% 15%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 45%),
     radial-gradient(circle at 85% 80%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 45%),
@@ -218,7 +224,7 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 14px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 14px 8px; /* see .offline-banner */
   border-bottom: 1px solid var(--border);
   background: var(--pane-bg);
   flex-shrink: 0;
@@ -525,6 +531,17 @@ a { color: var(--accent); }
   padding: 10px;
   z-index: 40;
 }
+/* On a phone the popup is anchored to the top of the viewport instead of above the FAB near the
+   bottom (app.js openQuickAddPopup): the soft keyboard shrinks only the visual viewport, so a
+   bottom-anchored fixed element ends up underneath it, and scrollIntoView can't move a fixed
+   element out from behind it. Top-anchored, it stays visible with any keyboard open. */
+.quick-add-popup.at-top {
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  bottom: auto;
+  left: 12px;
+  right: 12px;
+  width: auto;
+}
 .link-modal-field { display: block; font-size: 0.85em; color: var(--text-dim); margin: 12px 0 4px; }
 .link-modal-field input {
   display: block;
@@ -651,7 +668,8 @@ a { color: var(--accent); }
 }
 .view-delete-btn .icon { width: 14px; height: 14px; }
 .view-delete-btn:hover { color: var(--danger-text); }
-.sidebar-list li:hover, .sidebar-list li:focus-visible { background: var(--hover); }
+.sidebar-list li:hover, .sidebar-list li:focus-visible, .sidebar-list li:has(.view-label:focus-visible) { background: var(--hover); }
+.view-label:focus-visible { outline: none; }
 .sidebar-list li.active { background: var(--selected); font-weight: 600; }
 .sidebar-list li.active .icon { color: var(--accent); }
 .sidebar-list .count { color: var(--text-dim); font-size: 0.85em; }
@@ -808,6 +826,14 @@ html.hide-done-checkbox .editor-done-field { display: none; }
   border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
   cursor: pointer;
 }
+/* Both are long-press targets (rows start multi-select, the New Task button opens quick-add) - without
+   this iOS pops its text-selection callout over the row at the same moment the hold fires. */
+.task-list li .task-content,
+.new-task-btn {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 .task-swipe-action {
   position: absolute;
   top: 0;
@@ -850,7 +876,8 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .checkbox-tap-target { display: inline-flex; align-items: center; flex-shrink: 0; }
 .task-list li .checkbox-tap-target { margin-top: 3px; }
 .task-row-info { flex: 1; min-width: 0; }
-.task-list li:hover .task-content, .task-list li:focus-visible .task-content { background: var(--hover); }
+.task-list li:hover .task-content, .task-list li:has(.task-row-info:focus-visible) .task-content { background: var(--hover); }
+.task-row-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 .task-list li.selected .task-content { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
 .task-list li.selected { border-color: transparent; }
 .task-list li.pinned:not(.selected) { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
@@ -1026,6 +1053,28 @@ kbd {
    comment on .editor-title-row for why Done/Pin moved out of here and into the pill row below,
    leaving only the rare/destructive Trash/Delete actions behind the "more" button. */
 .editor-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+/* Read-only lock for Done/Trashed tasks (renderEditor in app.js sets .locked on #editor-content
+   and fills this notice) - same rule as desktop's TaskDetailViewModel.IsEditable. Locked pills and
+   the body dim rather than disappear, so the task still reads normally; only the affordances go. */
+.editor-locked-notice {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  background: var(--selected);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 12px;
+  margin-bottom: 10px;
+}
+.editor-field.disabled { opacity: 0.55; cursor: default; }
+.editor-field.disabled input, .editor-field.disabled select { cursor: default; }
+.editor-content.locked .editor-title { cursor: default; }
+.editor-body.read-only { background: color-mix(in srgb, var(--pane-bg) 60%, var(--bg)); }
+.editor-body.read-only .block-text { cursor: default; }
+.editor-body.read-only .block-text:empty::before { content: ''; }
+.editor-body.read-only .block-checklist-item.editable input[type="text"] { cursor: default; }
+/* Trash section: the Done checkbox is meaningless on a trashed row (see renderList's in-trash
+   toggle); swipe/bulk Restore and Delete are the row's actions there. */
+.task-list.in-trash .done-checkbox-wrap { display: none; }
 .editor-more-wrap { position: relative; flex-shrink: 0; }
 .dropdown-item.danger { color: var(--danger-text); }
 
@@ -1084,6 +1133,28 @@ kbd {
 }
 .editor-field select { appearance: none; -webkit-appearance: none; }
 .editor-field input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0; }
+/* Due date/time pills: the native control is stretched invisibly over the whole pill so a tap
+   anywhere opens the OS picker, while the visible text is the relative label app.js renders
+   (Today 3:00 PM · Tomorrow · Mon · Sep 24). See #editor-due-field's comment in index.html. */
+.editor-due-field { position: relative; }
+.editor-due-field input[type="date"],
+.editor-due-field input[type="time"] {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; margin: 0; padding: 0; cursor: pointer;
+}
+.editor-due-field.disabled input { cursor: default; }
+.editor-due-label { white-space: nowrap; }
+/* Priority "None" / Repeat "Never" pills collapse to their icon (app.js updateMetaPillState) -
+   the <select> is stretched invisibly over the pill, same trick as the due fields above, so a tap
+   anywhere still opens it and keyboard focus still lands on it. */
+.editor-field.unset { position: relative; }
+.editor-field.unset select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; }
+.editor-field.unset .editor-field-arrow { display: none; }
+.editor-field:has(select:focus-visible), .editor-field:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-due-field.empty .editor-due-label { color: var(--text-dim); }
+.editor-field.overdue .editor-due-label { color: var(--danger-text); }
+.editor-due-clear { padding: 3px 7px; min-width: 32px; justify-content: center; }
+.editor-due-clear .icon { width: 14px; height: 14px; color: var(--text-dim); }
 .editor-field.overdue { background: color-mix(in srgb, var(--danger) 16%, var(--selected)); }
 .editor-field.overdue .editor-field-icon .icon,
 .editor-field.overdue .editor-field-arrow .icon,
@@ -1226,8 +1297,42 @@ kbd {
 .block-photo .icon.inline-icon, .block-file-link .icon.inline-icon {
   width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px;
 }
-.block-photo-img { max-width: 100%; border-radius: 8px; display: block; }
+.block-photo-img { max-width: 100%; border-radius: 8px; display: block; cursor: zoom-in; }
 .block-photo-error { color: var(--danger-text); cursor: pointer; }
+/* Tap-to-open full-size viewer (editor.js openPhotoLightbox) - the web counterpart of desktop's
+   PhotoViewerWindow. Sits on the shared .modal-overlay; the image is the whole card. */
+.modal-overlay.photo-lightbox { background: rgba(0, 0, 0, 0.9); cursor: zoom-out; padding: 0; }
+.photo-lightbox img { max-width: 100vw; max-height: 100vh; object-fit: contain; display: block; }
+.photo-lightbox-caption {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  color: #fff; font-size: 0.85em; text-align: center; background: rgba(0, 0, 0, 0.5);
+}
+.photo-lightbox-close {
+  position: fixed; top: calc(8px + env(safe-area-inset-top, 0px)); right: 8px;
+  color: #fff; background: rgba(0, 0, 0, 0.5); border-radius: 50%;
+}
+.photo-lightbox-close .icon { width: 22px; height: 22px; }
+
+/* Header sync indicator (app.js setSyncState). */
+.sync-indicator .icon { width: 20px; height: 20px; color: var(--text-dim); }
+.sync-indicator[data-state="pending"] .icon { color: var(--text-dim); }
+.sync-indicator[data-state="saving"] .icon { color: var(--accent); animation: sync-spin 1s linear infinite; }
+.sync-indicator[data-state="synced"] .icon { color: var(--text-dim); }
+.sync-indicator[data-state="error"] .icon { color: var(--danger-text); }
+.sync-indicator[data-state="offline"] .icon,
+.sync-indicator[data-state="local"] .icon { color: var(--text-dim); }
+@keyframes sync-spin { to { transform: rotate(360deg); } }
+/* Honours the OS "reduce motion" setting for every animation and transition in one place - the
+   bottom-sheet slide-up, the Sync Now / sync-indicator spinners, swipe snap-back, hover fades. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 .block-photo-error:hover { text-decoration: underline; }
 .block-file-link {
   display: inline-block;
@@ -1323,7 +1428,12 @@ kbd {
   /* The save-status text ("Loaded N task(s)", "Saving…", etc.) crowds the brand/icons in the
      header on narrow screens - relocate it to a fixed bar at the bottom instead, sitting just
      above the tab bar. position:fixed takes it out of the header's flex flow entirely regardless
-     of its DOM parent, so no markup change is needed. */
+     of its DOM parent, so no markup change is needed. Routine churn ("Unsaved changes…",
+     "Saving…", "Saved", "Loaded N task(s)" - .save-status-quiet, see setStatus in app.js) stays
+     off this bar entirely: the header's #sync-indicator carries that state, and the bar is
+     reserved for errors and reconnect prompts. Tapping the indicator reveals the quiet text
+     briefly (.revealed). */
+  .save-status.save-status-quiet:not(.revealed) { display: none; }
   .save-status {
     position: fixed;
     left: 0;

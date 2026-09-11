@@ -24,14 +24,18 @@
   <link rel="icon" href="icons/icon-192.png" sizes="192x192" />
   <link rel="icon" href="icons/icon-512.png" sizes="512x512" />
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
-  <meta name="theme-color" content="#3861d6" />
+  <!-- Colours the browser/OS chrome above the app header, so it tracks the header's --pane-bg
+       (styles.css) per theme rather than a fixed accent blue that matched neither. app.js's
+       updateThemeColorMeta() keeps both in step with an explicit in-app Light/Dark override. -->
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#262629" />
   <!-- ROADMAP.md #72: iOS Safari doesn't read manifest.json's display:standalone, so the
        PWA-install experience (status bar, launch as its own app) needs these too - Android/Chrome
        already gets everything it needs from the manifest alone. -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=22" />
+  <link rel="stylesheet" href="css/styles.css?v=23" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -42,8 +46,10 @@
       <img src="icons/icon-192.png" alt="" class="signin-logo" />
       <h1>Tasky</h1>
       <p class="signin-sub">Sign in with Google to open your synced tasks.</p>
-      <button id="signin-btn" class="btn btn-primary" disabled>Loading Google Sign-In…</button>
-      <p id="signin-status" class="signin-status"></p>
+      <button id="signin-btn" class="btn btn-primary" disabled>Loading…</button>
+      <!-- Filled in by app.js once the app has actually booted, or by js/boot-guard.js if it
+           never does (a browser too old to parse the ES modules, JavaScript disabled). -->
+      <p id="signin-status" class="signin-status"><noscript>Tasky Web needs JavaScript enabled to run.</noscript></p>
       <p id="signin-version" class="signin-version"></p>
     </div>
   </div>
@@ -76,6 +82,10 @@
         <img src="icons/icon-192.png" alt="" class="brand-logo" />
         <span class="header-title">Tasky</span>
       </button>
+      <!-- One glanceable sync state (synced / unsaved / saving / error / offline) - on phones this
+           is the only always-visible signal, and #save-status (relocated to a bottom bar there) is
+           reserved for errors and reconnect prompts instead of flipping on every keystroke. -->
+      <button type="button" id="sync-indicator" class="icon-btn sync-indicator" aria-label="Sync status" data-state="synced"></button>
       <span id="save-status" class="save-status"></span>
       <!-- ROADMAP.md #57: mirrors desktop's ProgressBar in the bottom status bar - stage-based
            percent (see setSyncProgress in app.js), not true byte progress. -->
@@ -239,11 +249,17 @@
                      the same action a second, more discoverable home next to the other task-level
                      actions. -->
                 <button id="editor-done-btn" class="dropdown-item">Mark Done</button>
+                <!-- Mobile counterpart of desktop's Export/Print Note: the task as Markdown via
+                     the Web Share sheet, or the clipboard where there's no share sheet. -->
+                <button id="editor-share-btn" class="dropdown-item">Share Task</button>
                 <button id="editor-trash-btn" class="dropdown-item">Move to Trash</button>
                 <button id="editor-delete-btn" class="dropdown-item danger hidden">Delete Permanently</button>
               </div>
             </div>
           </div>
+          <!-- Shown for a Done or Trashed task, which is read-only here exactly as on desktop
+               (TaskDetailViewModel.IsEditable) - text set in renderEditor per state. -->
+          <div id="editor-locked-notice" class="editor-locked-notice hidden" role="status"></div>
           <!-- One compact metadata strip (Done/Pin/Due/Repeat/Tags) instead of a separate action
                bar plus a labeled-field stack - Done/Pin/Due/Repeat all share the tag chips' pill
                styling (see styles.css), so every piece of task state reads as the same scannable
@@ -259,11 +275,25 @@
               <span id="editor-pin-icon" class="editor-field-icon"></span>
               <span id="editor-pin-label">Pin</span>
             </button>
-            <label class="editor-field" title="Due date" aria-label="Due date">
+            <!-- The native date input is stretched invisibly over the pill (styles.css
+                 .editor-due-field) so a tap anywhere opens the OS picker, while the visible text
+                 is a relative label (Today · Tomorrow · Mon · Sep 24) that the native control
+                 can't render. Time gets its own pill once a date is set - the model, quick-add's
+                 @3pm and desktop reminders all carry one - and × clears the date outright, since
+                 iOS's date wheel has no Clear button of its own. -->
+            <label class="editor-field editor-due-field" id="editor-due-field" title="Due date" aria-label="Due date">
               <span id="editor-due-icon" class="editor-field-icon"></span>
+              <span id="editor-due-label" class="editor-due-label">Due date</span>
               <input id="editor-due" type="date" />
               <span class="editor-field-arrow"></span>
             </label>
+            <label class="editor-field editor-due-field editor-due-time-field hidden" id="editor-due-time-field" title="Due time" aria-label="Due time">
+              <span id="editor-due-time-icon" class="editor-field-icon"></span>
+              <span id="editor-due-time-label" class="editor-due-label">Add time</span>
+              <input id="editor-due-time" type="time" />
+              <span class="editor-field-arrow"></span>
+            </label>
+            <button type="button" id="editor-due-clear" class="editor-field editor-due-clear hidden" title="Clear due date" aria-label="Clear due date"></button>
             <!-- ROADMAP #30 web-parity follow-up: Priority existed in the data model/sync/search
                  (is:highpriority) since #30 shipped, but had no web UI - desktop-only until now.
                  Mirrors desktop's TaskDetailViewModel.PriorityOptions/MainWindow's Priority ComboBox. -->
@@ -335,17 +365,12 @@
   </div>
 
   <div id="shortcuts-modal" class="modal-overlay hidden">
-    <div class="modal-card shortcuts-modal-card">
+    <div class="modal-card shortcuts-modal-card" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
       <button id="shortcuts-close-btn" class="icon-btn modal-close" aria-label="Close"></button>
-      <h2>Keyboard Shortcuts</h2>
-      <div class="shortcuts-list">
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span>New task</span></div>
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>Undo last action</span></div>
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>Add task from the quick-add box</span></div>
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></span><span>Jump to search</span></div>
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Close dialogs and menus</span></div>
-        <div class="shortcut-row"><span class="shortcut-keys"><kbd>F1</kbd> or <kbd>Ctrl</kbd>+<kbd>/</kbd></span><span>Show this help</span></div>
-      </div>
+      <h2 id="shortcuts-title">Keyboard Shortcuts</h2>
+      <!-- Rows are rendered from the SHORTCUTS table in app.js (renderShortcutsList), the same
+           table the keydown dispatcher reads, so this list can't drift from what actually fires. -->
+      <div id="shortcuts-list" class="shortcuts-list"></div>
       <p class="shortcuts-hint">Quick-add syntax: <code>#tag</code> · <code>!due:tue</code> (or today/tomorrow/a date) · <code>@3pm</code></p>
       <p class="shortcuts-hint">Search operators: <code>tag:name</code> · <code>is:overdue</code> · <code>is:pinned</code> · <code>is:recurring</code> · <code>has:link</code> · <code>has:attachment</code> · <code>due:today</code> · <code>due:week</code> · <code>due:none</code> - combine with plain text or each other</p>
     </div>
@@ -355,8 +380,8 @@
        replayable anytime from the About popup. Same static-HTML + show/hide idiom as the Shortcuts
        modal above, not a JS-built overlay like confirmModal/promptForLink. -->
   <div id="onboarding-modal" class="modal-overlay hidden">
-    <div class="modal-card onboarding-modal-card">
-      <h2>Welcome to Tasky</h2>
+    <div class="modal-card onboarding-modal-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <h2 id="onboarding-title">Welcome to Tasky</h2>
       <ul class="onboarding-list">
         <li>Quick Add a task, then tag or schedule it inline: <code>Buy milk #errands !due:tomorrow @9am</code></li>
         <!-- Text set in app.js from a (hover: hover) and (pointer: fine) media query - "Long-press"
@@ -384,6 +409,10 @@
   <div id="more-sheet-popup" class="more-sheet-popup hidden">
     <button type="button" id="more-sheet-dashboard" class="dropdown-item"></button>
     <button type="button" id="more-sheet-sections" class="dropdown-item"></button>
+    <!-- Recurring and Trash moved here from the tab bar to make room for Today, the section a
+         phone actually opens most - the tab bar is Today · All · Completed · More. -->
+    <button type="button" id="more-sheet-recurring" class="dropdown-item">Recurring</button>
+    <button type="button" id="more-sheet-trash" class="dropdown-item">Trash</button>
     <div class="dropdown-divider"></div>
     <button type="button" id="more-sheet-settings" class="dropdown-item">Settings</button>
     <button type="button" id="more-sheet-about" class="dropdown-item">About Tasky Web</button>
@@ -433,6 +462,15 @@
       <span>Show "Mark done" checkbox on task rows and in the editor</span>
       <input type="checkbox" id="setting-show-done-checkbox" checked />
     </label>
+    <div class="dropdown-section-label">Photos</div>
+    <!-- A 12 MP phone JPEG is 3-6 MB; shrinking to 2048 px on the long side before upload keeps
+         Drive, sync and other devices' downloads light. Defaults on for touch devices, off
+         elsewhere (desktop Tasky uploads full resolution, so a mouse-and-keyboard user keeps
+         parity with it unless they opt in). -->
+    <label class="settings-toggle-row">
+      <span>Shrink photos before upload (max 2048 px)</span>
+      <input type="checkbox" id="setting-photo-downscale" />
+    </label>
     <div class="dropdown-section-label">Trash</div>
     <label class="settings-toggle-row">
       <span>Auto-empty Trash</span>
@@ -460,6 +498,11 @@
     <button id="about-replay-tour-btn" type="button" class="about-replay-tour-btn">Replay welcome tour</button>
   </div>
 
-  <script type="module" src="js/app.js?v=22"></script>
+  <!-- A classic (non-module, ES5-only) script on purpose: it has to run in browsers where the
+       module below fails to parse at all, and it's what turns that silent failure into a visible
+       "this browser is too old" message. Must stay ahead of the module tag so its error listener
+       is armed before the module graph starts evaluating. -->
+  <script src="js/boot-guard.js?v=23"></script>
+  <script type="module" src="js/app.js?v=23"></script>
 </body>
 </html>

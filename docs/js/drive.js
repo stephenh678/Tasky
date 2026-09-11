@@ -1,13 +1,13 @@
 // Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken } from './auth.js?v=22';
-import { TASKY_FOLDER_NAME } from './config.js?v=22';
+import { getAccessToken, invalidateAccessToken } from './auth.js?v=23';
+import { TASKY_FOLDER_NAME } from './config.js?v=23';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-async function driveFetch(url, options = {}) {
+async function driveFetch(url, options = {}, { retryOn401 = true } = {}) {
   const token = await getAccessToken();
   const res = await fetch(url, {
     ...options,
@@ -15,10 +15,18 @@ async function driveFetch(url, options = {}) {
   });
   if (res.status === 401) {
     // The cached token looked valid by its local expiry (isSignedIn() only checks that clock),
-    // but Google has actually rejected it - revoked access, or an early server-side invalidation.
-    // Throw the same sentinel getAccessToken() throws for "no token at all" so every caller's
-    // existing NOT_SIGNED_IN handling ("Signed out - click to reconnect") applies here too,
-    // instead of a raw, non-actionable "Drive API 401" message with no way to recover.
+    // but Google has actually rejected it - clock skew, an early server-side invalidation, or
+    // revoked access. The first two are fixed by a silent refresh, so try exactly that once:
+    // forget the rejected token and re-run the request, which makes getAccessToken() mint a new
+    // one through the refresh session (a background fetch, never a redirect). Every request body
+    // this module sends is a string or Blob, so replaying it is safe. If the refresh has nothing
+    // to work with (no session) getAccessToken() throws NOT_SIGNED_IN itself; if Google rejects
+    // the fresh token too, throw that same sentinel here so every caller's existing "Signed out -
+    // click to reconnect" handling applies, instead of a raw, non-actionable "Drive API 401".
+    if (retryOn401) {
+      invalidateAccessToken();
+      return driveFetch(url, options, { retryOn401: false });
+    }
     throw new Error('NOT_SIGNED_IN');
   }
   if (!res.ok) {

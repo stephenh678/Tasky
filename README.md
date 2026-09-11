@@ -207,6 +207,15 @@ A mobile-friendly companion PWA at [stephenh678.github.io/Tasky](https://stephen
 — view and edit your tasks from a phone or any browser, synced through the same Google Drive
 per-task-merge sync and `.tasky` file the desktop app uses (no separate data store). Install it to
 your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
+Needs a current browser: Safari / iOS 16.4 or newer, or a recent Chrome, Edge or Firefox — older
+browsers get a plain "Tasky couldn't start" message on the sign-in screen instead of a blank page.
+
+It works offline the same way the desktop app does: the app shell is cached by a service worker and
+a local copy of your tasks lives in the browser's IndexedDB, so an installed PWA launches with no
+connection, shows your tasks, accepts edits, and syncs them through the normal per-task merge as
+soon as Google Drive is reachable again. Unsaved edits also survive the phone OS killing the app —
+they're recovered and merged on the next launch. The app reopens on the section and task you had
+open, and a task's URL (`…/Tasky/#task=<id>`) is a deep link you can bookmark or share.
 
 It shares most of the desktop feature set — recurring tasks, tags, due dates, quick filters,
 photo/file attachments, inline rich note editing — plus:
@@ -224,6 +233,14 @@ photo/file attachments, inline rich note editing — plus:
   complete/incomplete, moving a task to/from Trash, pinning, tagging, or setting a due date —
   including bulk multi-select edits, not just single-task ones — and cleans up a recurring task's
   auto-spawned next occurrence
+- **Phone-first touches** — the tab bar leads with Today; due dates show as Today / Tomorrow /
+  Mon / Sep 24 with a separate time pill and a × to clear; photos open full-size on tap, can be
+  taken straight from the camera, and are shrunk to 2048 px before upload (Settings → Photos, on by
+  default on touch devices); exports, file attachments and a per-task **Share Task** go through
+  the system share sheet; a header cloud icon shows sync state instead of a flickering status bar;
+  long-pressing a task starts multi-select; a task created with New Task and then abandoned empty is
+  dropped again rather than left behind as "(untitled)"; the sort order is remembered; and checklists
+  take Enter / Backspace / Alt+↑↓ to add, remove and reorder items
 - **Keyboard shortcuts help** — `F1` or `Ctrl+/`, or Menu → Keyboard Shortcuts
 - **Welcome dashboard** in the editor pane when no task is selected — Due Today/Overdue/Completed
   counts plus a shortcuts cheat sheet

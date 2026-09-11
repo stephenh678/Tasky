@@ -23,6 +23,8 @@
 // Required environment variables (set in the function's config, never committed to source):
 //   GOOGLE_CLIENT_ID     - same Client ID already used in docs/js/config.js
 //   GOOGLE_CLIENT_SECRET - the Web OAuth client's secret from Cloud Console
+// Optional:
+//   ALLOW_LOCAL_DEV_ORIGIN=true - also accept CORS calls from http://localhost:5500 (local dev only)
 // The runtime service account also needs Firestore read/write (roles/datastore.user) in this
 // project - grant that in Cloud Console -> IAM if it isn't there already.
 
@@ -36,9 +38,13 @@ const sessions = firestore.collection('sessions');
 // Only these origins may call this function - not a security boundary on its own (a stolen code
 // still couldn't be used from elsewhere without matching state client-side first), but it keeps
 // the function from being casually probed/abused from random origins.
+// The local dev origin (VS Code Live Server's default port) is only honoured when a deployment
+// opts in with ALLOW_LOCAL_DEV_ORIGIN=true - production has no reason to answer preflights from
+// localhost. Not a real hole either way (a session_id / OAuth state is still required), just one
+// origin fewer to advertise.
 const ALLOWED_ORIGINS = new Set([
   'https://stephenh678.github.io',
-  'http://localhost:5500',
+  ...(process.env.ALLOW_LOCAL_DEV_ORIGIN === 'true' ? ['http://localhost:5500'] : []),
 ]);
 
 exports.exchangeToken = async (req, res) => {

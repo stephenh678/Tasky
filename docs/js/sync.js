@@ -2,7 +2,7 @@
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=22';
+import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=23';
 
 // ROADMAP.md #140: DeletedTasks used to grow unbounded on both platforms - every permanent delete
 // added a record that got merged and re-uploaded forever. Tombstones older than RETENTION_MS are
@@ -16,6 +16,10 @@ export function deduplicateTombstones(tombstones, now = new Date()) {
   const cutoff = now.getTime() - RETENTION_MS;
   const byId = new Map();
   for (const t of tombstones) {
+    // A malformed record (hand-edited file, partial write) used to throw here and take the whole
+    // load down with it - it carries nothing usable, so drop it. Mirrors what desktop's
+    // deserializer effectively does with a null Timestamp (DateTime.MinValue, aged out).
+    if (!t || !t.TaskId || !t.Timestamp) continue;
     if (parseDotNetDate(t.Timestamp).getTime() < cutoff) continue;
     const existing = byId.get(t.TaskId);
     if (!existing || parseDotNetDate(t.Timestamp) > parseDotNetDate(existing.Timestamp)) {
@@ -23,6 +27,20 @@ export function deduplicateTombstones(tombstones, now = new Date()) {
     }
   }
   return [...byId.values()];
+}
+
+/**
+ * Boot-time reconciliation for a local snapshot (snapshot.js) that a previous session left dirty -
+ * i.e. edits that never reached Drive because the tab was killed or the device was offline. The
+ * snapshot is treated exactly like this device's live state and the fresh download exactly like
+ * any other device's changes: the same 3-way merge, keyed on lastSyncTime, so the offline edits
+ * win where remote didn't move and become "(conflicted copy)" tasks where it did. Returns the
+ * reconciled state (the snapshot object, mutated in place) for the caller to adopt and upload.
+ */
+export function reconcileLocalSnapshot(snapshotState, remoteState, lastSyncTime) {
+  const result = mergeRemoteState(snapshotState, remoteState, lastSyncTime);
+  mergeSavedViews(snapshotState, remoteState);
+  return { state: snapshotState, ...result };
 }
 
 function applyTaskFields(target, source) {
@@ -57,7 +75,11 @@ function createConflictedCopy(losingEdit) {
 /**
  * Merges remoteState into localState IN PLACE (mutates localState.Tasks / localState.DeletedTasks)
  * and returns { added, updated, removed, conflicted } counts, matching MergeRemoteState's return
- * shape. lastSyncTime (a Date, or null/undefined if never synced before) is what distinguishes a
+ * shape, plus updatedIds / removedIds (the task IDs behind the `updated` and `removed` counts) -
+ * app.js needs those to tell whether the task currently open in the editor was one of them, since
+ * applyTaskFields swaps in brand-new Body objects and a removed task disappears from findTask()
+ * entirely; either way the editor's live DOM would otherwise keep writing into orphaned objects.
+ * lastSyncTime (a Date, or null/undefined if never synced before) is what distinguishes a
  * genuine same-task-both-sides conflict from an ordinary stale-device update - see
  * TaskSyncMerge.ComputeMergePlan's matching comment on the desktop side.
  */
@@ -71,6 +93,8 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
   let updated = 0;
   let removed = 0;
   let conflicted = 0;
+  const updatedIds = [];
+  const removedIds = [];
 
   // Remote-only tasks: bring them in, unless this device already deleted the same ID and
   // remote's copy predates that deletion.
@@ -90,6 +114,7 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
     const deletedAt = remoteTombstones.get(id);
     if (deletedAt && parseDotNetDate(localTask.ModifiedAt) <= deletedAt) {
       toRemove.add(id);
+      removedIds.push(id);
       removed++;
     }
   }
@@ -109,6 +134,7 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
       conflicted++;
     }
     applyTaskFields(localTask, remoteTask);
+    updatedIds.push(id);
     updated++;
   }
   localState.Tasks.push(...newConflictedCopies);
@@ -123,7 +149,7 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
     }
   }
 
-  return { added, updated, removed, conflicted };
+  return { added, updated, removed, conflicted, updatedIds, removedIds };
 }
 
 // Port of SavedViewSyncMerge.Merge (Services/SavedViewSyncMerge.cs) - much simpler than the task

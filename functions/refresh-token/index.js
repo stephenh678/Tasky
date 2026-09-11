@@ -28,9 +28,13 @@ const { checkRateLimit } = require('./rateLimit');
 const firestore = new Firestore();
 const sessions = firestore.collection('sessions');
 
+// The local dev origin (VS Code Live Server's default port) is only honoured when a deployment
+// opts in with ALLOW_LOCAL_DEV_ORIGIN=true - production has no reason to answer preflights from
+// localhost. Not a real hole either way (a session_id / OAuth state is still required), just one
+// origin fewer to advertise.
 const ALLOWED_ORIGINS = new Set([
   'https://stephenh678.github.io',
-  'http://localhost:5500',
+  ...(process.env.ALLOW_LOCAL_DEV_ORIGIN === 'true' ? ['http://localhost:5500'] : []),
 ]);
 
 // ROADMAP.md #137: a session_id lived in Firestore forever until an explicit sign-out DELETEd it -

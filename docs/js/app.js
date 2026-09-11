@@ -1,5 +1,5 @@
-import * as auth from './auth.js?v=22';
-import * as drive from './drive.js?v=22';
+import * as auth from './auth.js?v=23';
+import * as drive from './drive.js?v=23';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -12,12 +12,19 @@ import {
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
+  collectTaskFileNames,
   parseQuickAdd,
-} from './model.js?v=22';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews } from './sync.js?v=22';
-import { renderEditableBody } from './editor.js?v=22';
-import { icon } from './icons.js?v=22';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=22';
+  normalizeTask,
+  taskHasLink,
+  taskHasChecklist,
+} from './model.js?v=23';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=23';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=23';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=23';
+import { icon } from './icons.js?v=23';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=23';
+import { storage } from './storage.js?v=23';
+import { openDialog, trapFocus } from './dialog.js?v=23';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -72,6 +79,7 @@ const emptyAddTaskBtn = el('empty-add-task-btn');
 const emptyShortcutsBtn = el('empty-shortcuts-btn');
 const editorContent = el('editor-content');
 const editorTitle = el('editor-title');
+const editorLockedNotice = el('editor-locked-notice');
 const editorDue = el('editor-due');
 const editorPriority = el('editor-priority');
 const editorRecurrence = el('editor-recurrence');
@@ -95,8 +103,19 @@ const editorPinLabel = el('editor-pin-label');
 const editorMoreBtn = el('editor-more-btn');
 const editorMoreDropdown = el('editor-more-dropdown');
 const editorDoneBtn = el('editor-done-btn');
+const editorShareBtn = el('editor-share-btn');
 const editorTrashBtn = el('editor-trash-btn');
 const editorDeleteBtn = el('editor-delete-btn');
+const editorDueField = el('editor-due-field');
+const editorDueLabel = el('editor-due-label');
+const editorDueTime = el('editor-due-time');
+const editorDueTimeField = el('editor-due-time-field');
+const editorDueTimeLabel = el('editor-due-time-label');
+const editorDueClear = el('editor-due-clear');
+const syncIndicator = el('sync-indicator');
+const moreSheetRecurringBtn = el('more-sheet-recurring');
+const moreSheetTrashBtn = el('more-sheet-trash');
+const settingPhotoDownscale = el('setting-photo-downscale');
 const saveStatus = el('save-status');
 const saveProgress = el('save-progress');
 const saveProgressFill = el('save-progress-fill');
@@ -116,6 +135,7 @@ const aboutDropdown = el('about-dropdown');
 const shortcutsBtn = el('shortcuts-btn');
 const shortcutsModal = el('shortcuts-modal');
 const shortcutsCloseBtn = el('shortcuts-close-btn');
+const shortcutsList = el('shortcuts-list');
 const onboardingModal = el('onboarding-modal');
 const onboardingQuickAddTip = el('onboarding-quickadd-tip');
 const onboardingAddSamplesCheck = el('onboarding-add-samples');
@@ -187,8 +207,27 @@ function updateOfflineBanner() {
     document.documentElement.style.setProperty('--offline-banner-height', `${offlineBanner.offsetHeight}px`);
   }
 }
-window.addEventListener('online', updateOfflineBanner);
-window.addEventListener('offline', updateOfflineBanner);
+window.addEventListener('online', () => {
+  updateOfflineBanner();
+  // A save that failed while offline is only ever retried by performSave's own backoff timer,
+  // which could be up to a minute out - coming back online is a much better signal, so flush
+  // right away (and reset the backoff so the next failure, if any, starts short again).
+  if (dirty) {
+    saveRetryDelay = SAVE_RETRY_BASE_MS;
+    clearTimeout(saveTimer);
+    triggerSave();
+  } else if (bootedFromSnapshot) {
+    // Nothing to upload, but the local copy may be behind whatever other devices did - pull now.
+    clearTimeout(saveTimer);
+    performSave({ force: true, statusVerb: 'Sync' });
+  } else {
+    setSyncState('synced');
+  }
+});
+window.addEventListener('offline', () => {
+  updateOfflineBanner();
+  setSyncState('offline');
+});
 // Re-measure if the banner's wrapped line count changes (e.g. rotating the phone) while it's
 // already shown - only matters while offline, so this is a cheap no-op the rest of the time.
 window.addEventListener('resize', () => {
@@ -223,8 +262,18 @@ if (window.visualViewport) {
   });
 }
 
+// auth.js throws the bare 'AUTH_UNAVAILABLE' sentinel when the silent token refresh failed for a
+// transient reason (rate-limited, the Cloud Function briefly down) while the session itself is
+// still fine - the user is signed in and a sign-in prompt would be the wrong answer, so it's
+// worded as the temporary outage it is and left to the normal save-retry loop.
+function describeError(err) {
+  if (!navigator.onLine) return 'no internet connection';
+  if (err.message === 'AUTH_UNAVAILABLE') return "couldn't reach Tasky's sign-in service, will retry";
+  return err.message;
+}
+
 function friendlyErrorMessage(prefix, err) {
-  return navigator.onLine ? `${prefix}: ${err.message}` : `${prefix}: no internet connection`;
+  return `${prefix}: ${describeError(err)}`;
 }
 
 const SECTION_ICONS = { today: 'calendar', all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
@@ -239,6 +288,8 @@ const filterBadge = el('filter-badge');
 selectToggleBtn.innerHTML = icon('checkSquare');
 el('editor-pin-icon').innerHTML = icon('pin');
 editorMoreBtn.innerHTML = icon('moreVertical');
+editorDueClear.innerHTML = icon('x');
+el('editor-due-time-icon').innerHTML = icon('clock');
 el('editor-due-icon').innerHTML = icon('calendar');
 el('editor-priority-icon').innerHTML = icon('flag');
 el('editor-repeat-icon').innerHTML = icon('repeat');
@@ -283,7 +334,10 @@ let taskyFolderId = null;
 let currentSection = { kind: 'all' }; // {kind:'all'|'recurring'|'done'|'trash'|'tag', tag?}
 let selectedTaskId = null;
 let searchQuery = '';
-let sortKey = 'modified';
+// Desktop keeps the sort order in Settings; the web app reset to Modified on every load.
+const SORT_KEY = 'tasky-sort';
+const SORT_KEYS = ['modified', 'created', 'name', 'due'];
+let sortKey = SORT_KEYS.includes(storage.get(SORT_KEY)) ? storage.get(SORT_KEY) : 'modified';
 let quickFilter = '';
 // taskId -> row refs for renderList()'s keyed diff - lets a row already on screen be patched in
 // place (classes/text/checkbox swapped) instead of torn down and rebuilt, which previously
@@ -302,17 +356,43 @@ let selectedIds = new Set();
 
 let dirty = false;
 let saving = false;
+// True while the app is running on the local IndexedDB copy (snapshot.js) because Drive couldn't
+// be reached at boot - cleared by the first successful sync. See loadFromDrive.
+let bootedFromSnapshot = false;
+let snapshotTimer = null;
 let saveTimer = null;
 const SAVE_DEBOUNCE_MS = 4000;
+// A save that fails for a non-auth reason (offline, a Drive 5xx, a flaky connection) used to
+// leave `dirty` set and simply stop - nothing rescheduled it, so edits sat unsaved until the next
+// keystroke or a manual Sync Now, and on a phone the OS could kill the tab first and lose them.
+// Retried on a doubling delay instead, capped so a long outage doesn't hammer Drive, and reset
+// to the base on the next success (or the moment the browser reports being back online - see
+// the 'online' listener above).
+const SAVE_RETRY_BASE_MS = 5000;
+const SAVE_RETRY_MAX_MS = 60000;
+let saveRetryDelay = SAVE_RETRY_BASE_MS;
+// Set by refreshEditorAfterMerge when a background merge touched the task that's open in the
+// editor; performSave folds it into the "Saved" status so the user hears about it rather than
+// only seeing their text change under them (the merge itself runs mid-save, so any status set
+// there would be overwritten by "Saved" a moment later).
+let mergeNotice = null;
 
 const STATUS_AUTOHIDE_MS = 3000;
 let statusHideTimer = null;
 // Transient confirmations ("Saved", "Loaded N task(s)") auto-clear so the status text isn't
 // permanently occupying space; anything the user might need to act on or that signals an
 // in-progress/error state (Saving…, Sync failed, Signed out — click to reconnect) stays put.
+// Routine save-cycle chatter. The header's sync indicator (setSyncState below) already shows this
+// state as an icon, so on phones - where the status text lives in a fixed bottom bar - these
+// stay hidden (styles.css .save-status-quiet) instead of flipping on every keystroke; errors
+// and reconnect prompts still show there in full.
+const QUIET_STATUS_RE = /^(Unsaved changes…|Saving…|Syncing…|Saved|Loaded \d+ task\(s\))$/;
+
 function setStatus(text, { autoHide = false } = {}) {
   clearTimeout(statusHideTimer);
   saveStatus.textContent = text;
+  saveStatus.classList.toggle('save-status-quiet', QUIET_STATUS_RE.test(text));
+  saveStatus.classList.remove('revealed');
   // Desktop truncates long messages (a Drive API error includes the full request URL and
   // reason) with an ellipsis to avoid disrupting the header layout - the title attribute
   // still exposes the complete text on hover.
@@ -328,6 +408,40 @@ function setStatus(text, { autoHide = false } = {}) {
 // (see saveToDrive/mergeFromRemote below for where each stage actually reports), not true byte
 // progress (no transfer-progress event on the fetch calls driveFetch/uploadFileText make). Passing
 // null hides the bar; any number shows it at that width.
+// One glanceable icon for the whole save/sync lifecycle - the mobile equivalent of the status text
+// (which sits in a bottom bar there and is now reserved for errors, see QUIET_STATUS_RE).
+// states: synced · pending (unsaved edits) · saving · error · offline · local (running on the
+// IndexedDB copy because Drive couldn't be reached at boot).
+const SYNC_STATE_ICONS = { synced: 'cloudCheck', pending: 'clock', saving: 'sync', error: 'alertCircle', offline: 'cloudOff', local: 'cloudOff' };
+const SYNC_STATE_LABELS = {
+  synced: 'Synced with Google Drive',
+  pending: 'Unsaved changes - saving shortly',
+  saving: 'Saving to Google Drive…',
+  error: 'Sync problem',
+  offline: 'Offline - changes will sync when you reconnect',
+  local: 'Showing your local copy - will sync when Google Drive is reachable',
+};
+function setSyncState(state, detail) {
+  if (syncIndicator.dataset.state !== state) syncIndicator.innerHTML = icon(SYNC_STATE_ICONS[state]);
+  syncIndicator.dataset.state = state;
+  const label = detail || SYNC_STATE_LABELS[state];
+  syncIndicator.title = label;
+  syncIndicator.setAttribute('aria-label', label);
+}
+syncIndicator.innerHTML = icon(SYNC_STATE_ICONS.synced);
+syncIndicator.title = SYNC_STATE_LABELS.synced;
+// Tapping the icon on a phone reveals the (otherwise hidden) status text for a moment; on a real
+// problem it goes straight to the fix, same as clicking the status text itself.
+syncIndicator.addEventListener('click', () => {
+  if (saveStatus.classList.contains('save-status-action')) {
+    saveStatus.click();
+    return;
+  }
+  if (!saveStatus.textContent) setStatus(syncIndicator.title, { autoHide: true });
+  saveStatus.classList.add('revealed');
+  setTimeout(() => saveStatus.classList.remove('revealed'), 2500);
+});
+
 function setSyncProgress(percent) {
   saveProgress.classList.toggle('hidden', percent === null);
   if (percent === null) return;
@@ -377,17 +491,7 @@ function hideUndoToast() {
 }
 
 undoToastBtn.addEventListener('click', popUndo);
-document.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
-  // Don't hijack the browser's native text-field undo (e.g. correcting a typo in the title or an
-  // editor-body block, both real text-editing contexts) - only handle Ctrl+Z as an app-level
-  // action outside one of those.
-  const target = document.activeElement;
-  const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-  if (isEditable) return;
-  e.preventDefault();
-  popUndo();
-});
+// Ctrl+Z is bound in the SHORTCUTS table (see the keyboard-shortcuts section).
 
 const SECTIONS = [
   { kind: 'today', label: 'Today' },
@@ -457,6 +561,13 @@ async function boot() {
   if (await auth.restoreFromCache()) {
     await onSignedIn();
     if (quickAddRequested) openQuickAddFromShortcut();
+  } else if (auth.hasRefreshSession() && (await readSnapshot())) {
+    // The cached token has expired and the silent refresh couldn't reach the server (offline, or
+    // the sign-in service is down) - but the refresh session itself is intact, so this is still
+    // a signed-in user. Open on the local copy; loadFromDrive falls through to it and
+    // the first successful sync brings everything back to normal.
+    await onSignedIn();
+    if (quickAddRequested) openQuickAddFromShortcut();
   }
 }
 
@@ -515,8 +626,20 @@ accountBtn.addEventListener('click', (e) => {
   closeDropdowns({ except: accountDropdown });
   accountDropdown.classList.toggle('hidden');
 });
-accountSignoutBtn.addEventListener('click', () => {
+accountSignoutBtn.addEventListener('click', async () => {
+  closeDropdowns({});
+  // Same in-app confirmation confirmSignInIfDirty uses - the browser's own beforeunload prompt
+  // (generic wording, and some mobile browsers skip it entirely) was the only thing standing
+  // between an unsaved edit and a reload that discards it.
+  if (dirty) {
+    const confirmed = await confirmModal('You have unsaved changes that will be lost if you sign out now. Sign out anyway?',
+      { title: 'Unsaved Changes', confirmLabel: 'Sign out', danger: true });
+    if (!confirmed) return;
+  }
   auth.signOut();
+  clearTimeout(snapshotTimer);
+  await clearSnapshot(); // the next account on this device must not inherit this one's local copy
+  storage.remove(PLACE_KEY);
   location.reload();
 });
 
@@ -576,14 +699,19 @@ filterToggleBtn.addEventListener('click', (e) => {
     listFilterRow.classList.add('hidden');
   }
 });
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    closeDropdowns({});
-    closeShortcuts();
-    closeMoreSheet();
-    if (!onboardingModal.classList.contains('hidden')) closeOnboarding();
-  }
-});
+// Escape's "close whatever is open" (bound in the SHORTCUTS table): the dropdowns, plus the
+// anchored popups - Sort/Filter, bulk Add Tag, the quick-add popup and the editor's tag
+// suggestions - so it means the same thing everywhere, not just for menus.
+function closeOpenPopups() {
+  closeDropdowns({});
+  closeShortcuts();
+  closeMoreSheet();
+  listFilterRow.classList.add('hidden');
+  closeBulkTagPopup();
+  closeTagSuggest();
+  quickAddPopup.classList.add('hidden');
+  if (!onboardingModal.classList.contains('hidden')) closeOnboarding();
+}
 function closeDropdowns({ except }) {
   for (const d of [menuDropdown, accountDropdown, settingsDropdown, aboutDropdown, editorMoreDropdown]) {
     if (d !== except) d.classList.add('hidden');
@@ -628,22 +756,36 @@ const THEME_KEY = 'tasky-theme';
 function applyTheme(choice) {
   if (choice === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = choice;
-  localStorage.setItem(THEME_KEY, choice);
+  storage.set(THEME_KEY, choice);
   for (const btn of themeSwitch.querySelectorAll('button')) {
     btn.classList.toggle('active', btn.dataset.themeChoice === choice);
   }
+  updateThemeColorMeta();
 }
+
+// <meta name="theme-color"> colours the browser/OS chrome directly above the app header (Android
+// Chrome's toolbar, the installed PWA's status bar), so it should match the header's own
+// background - which is --pane-bg, and depends on the resolved theme. index.html ships one meta
+// per prefers-color-scheme for the moment before this runs; from here on both carry the colour of
+// whatever theme is actually in effect, including an explicit Light/Dark override of the OS
+// setting, which the static media attributes alone can't express.
+function updateThemeColorMeta() {
+  const color = getComputedStyle(document.documentElement).getPropertyValue('--pane-bg').trim();
+  if (!color) return;
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = color;
+}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateThemeColorMeta);
 themeSwitch.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-theme-choice]');
   if (btn) applyTheme(btn.dataset.themeChoice);
 });
-applyTheme(localStorage.getItem(THEME_KEY) ?? 'system');
+applyTheme(storage.get(THEME_KEY) ?? 'system');
 
 const FONT_SIZE_KEY = 'tasky-font-size';
 function applyFontSize(choice) {
   if (choice === 'medium') delete document.documentElement.dataset.fontSize;
   else document.documentElement.dataset.fontSize = choice;
-  localStorage.setItem(FONT_SIZE_KEY, choice);
+  storage.set(FONT_SIZE_KEY, choice);
   for (const btn of fontSizeSwitch.querySelectorAll('button')) {
     btn.classList.toggle('active', btn.dataset.fontSize === choice);
   }
@@ -652,7 +794,7 @@ fontSizeSwitch.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-font-size]');
   if (btn) applyFontSize(btn.dataset.fontSize);
 });
-applyFontSize(localStorage.getItem(FONT_SIZE_KEY) ?? 'medium');
+applyFontSize(storage.get(FONT_SIZE_KEY) ?? 'medium');
 
 // Web/mobile-only preference (desktop has no swipe-to-done gesture, so its row checkbox is never
 // redundant there) - lets anyone who's learned the swipe-to-done gesture reclaim the row space,
@@ -660,11 +802,11 @@ applyFontSize(localStorage.getItem(FONT_SIZE_KEY) ?? 'medium');
 const SHOW_DONE_CHECKBOX_KEY = 'tasky-show-done-checkbox';
 function applyShowDoneCheckbox(show) {
   document.documentElement.classList.toggle('hide-done-checkbox', !show);
-  localStorage.setItem(SHOW_DONE_CHECKBOX_KEY, String(show));
+  storage.set(SHOW_DONE_CHECKBOX_KEY, String(show));
   showDoneCheckboxToggle.checked = show;
 }
 showDoneCheckboxToggle.addEventListener('change', () => applyShowDoneCheckbox(showDoneCheckboxToggle.checked));
-applyShowDoneCheckbox(localStorage.getItem(SHOW_DONE_CHECKBOX_KEY) !== 'false');
+applyShowDoneCheckbox(storage.get(SHOW_DONE_CHECKBOX_KEY) !== 'false');
 
 // ROADMAP.md #135: opt-in (default off, matching desktop's AutoEmptyTrashEnabled), per-device -
 // localStorage rather than appState, same as desktop's Settings.json living outside the synced
@@ -677,7 +819,7 @@ const AUTO_EMPTY_TRASH_DAYS_KEY = 'tasky-auto-empty-trash-days';
 const DEFAULT_AUTO_EMPTY_TRASH_DAYS = 30;
 
 function applyAutoEmptyTrashSetting(enabled) {
-  localStorage.setItem(AUTO_EMPTY_TRASH_ENABLED_KEY, String(enabled));
+  storage.set(AUTO_EMPTY_TRASH_ENABLED_KEY, String(enabled));
   autoEmptyTrashToggle.checked = enabled;
   autoEmptyTrashDaysRow.classList.toggle('settings-row-disabled', !enabled);
   autoEmptyTrashDaysSelect.disabled = !enabled;
@@ -686,12 +828,22 @@ autoEmptyTrashToggle.addEventListener('change', () => {
   applyAutoEmptyTrashSetting(autoEmptyTrashToggle.checked);
   if (autoEmptyTrashToggle.checked) autoEmptyTrashIfNeeded();
 });
-applyAutoEmptyTrashSetting(localStorage.getItem(AUTO_EMPTY_TRASH_ENABLED_KEY) === 'true');
+applyAutoEmptyTrashSetting(storage.get(AUTO_EMPTY_TRASH_ENABLED_KEY) === 'true');
+
+// Shrink photos before upload (editor.js reads the same key with the same default - on for touch
+// devices, whose cameras produce 3-6 MB JPEGs, off for desktop browsers to match desktop Tasky's
+// full-resolution uploads unless the user opts in).
+const PHOTO_DOWNSCALE_KEY = 'tasky-photo-downscale';
+settingPhotoDownscale.checked =
+  (storage.get(PHOTO_DOWNSCALE_KEY) ?? String(window.matchMedia('(pointer: coarse)').matches)) === 'true';
+settingPhotoDownscale.addEventListener('change', () => {
+  storage.set(PHOTO_DOWNSCALE_KEY, String(settingPhotoDownscale.checked));
+});
 
 autoEmptyTrashDaysSelect.value = String(
-  Number(localStorage.getItem(AUTO_EMPTY_TRASH_DAYS_KEY)) || DEFAULT_AUTO_EMPTY_TRASH_DAYS);
+  Number(storage.get(AUTO_EMPTY_TRASH_DAYS_KEY)) || DEFAULT_AUTO_EMPTY_TRASH_DAYS);
 autoEmptyTrashDaysSelect.addEventListener('change', () => {
-  localStorage.setItem(AUTO_EMPTY_TRASH_DAYS_KEY, autoEmptyTrashDaysSelect.value);
+  storage.set(AUTO_EMPTY_TRASH_DAYS_KEY, autoEmptyTrashDaysSelect.value);
   autoEmptyTrashIfNeeded();
 });
 
@@ -702,11 +854,11 @@ function formatLastSynced(date) {
   return `Last synced: ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
 }
 function setLastSynced(date) {
-  localStorage.setItem(LAST_SYNCED_KEY, date.toISOString());
+  storage.set(LAST_SYNCED_KEY, date.toISOString());
   accountLastSyncedEl.textContent = formatLastSynced(date);
 }
 {
-  const stored = localStorage.getItem(LAST_SYNCED_KEY);
+  const stored = storage.get(LAST_SYNCED_KEY);
   accountLastSyncedEl.textContent = formatLastSynced(stored ? new Date(stored) : null);
 }
 
@@ -723,7 +875,7 @@ async function confirmSignInIfDirty() {
   return true;
 }
 
-// The header avatar and the save-status line (see performSave/loadFromDriveWithRetry below) are
+// The header avatar and the save-status line (see performSave/loadFromDrive below) are
 // both easy to miss - a small icon and a subtle status-bar line, neither of which interrupts
 // whatever pane happens to be open (reported live: "sometime I may miss the icon saying I'm
 // disconnected"). This is the same weight as the "Drive access not granted" notice, but as an
@@ -736,50 +888,25 @@ let signedOutModalShown = false;
 function showSignedOutModal() {
   if (signedOutModalShown) return;
   signedOutModalShown = true;
-  const overlay = document.createElement('div');
-  overlay.className = 'confirm-overlay';
-  const card = document.createElement('div');
-  card.className = 'confirm-card';
-  const heading = document.createElement('h2');
-  heading.textContent = 'Signed Out';
-  const body = document.createElement('p');
-  body.textContent = "You've been signed out of Google - nothing you do now will sync to Drive until you reconnect.";
-  const actions = document.createElement('div');
-  actions.className = 'link-modal-actions';
-  const laterBtn = document.createElement('button');
-  laterBtn.type = 'button';
-  laterBtn.className = 'btn btn-ghost';
-  laterBtn.textContent = 'Dismiss';
-  const signInBtn = document.createElement('button');
-  signInBtn.type = 'button';
-  signInBtn.className = 'btn btn-primary';
-  signInBtn.textContent = 'Sign In';
-  actions.append(laterBtn, signInBtn);
-  card.append(heading, body, actions);
-  overlay.appendChild(card);
-  document.body.appendChild(overlay);
-  signInBtn.focus();
-  const close = () => {
-    overlay.remove();
-    document.removeEventListener('keydown', onKeydown);
-  };
-  function onKeydown(e) {
-    if (e.key === 'Escape') close();
-  }
-  laterBtn.addEventListener('click', close);
-  signInBtn.addEventListener('click', () => {
-    close();
-    confirmSignInIfDirty();
+  openDialog({
+    variant: 'confirm',
+    title: 'Signed Out',
+    message: "You've been signed out of Google - nothing you do now will sync to Drive until you reconnect.",
+    actions: [
+      { label: 'Dismiss', value: false },
+      { label: 'Sign In', value: true, primary: true },
+    ],
+    dismissValue: false,
+  }).then((signIn) => {
+    if (signIn) confirmSignInIfDirty();
   });
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close();
-  });
-  document.addEventListener('keydown', onKeydown);
 }
 
 // --- Sync now -----------------------------------------------------------------
 syncNowBtn.addEventListener('click', async () => {
-  if (!auth.isSignedIn()) {
+  // An expired-but-refreshable token is not "signed out": performSave() refreshes it silently via
+  // getAccessToken(). Only a session with nothing to refresh needs the redirect sign-in.
+  if (!auth.isSignedIn() && !auth.hasRefreshSession()) {
     confirmSignInIfDirty(); // redirects away and back; the resumed session syncs normally on return
     return;
   }
@@ -793,12 +920,12 @@ syncNowBtn.addEventListener('click', async () => {
 const SIDEBAR_COLLAPSED_KEY = 'tasky-sidebar-collapsed';
 function setSidebarCollapsed(collapsed) {
   appBody.classList.toggle('sidebar-collapsed', collapsed);
-  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+  storage.set(SIDEBAR_COLLAPSED_KEY, String(collapsed));
 }
 sidebarCollapseBtn.addEventListener('click', () => {
   setSidebarCollapsed(!appBody.classList.contains('sidebar-collapsed'));
 });
-setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true');
+setSidebarCollapsed(storage.get(SIDEBAR_COLLAPSED_KEY) === 'true');
 
 // --- List pane resize (desktop only - see .pane-resizer, hidden below 1024px) -------------
 const LIST_PANE_WIDTH_KEY = 'tasky-list-pane-width';
@@ -817,7 +944,7 @@ function setListPaneWidth(px) {
   return clamped;
 }
 
-const savedListPaneWidth = Number(localStorage.getItem(LIST_PANE_WIDTH_KEY));
+const savedListPaneWidth = Number(storage.get(LIST_PANE_WIDTH_KEY));
 if (savedListPaneWidth) setListPaneWidth(savedListPaneWidth);
 
 paneResizer.addEventListener('pointerdown', (e) => {
@@ -840,7 +967,7 @@ paneResizer.addEventListener('pointerdown', (e) => {
   function onUp() {
     paneResizer.classList.remove('dragging');
     appBody.classList.remove('resizing');
-    localStorage.setItem(LIST_PANE_WIDTH_KEY, String(lastWidth));
+    storage.set(LIST_PANE_WIDTH_KEY, String(lastWidth));
     paneResizer.removeEventListener('pointermove', onMove);
     paneResizer.removeEventListener('pointerup', onUp);
   }
@@ -858,7 +985,11 @@ async function onSignedIn() {
   const name = auth.getAccountName();
   const picture = auth.getAccountPicture();
   if (picture) {
-    accountBtn.innerHTML = `<img src="${picture}" alt="" referrerpolicy="no-referrer" />`;
+    const img = document.createElement('img');
+    img.src = picture;
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    accountBtn.replaceChildren(img);
   } else if (email) {
     accountBtn.textContent = email[0].toUpperCase();
   }
@@ -868,11 +999,20 @@ async function onSignedIn() {
     accountEmailEl.textContent = email;
   }
 
-  await loadFromDriveWithRetry();
+  await loadFromDrive();
 }
 
-async function loadFromDriveWithRetry() {
+async function loadFromDrive() {
+  // Already running on the local copy (Retry button, or a second call): a fresh download would
+  // overwrite whatever was edited offline. A forced sync merges instead, and its success path
+  // clears bootedFromSnapshot.
+  if (bootedFromSnapshot) {
+    await performSave({ force: true, statusVerb: 'Sync' });
+    return;
+  }
   try {
+    // Fail fast to the local copy rather than waiting out the token refresh's own retries.
+    if (!navigator.onLine) throw new Error('offline');
     taskyFolderId = await drive.ensureTaskyFolder();
     const files = await drive.listTaskyFiles(taskyFolderId);
     const match =
@@ -885,11 +1025,14 @@ async function loadFromDriveWithRetry() {
       const text = await drive.downloadFileText(match.id);
       appState = JSON.parse(text);
       appState.Tasks ??= [];
+      appState.Tasks.forEach(normalizeTask);
       appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
       appState.SavedViews ??= [];
       appState.DeletedSavedViewIds ??= [];
+      const recovered = await reconcileDirtySnapshot();
       autoEmptyTrashIfNeeded();
-      setStatus(`Loaded ${appState.Tasks.length} task(s)`, { autoHide: true });
+      setStatus(recovered ? 'Loaded, with unsaved edits recovered from your last session' : `Loaded ${appState.Tasks.length} task(s)`, { autoHide: !recovered });
+      if (recovered) markDirty();
     } else {
       currentFileName = DEFAULT_DATA_FILE_NAME;
       drive.setSyncContext(taskyFolderId, DEFAULT_DATA_FILE_NAME);
@@ -905,8 +1048,14 @@ async function loadFromDriveWithRetry() {
     loadErrorNeedsDriveConsent = false;
     renderSidebar();
     renderList();
+    scheduleSnapshot();
+    restorePlace();
   } catch (err) {
     console.error(err);
+    // Anything other than "sign in again" is worth showing the local copy for - offline, Drive
+    // down, the sign-in service briefly unreachable (AUTH_UNAVAILABLE) - a killed-and-relaunched
+    // PWA on the train should open on the tasks it had, not an error.
+    if (err.message !== 'NOT_SIGNED_IN' && err.message !== 'DRIVE_SCOPE_MISSING' && (await restoreFromSnapshot(err))) return;
     // Leaving the list pane blank here would look identical to "nothing to show," with only the
     // easy-to-miss header status line explaining why - render an explicit error + retry instead,
     // reusing the same empty-state slot renderList() already owns.
@@ -927,11 +1076,34 @@ async function loadFromDriveWithRetry() {
       loadError = 'Google Drive access wasn’t granted';
     } else {
       setStatus(friendlyErrorMessage('Load failed', err));
-      loadError = navigator.onLine ? err.message : 'no internet connection';
+      loadError = describeError(err);
     }
     renderSidebar();
     renderList();
   }
+}
+
+// A previous session that died with unsaved edits (tab killed by the OS, or offline the whole
+// time) left the local copy marked dirty. Treat that copy as this device's state and the file
+// just downloaded as the remote side, exactly as a sync would - see reconcileLocalSnapshot.
+// Returns true if anything was recovered, in which case the caller marks the result dirty so it
+// gets uploaded.
+async function reconcileDirtySnapshot() {
+  const snap = await readSnapshot();
+  if (!snap?.dirty || !snap.appState || !snapshotBelongsToThisAccount(snap)) return false;
+  const local = snap.appState;
+  local.Tasks ??= [];
+  local.Tasks.forEach(normalizeTask);
+  local.DeletedTasks = deduplicateTombstones(local.DeletedTasks ?? []);
+  local.SavedViews ??= [];
+  local.DeletedSavedViewIds ??= [];
+  const storedLastSync = storage.get(LAST_SYNCED_KEY);
+  const { state, conflicted } = reconcileLocalSnapshot(local, appState, storedLastSync ? new Date(storedLastSync) : null);
+  appState = state;
+  if (conflicted > 0) {
+    mergeNotice = `${conflicted} recovered edit${conflicted === 1 ? '' : 's'} conflicted with a change made elsewhere and ${conflicted === 1 ? 'was' : 'were'} kept as "(conflicted copy)".`;
+  }
+  return true;
 }
 
 // --- Filtering / sorting ----------------------------------------------------
@@ -992,7 +1164,7 @@ function applyQuickFilter(tasks) {
       case 'recurring':
         return t.Recurrence !== RecurrenceRule.None;
       case 'hasLink':
-        return t.Body.some((b) => b.Type === NoteBlockType.Link);
+        return taskHasLink(t);
       case 'hasAttachment':
         return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b) || blockHasInlineFile(b));
       default:
@@ -1038,7 +1210,7 @@ function applySearch(tasks, queryOverride) {
         else if (value === 'highpriority') result = result.filter((t) => t.Priority === TaskPriority.High);
         break;
       case 'has':
-        if (value === 'link') result = result.filter((t) => t.Body.some((b) => b.Type === NoteBlockType.Link));
+        if (value === 'link') result = result.filter((t) => taskHasLink(t));
         else if (value === 'attachment') {
           result = result.filter((t) => t.Body.some((b) =>
             b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b) || blockHasInlineFile(b)));
@@ -1128,89 +1300,61 @@ function migrateLegacyLocalViewsIfNeeded() {
   if (appState.SavedViews.length > 0) return; // already has synced views - never overwrite them
   let legacy;
   try {
-    legacy = JSON.parse(localStorage.getItem(LEGACY_SAVED_VIEWS_KEY) ?? '[]');
+    legacy = JSON.parse(storage.get(LEGACY_SAVED_VIEWS_KEY) ?? '[]');
   } catch {
     legacy = [];
   }
   if (!Array.isArray(legacy) || legacy.length === 0) return;
 
   appState.SavedViews = legacy.map((v) => ({ Id: v.id, Label: v.label, Query: v.query }));
-  localStorage.removeItem(LEGACY_SAVED_VIEWS_KEY);
+  storage.remove(LEGACY_SAVED_VIEWS_KEY);
   markDirty();
 }
 
 function promptForViewName() {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-
-    const card = document.createElement('div');
-    card.className = 'modal-card link-modal-card';
-
-    const heading = document.createElement('h2');
-    heading.textContent = 'Save View';
-
-    const nameLabel = document.createElement('label');
-    nameLabel.className = 'link-modal-field';
-    nameLabel.textContent = 'Name';
-    const nameInput = document.createElement('input');
-    nameInput.type = 'text';
-    nameInput.placeholder = 'e.g. Urgent';
-    nameLabel.appendChild(nameInput);
-
-    const errorMsg = document.createElement('p');
-    errorMsg.className = 'link-modal-error hidden';
-    errorMsg.textContent = 'Enter a name for this view.';
-
-    const actions = document.createElement('div');
-    actions.className = 'link-modal-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.className = 'btn btn-primary';
-    saveBtn.textContent = 'Save';
-    actions.append(cancelBtn, saveBtn);
-
-    card.append(heading, nameLabel, errorMsg, actions);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    nameInput.focus();
-
-    function close(result) {
-      document.removeEventListener('keydown', onKeydown);
-      overlay.remove();
-      resolve(result);
-    }
-    function submit() {
-      const name = nameInput.value.trim();
-      if (!name) {
-        errorMsg.classList.remove('hidden');
-        nameInput.focus();
-        return;
-      }
-      close(name);
-    }
-    function onKeydown(e) {
-      if (e.key === 'Escape') close(null);
-      else if (e.key === 'Enter') {
-        e.preventDefault();
-        submit();
-      }
-    }
-    document.addEventListener('keydown', onKeydown);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close(null);
-    });
-    cancelBtn.addEventListener('click', () => close(null));
-    saveBtn.addEventListener('click', submit);
+  return openDialog({
+    title: 'Save View',
+    fields: [{ key: 'name', label: 'Name', placeholder: 'e.g. Urgent', error: 'Enter a name for this view.' }],
+    actions: [
+      { label: 'Cancel', value: null },
+      { label: 'Save', primary: true, submit: true, validate: (v) => (v.name ? null : 'name'), value: (v) => v.name },
+    ],
   });
 }
 
+// Mirrors desktop's MainViewModel.BuildEffectiveSearchQuery (v1.9.5): folds the active quick-filter
+// chip and a selected tag section into the same tag:/is:/has:/due: operator syntax applySearch()
+// already parses, alongside whatever was typed. Without this a view could only be saved from
+// typed text, so "Overdue" or a tag scope - the two most natural things to want back - couldn't be
+// kept at all.
+const QUICK_FILTER_OPERATORS = {
+  overdue: 'is:overdue',
+  dueToday: 'due:today',
+  noDueDate: 'due:none',
+  recurring: 'is:recurring',
+  hasLink: 'has:link',
+  hasAttachment: 'has:attachment',
+};
+
+function buildEffectiveSearchQuery() {
+  const parts = [];
+  const hasToken = (token) => parts.some((p) => p.toLowerCase().includes(token.toLowerCase()));
+  if (searchQuery.trim()) parts.push(searchQuery.trim());
+  const filterToken = QUICK_FILTER_OPERATORS[quickFilter];
+  if (filterToken && !hasToken(filterToken)) parts.push(filterToken);
+  if (currentSection.kind === 'tag') {
+    const tagToken = `tag:${currentSection.tag}`;
+    if (!hasToken(tagToken)) parts.push(tagToken);
+  }
+  return parts.join(' ');
+}
+
+function updateSaveViewButton() {
+  saveViewBtn.disabled = !buildEffectiveSearchQuery();
+}
+
 async function saveCurrentSearchAsView() {
-  const query = searchQuery.trim();
+  const query = buildEffectiveSearchQuery();
   if (!query) return;
   const label = await promptForViewName();
   if (!label) return;
@@ -1242,8 +1386,154 @@ function touch(task) {
 function markDirty() {
   dirty = true;
   setStatus('Unsaved changes…');
+  setSyncState(navigator.onLine ? 'pending' : 'offline');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(triggerSave, SAVE_DEBOUNCE_MS);
+  scheduleSnapshot();
+}
+
+// --- Local copy (snapshot.js) ---------------------------------------------------------------------
+// Written shortly after every edit and after every successful sync, so the IndexedDB copy always
+// mirrors what's on screen plus whether it has reached Drive yet (`dirty`). Debounced because
+// markDirty fires per keystroke; flushed immediately when the tab goes hidden (see the
+// visibilitychange handler below) since that's the last chance before a mobile OS may kill it.
+const SNAPSHOT_DEBOUNCE_MS = 500;
+function scheduleSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(flushSnapshot, SNAPSHOT_DEBOUNCE_MS);
+}
+
+function flushSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = null;
+  if (!taskyFolderId && !bootedFromSnapshot) return; // nothing loaded yet - never overwrite a real copy with the empty default
+  return writeSnapshot({
+    appState,
+    currentFileId,
+    currentFileName,
+    taskyFolderId,
+    noRemoteFileYet,
+    dirty,
+    accountEmail: auth.getAccountEmail(),
+  });
+}
+
+function snapshotBelongsToThisAccount(snap) {
+  const email = auth.getAccountEmail();
+  // Either side unknown (offline boot with an expired token cache has no email yet) - trust it;
+  // signOut() clears the snapshot, so a mismatch can only mean a different account signed in.
+  return !email || !snap.accountEmail || email === snap.accountEmail;
+}
+
+// Drive is unreachable: adopt the local copy so the app is usable, and flag the state so the
+// first successful sync (the online listener, Sync Now, or the autosave retry loop if the copy
+// was dirty) replaces "local" with "synced". Returns false if there's no usable copy.
+async function restoreFromSnapshot(err) {
+  const snap = await readSnapshot();
+  if (!snap || !snap.appState || !snapshotBelongsToThisAccount(snap)) return false;
+  appState = snap.appState;
+  appState.Tasks ??= [];
+  appState.Tasks.forEach(normalizeTask);
+  appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
+  appState.SavedViews ??= [];
+  appState.DeletedSavedViewIds ??= [];
+  currentFileId = snap.currentFileId ?? null;
+  currentFileName = snap.currentFileName ?? DEFAULT_DATA_FILE_NAME;
+  taskyFolderId = snap.taskyFolderId ?? null;
+  noRemoteFileYet = !!snap.noRemoteFileYet;
+  if (taskyFolderId) drive.setSyncContext(taskyFolderId, currentFileName);
+  bootedFromSnapshot = true;
+  loadError = null;
+  loadErrorIsAuthFailure = false;
+  loadErrorNeedsDriveConsent = false;
+  setStatus(`Showing your local copy (${describeError(err)}) — will sync when Google Drive is reachable`);
+  setSyncState(navigator.onLine ? 'local' : 'offline');
+  saveStatus.classList.remove('save-status-action');
+  if (snap.dirty) {
+    dirty = true;
+    scheduleSaveRetry();
+  } else if (navigator.onLine) {
+    // Online but Drive/sign-in was briefly unreachable - try a real sync again shortly.
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => performSave({ force: true, statusVerb: 'Sync' }), SAVE_RETRY_BASE_MS);
+  }
+  renderSidebar();
+  renderList();
+  restorePlace();
+  return true;
+}
+
+// --- Restore your place (U2) ----------------------------------------------------------------------
+// Mobile OSes reload PWAs constantly; landing on the Sections list every time made a long edit
+// session on a phone a chore. The current section, open task and mobile view are remembered on
+// this device, and a task also gets a #task=<id> hash so the URL itself is a deep link that can
+// be shared or bookmarked (a hash never reaches the server or the OAuth redirect_uri).
+const PLACE_KEY = 'tasky-place';
+function savePlace() {
+  storage.set(PLACE_KEY, JSON.stringify({ section: currentSection, taskId: selectedTaskId, view: appEl.dataset.view }));
+  const hash = selectedTaskId ? `#task=${encodeURIComponent(selectedTaskId)}` : '';
+  if (location.hash !== hash) {
+    history.replaceState(history.state, '', location.pathname + location.search + hash);
+  }
+}
+
+function taskIdFromHash() {
+  const m = /^#task=([^&]+)$/.exec(location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function sectionIsAvailable(section) {
+  if (!section || typeof section.kind !== 'string') return false;
+  switch (section.kind) {
+    case 'today': case 'all': case 'recurring': case 'done': case 'trash':
+      return true;
+    case 'tag':
+      return typeof section.tag === 'string' && allTags().includes(section.tag.toLowerCase());
+    case 'view':
+      return appState.SavedViews.some((v) => v.Id === section.viewId);
+    default:
+      return false;
+  }
+}
+
+function restorePlace() {
+  let place = null;
+  try {
+    place = JSON.parse(storage.get(PLACE_KEY) ?? 'null');
+  } catch {
+    place = null;
+  }
+  const hashId = taskIdFromHash();
+  const taskId = hashId ?? place?.taskId ?? null;
+  const task = taskId ? findTask(taskId) : null;
+
+  if (place && sectionIsAvailable(place.section)) {
+    currentSection = place.section;
+    renderSidebar();
+    renderList();
+  }
+  if (task) {
+    // A deep link to a task that isn't in the remembered section still has to be reachable -
+    // fall back to the one section every non-trashed task belongs to.
+    if (!tasksForSection(currentSection).some((t) => t.Id === task.Id)) {
+      currentSection = task.IsClosed ? { kind: 'trash' } : task.IsDone ? { kind: 'done' } : { kind: 'all' };
+      renderSidebar();
+    }
+    selectedTaskId = task.Id;
+    renderList();
+    renderEditor(task);
+    showMobileView(hashId ? 'editor' : (place?.view ?? 'editor'));
+  } else if (place?.view === 'list' && place.section) {
+    showMobileView('list');
+  } else if (place?.view === 'editor' && !place.taskId) {
+    showMobileView('editor'); // the dashboard (editor pane's empty state)
+  } else if (!place && isSinglePaneLayout()) {
+    // First launch on this phone: open on Today rather than the Sections list - it's the
+    // highest-frequency destination and matches what the tab bar leads with.
+    selectSection({ kind: 'today' });
+  } else {
+    savePlace(); // drops a stale #task= hash for a task that no longer exists
+  }
 }
 
 async function triggerSave() {
@@ -1271,24 +1561,38 @@ async function performSave({ force, statusVerb }) {
   saving = true;
   dirty = false;
   setStatus(`${statusVerb === 'Save' ? 'Saving' : 'Syncing'}…`);
+  setSyncState('saving');
   setSyncProgress(5);
   try {
     const conflicted = await saveToDrive();
     setSyncProgress(100);
-    setStatus(
-      conflicted > 0
-        ? `Synced - ${conflicted} edit${conflicted === 1 ? '' : 's'} conflicted with a remote change and ` +
-          `${conflicted === 1 ? 'was' : 'were'} kept as "(conflicted copy)".`
-        : 'Saved',
-      { autoHide: conflicted === 0 });
+    saveRetryDelay = SAVE_RETRY_BASE_MS;
+    const notice = mergeNotice;
+    mergeNotice = null;
+    const conflictText = conflicted > 0
+      ? `Synced - ${conflicted} edit${conflicted === 1 ? '' : 's'} conflicted with a remote change and ` +
+        `${conflicted === 1 ? 'was' : 'were'} kept as "(conflicted copy)".`
+      : null;
+    if (conflictText || notice) {
+      setStatus([conflictText ?? 'Saved', notice].filter(Boolean).join(' '));
+    } else {
+      setStatus('Saved', { autoHide: true });
+    }
     saveStatus.classList.remove('save-status-action');
     setLastSynced(new Date());
+    bootedFromSnapshot = false; // the local copy has been reconciled with Drive - back to normal
+    scheduleSnapshot();
+    setSyncState(dirty ? 'pending' : 'synced');
   } catch (err) {
     dirty = hadLocalEdits; // don't invent an unsaved edit that was never there (e.g. a pull-only Sync Now)
+    scheduleSnapshot(); // keep the local copy's dirty flag truthful for a killed tab
+    // Status text is set per-branch below; the indicator picks it up afterwards.
+    queueMicrotask(() => setSyncState(navigator.onLine ? 'error' : 'offline', saveStatus.textContent));
     // getAccessToken() deliberately throws instead of attempting a background reauth (that's
     // the same unwanted-popup problem this debounce timer isn't allowed to trigger) - surface
     // it as a click target instead, since a click IS allowed to reauth. driveFetch() throws this
-    // same sentinel for a token Google rejected mid-sync too, not just a missing one.
+    // same sentinel for a token Google rejected mid-sync too, not just a missing one. Neither
+    // auth case gets an automatic retry - both need the user to sign in again first.
     if (err.message === 'NOT_SIGNED_IN') {
       setStatus('Signed out — click to reconnect');
       saveStatus.classList.add('save-status-action');
@@ -1297,8 +1601,15 @@ async function performSave({ force, statusVerb }) {
       setStatus('Drive access not granted — click to fix');
       saveStatus.classList.add('save-status-action');
     } else {
-      setStatus(friendlyErrorMessage(`${statusVerb} failed`, err));
       console.error(err);
+      // Only edits are worth retrying unattended - a pull-only Sync Now that failed has nothing
+      // at stake, and the user already saw the failure.
+      if (dirty) {
+        setStatus(`${friendlyErrorMessage(`${statusVerb} failed`, err)} — retrying in ${Math.round(saveRetryDelay / 1000)}s`);
+        scheduleSaveRetry();
+      } else {
+        setStatus(friendlyErrorMessage(`${statusVerb} failed`, err));
+      }
     }
   } finally {
     saving = false;
@@ -1310,17 +1621,28 @@ async function performSave({ force, statusVerb }) {
   }
 }
 
+function scheduleSaveRetry() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(triggerSave, saveRetryDelay);
+  saveRetryDelay = Math.min(saveRetryDelay * 2, SAVE_RETRY_MAX_MS);
+}
+
 // Android backgrounds tabs aggressively (switching apps, the home/back gesture, the OS reclaiming
-// memory) and throttles or fully suspends JS timers once hidden - the 10s autosave debounce may
+// memory) and throttles or fully suspends JS timers once hidden - the 4s autosave debounce may
 // simply never get to fire before the page is gone, silently losing whatever was just typed.
 // visibilitychange is the standard mobile-safe signal for this (unlike beforeunload, which mobile
 // browsers don't reliably fire just for backgrounding rather than closing): flush immediately the
-// moment the page goes hidden instead of waiting out the rest of the debounce window.
+// moment the page goes hidden instead of waiting out the rest of the debounce window. Coming back
+// gets the same treatment: a retry timer that was due while the tab was suspended may have been
+// throttled or dropped outright, so anything still dirty is flushed on return rather than left
+// waiting on a timer that might never fire.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden' && dirty) {
-    clearTimeout(saveTimer);
-    triggerSave();
-  }
+  // The local copy first, unconditionally: a hidden PWA can be killed at any moment, and a
+  // snapshot write is cheap, local and far more likely to complete than the Drive round-trip.
+  if (document.visibilityState === 'hidden') flushSnapshot();
+  if (!dirty) return;
+  clearTimeout(saveTimer);
+  triggerSave();
 });
 
 // Desktop-browser backstop for the same problem visibilitychange covers on mobile: closing or
@@ -1359,23 +1681,17 @@ async function mergeFromRemote() {
     setSyncProgress(45);
     const remoteState = JSON.parse(text);
     remoteState.Tasks ??= [];
+    remoteState.Tasks.forEach(normalizeTask); // remote-only tasks are pushed into appState as-is by the merge
     remoteState.DeletedTasks = deduplicateTombstones(remoteState.DeletedTasks ?? []);
     remoteState.SavedViews ??= [];
     remoteState.DeletedSavedViewIds ??= [];
-    const storedLastSync = localStorage.getItem(LAST_SYNCED_KEY);
-    const { conflicted } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
+    const storedLastSync = storage.get(LAST_SYNCED_KEY);
+    const { conflicted, updatedIds, removedIds } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
     mergeSavedViews(appState, remoteState);
     autoEmptyTrashIfNeeded();
     renderSidebar();
     renderList();
-    // A merge can update the task currently open in the editor pane (e.g. a body edit made on
-    // another device) - renderList() alone won't reflect that there, since the editor only
-    // normally re-renders when you click into a task. Skip it while the editor itself has
-    // focus so an in-progress edit's cursor position isn't disrupted mid-typing.
-    const selectedTask = selectedTaskId ? findTask(selectedTaskId) : null;
-    if (selectedTask && !editorContent.contains(document.activeElement)) {
-      renderEditor(selectedTask);
-    }
+    refreshEditorAfterMerge(updatedIds, removedIds);
     return { modifiedTime: meta?.modifiedTime ?? null, conflicted };
   } catch (err) {
     console.warn('Could not read remote file for merge, uploading local state as-is.', err);
@@ -1383,11 +1699,129 @@ async function mergeFromRemote() {
   }
 }
 
+// A merge can change the task currently open in the editor pane - a body edit made on another
+// device, or a deletion there. renderList() alone won't reflect that: the editor only normally
+// re-renders when you click into a task, and the two cases are worse than merely stale. An
+// updated task had its Body replaced with brand-new block objects (sync.js applyTaskFields), so
+// the editor's live contentEditable listeners keep writing into the OLD, now-orphaned objects -
+// everything typed after that point silently vanished from the next save. A removed task no
+// longer exists in appState at all, so the editor kept showing a dead task whose edits went
+// nowhere. Both used to hide behind a "don't disturb the editor while it has focus" guard; a
+// focused editor is exactly when this matters most, so it re-renders anyway and puts the caret
+// back where it was (captureEditorFocus/restoreEditorFocus) instead of skipping.
+function refreshEditorAfterMerge(updatedIds, removedIds) {
+  if (!selectedTaskId) return;
+  if (removedIds.includes(selectedTaskId)) {
+    selectedTaskId = null;
+    showEmptyEditor();
+    mergeNotice = 'The task you had open was deleted on another device.';
+    return;
+  }
+  const task = findTask(selectedTaskId);
+  if (!task) return;
+  const focus = captureEditorFocus();
+  if (updatedIds.includes(selectedTaskId)) {
+    renderEditor(task);
+    restoreEditorFocus(focus);
+    mergeNotice = 'The task you have open was updated on another device.';
+  } else if (!focus) {
+    // Untouched by this merge and not being edited - a plain refresh is harmless and keeps the
+    // pre-existing behavior for anything else that might have shifted (e.g. tag list changes).
+    renderEditor(task);
+  }
+}
+
+// Where the caret is inside the editor, in a form that survives a full renderEditor() rebuild:
+// which field (title / nth text block / nth checklist-or-tag input) and the offset within it.
+// Null when focus isn't inside the editor at all.
+function captureEditorFocus() {
+  const active = document.activeElement;
+  if (!active || !editorContent.contains(active)) return null;
+  if (active === editorTitle) {
+    return { kind: 'title', start: active.selectionStart, end: active.selectionEnd };
+  }
+  if (active.classList.contains('block-text')) {
+    const blocks = [...editorBody.querySelectorAll('.block-text')];
+    return { kind: 'block', index: blocks.indexOf(active), offset: caretOffsetWithin(active) };
+  }
+  if (active.tagName === 'INPUT' && active.type === 'text') {
+    const inputs = [...editorContent.querySelectorAll('input[type="text"]')];
+    return { kind: 'input', index: inputs.indexOf(active), start: active.selectionStart, end: active.selectionEnd };
+  }
+  return null;
+}
+
+function restoreEditorFocus(focus) {
+  if (!focus) return;
+  try {
+    if (focus.kind === 'title') {
+      editorTitle.focus();
+      const len = editorTitle.value.length;
+      editorTitle.setSelectionRange(Math.min(focus.start, len), Math.min(focus.end, len));
+    } else if (focus.kind === 'block') {
+      const el = editorBody.querySelectorAll('.block-text')[focus.index];
+      if (!el) return;
+      el.focus();
+      setCaretOffset(el, focus.offset);
+    } else if (focus.kind === 'input') {
+      const el = editorContent.querySelectorAll('input[type="text"]')[focus.index];
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      el.setSelectionRange(Math.min(focus.start, len), Math.min(focus.end, len));
+    }
+  } catch {
+    // Best-effort - a caret that lands at the end of the field is a far smaller problem than the
+    // silently-dropped keystrokes this whole path exists to prevent.
+  }
+}
+
+// Character offset of the selection end within a contentEditable, counting only its text.
+function caretOffsetWithin(el) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return 0;
+  const live = sel.getRangeAt(0);
+  const range = live.cloneRange();
+  range.selectNodeContents(el);
+  range.setEnd(live.endContainer, live.endOffset);
+  return range.toString().length;
+}
+
+function setCaretOffset(el, offset) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  let remaining = Math.max(0, Math.min(offset, el.textContent.length));
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (remaining <= node.length) {
+      range.setStart(node, remaining);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    remaining -= node.length;
+  }
+  // No text node reached (empty block) - park the caret at the end of whatever's there.
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 // Returns how many of this device's edits conflicted with a remote change during the merge(s)
 // below (see mergeFromRemote), so performSave can tell the user rather than silently uploading
 // over a conflict resolution nobody saw happen.
 async function saveToDrive() {
-  // currentFileId is only null because loadFromDriveWithRetry's search came up empty back when
+  // A photo/file that's been picked but not yet fully uploaded is already referenced by name in
+  // task.Body - serializing now would publish a pointer to bytes that aren't on Drive yet (and
+  // never will be, if this page dies mid-upload). editor.js tracks every in-flight upload,
+  // including its rollback if it fails, so this only proceeds once the body is consistent.
+  await waitForPendingUploads();
+
+  // currentFileId is only null because loadFromDrive's search came up empty back when
   // the page loaded - an arbitrary amount of time (waiting for a first edit, the autosave
   // debounce) can pass between that check and this, the first save. If another device's first
   // sync landed in that gap, blindly uploading as "create new" below would produce a second
@@ -1431,12 +1865,85 @@ async function saveToDrive() {
   return conflicted;
 }
 
-function createTask() {
-  const task = newTaskItem({ text: '' });
-  appState.Tasks.push(task);
+// A task created while looking at a tag section or Today used to bounce the list straight to
+// All Tasks. Instead it now inherits the section's own scope - the tag, or a due date of today
+// (9:00, the same default quick-add's "!due:today" uses) - so it shows up right where it was
+// added. Only when the new task genuinely can't appear in the current section (Completed, Trash,
+// Recurring, a saved view it doesn't match) does the list switch to All Tasks, and it says so.
+function adoptSectionScope(task) {
+  if (currentSection.kind === 'tag') {
+    const lower = currentSection.tag.toLowerCase();
+    if (!task.Tags.includes(lower)) task.Tags.push(lower);
+  } else if (currentSection.kind === 'today' && !task.DueDate) {
+    task.DueDate = parseQuickAdd('!due:today').dueDate;
+  }
+}
+
+function settleSectionAfterCreate(task) {
+  if (tasksForSection(currentSection).some((t) => t.Id === task.Id)) return;
   currentSection = { kind: 'all' };
+  setStatus('Added to All Tasks', { autoHide: true });
+}
+
+// "+ New Task" creates a real (saved, synced) task before anything has been typed, so tapping it
+// and then navigating away used to leave an "(untitled)" task behind every time - on a phone the
+// back gesture is the natural way to abandon one. A task this session's createTask() made that
+// is still completely empty when it stops being the open task is dropped again, silently: there
+// is nothing in it to lose. Only this session's own new tasks qualify (never an existing empty
+// task another device kept on purpose), and the tombstone covers the case where autosave already
+// uploaded it. Called from every "stop looking at this task" path: opening another row, leaving
+// the editor view on a phone, changing section, going to the dashboard, or pressing New Task again.
+const untouchedNewTaskIds = new Set();
+function isTaskStillEmpty(task) {
+  const body = task.Body ?? [];
+  const bodyEmpty =
+    body.length === 0 ||
+    (body.length === 1 && body[0].Type === NoteBlockType.Text && !(body[0].Text || '').trim() && !body[0].Rtf);
+  return (
+    !(task.Text || '').trim() &&
+    (task.Tags ?? []).length === 0 &&
+    !task.DueDate &&
+    !task.IsPinned &&
+    !task.IsDone &&
+    !task.IsClosed &&
+    (task.Priority ?? TaskPriority.None) === TaskPriority.None &&
+    task.Recurrence === RecurrenceRule.None &&
+    bodyEmpty
+  );
+}
+function discardUntouchedNewTasks({ keep = null } = {}) {
+  let discarded = false;
+  let closedEditor = false;
+  for (const id of [...untouchedNewTaskIds]) {
+    if (id === keep) continue;
+    untouchedNewTaskIds.delete(id); // from here on it's either gone or a real task
+    const task = findTask(id);
+    if (!task || !isTaskStillEmpty(task)) continue;
+    appState.Tasks = appState.Tasks.filter((t) => t.Id !== id);
+    recordTombstone(id);
+    if (selectedTaskId === id) {
+      selectedTaskId = null;
+      closedEditor = true;
+    }
+    discarded = true;
+  }
+  if (!discarded) return false;
+  markDirty();
+  renderSidebar();
+  renderList();
+  if (closedEditor) showEmptyEditor();
+  return true;
+}
+
+function createTask() {
+  discardUntouchedNewTasks();
+  const task = newTaskItem({ text: '' });
+  adoptSectionScope(task);
+  appState.Tasks.push(task);
+  untouchedNewTaskIds.add(task.Id);
   selectedTaskId = task.Id;
   markDirty();
+  settleSectionAfterCreate(task);
   renderSidebar();
   renderList();
   renderEditor(task);
@@ -1454,9 +1961,10 @@ function createQuickTask(raw) {
     const lower = tag.toLowerCase(); // matches addTag()'s own normalization - tags are always lowercase
     if (!task.Tags.includes(lower)) task.Tags.push(lower);
   }
+  adoptSectionScope(task);
   appState.Tasks.push(task);
-  if (currentSection.kind !== 'all') currentSection = { kind: 'all' };
   markDirty();
+  settleSectionAfterCreate(task);
   renderSidebar();
   renderList();
 }
@@ -1494,17 +2002,24 @@ function haptic(pattern = 15) {
   navigator.vibrate?.(pattern);
 }
 
+// Completing a recurring task always spawns its next occurrence, whichever path completed it -
+// desktop does this centrally from Task_PropertyChanged on any IsDone=true, so bulk "Mark Done"
+// there continues a series just like a single click does. Returns the spawned task (or null) so
+// the caller can fold it into its undo.
+function spawnIfRecurring(task) {
+  if (!task.IsDone || task.Recurrence === RecurrenceRule.None) return null;
+  const spawned = spawnNextOccurrence(task);
+  appState.Tasks.push(spawned);
+  return spawned;
+}
+
 function toggleDone(task) {
   const wasDone = task.IsDone;
   task.IsDone = !wasDone;
   if (task.IsDone) haptic(); // only on completing, not un-completing - that's an "oops, undo", not a win
   touch(task);
 
-  let spawned = null;
-  if (task.IsDone && task.Recurrence !== RecurrenceRule.None) {
-    spawned = spawnNextOccurrence(task);
-    appState.Tasks.push(spawned);
-  }
+  const spawned = spawnIfRecurring(task);
   markDirty();
   renderSidebar();
   renderList();
@@ -1560,50 +2075,15 @@ function toggleTrash(task) {
 // the confirm button (and styles it as .btn.danger) - safer default for a destructive action than
 // having Enter/Space on an already-focused button do the irreversible thing.
 function confirmModal(message, { title = 'Are you sure?', confirmLabel = 'Confirm', danger = false } = {}) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-
-    const card = document.createElement('div');
-    card.className = 'confirm-card';
-
-    const heading = document.createElement('h2');
-    heading.textContent = title;
-
-    const body = document.createElement('p');
-    body.textContent = message;
-
-    const actions = document.createElement('div');
-    actions.className = 'link-modal-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = danger ? 'btn btn-ghost danger' : 'btn btn-primary';
-    confirmBtn.textContent = confirmLabel;
-    actions.append(cancelBtn, confirmBtn);
-
-    card.append(heading, body, actions);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    (danger ? cancelBtn : confirmBtn).focus();
-
-    function close(result) {
-      document.removeEventListener('keydown', onKeydown);
-      overlay.remove();
-      resolve(result);
-    }
-    function onKeydown(e) {
-      if (e.key === 'Escape') close(false);
-    }
-    document.addEventListener('keydown', onKeydown);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close(false);
-    });
-    cancelBtn.addEventListener('click', () => close(false));
-    confirmBtn.addEventListener('click', () => close(true));
+  return openDialog({
+    variant: 'confirm',
+    title,
+    message,
+    actions: [
+      { label: 'Cancel', value: false, focus: danger },
+      { label: confirmLabel, value: true, primary: !danger, danger },
+    ],
+    dismissValue: false,
   });
 }
 
@@ -1613,35 +2093,47 @@ function recordTombstone(taskId) {
   else appState.DeletedTasks.push(newTaskSyncRecord(taskId));
 }
 
-function autoEmptyTrashIfNeeded() {
-  if (localStorage.getItem(AUTO_EMPTY_TRASH_ENABLED_KEY) !== 'true') return;
-  const days = Number(localStorage.getItem(AUTO_EMPTY_TRASH_DAYS_KEY)) || DEFAULT_AUTO_EMPTY_TRASH_DAYS;
-  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const expired = appState.Tasks.filter((t) => t.IsClosed && parseDotNetDate(t.ModifiedAt).getTime() < cutoffMs);
-  if (expired.length === 0) return;
+// The one place every permanent removal funnels through (single delete, Empty Trash, bulk
+// delete, auto-empty): drops the tasks from appState, records their tombstones, closes the
+// editor if one of them was open, and cleans up their attachments on Drive. Mirrors desktop's
+// CleanupTaskAttachments: a file is only deleted if no *remaining* task still references it -
+// a "(conflicted copy)" shares every attachment filename with its original, so deleting one of
+// the pair must not take the other's photos with it. Web-only users previously accumulated
+// orphaned attachments in Drive forever, since only single-block removal ever cleaned up.
+function permanentlyRemoveTasks(tasks) {
+  if (tasks.length === 0) return;
+  const removedIds = new Set(tasks.map((t) => t.Id));
+  appState.Tasks = appState.Tasks.filter((t) => !removedIds.has(t.Id));
+  for (const id of removedIds) recordTombstone(id);
 
-  const expiredIds = new Set(expired.map((t) => t.Id));
-  appState.Tasks = appState.Tasks.filter((t) => !expiredIds.has(t.Id));
-  for (const id of expiredIds) recordTombstone(id);
-  if (selectedTaskId && expiredIds.has(selectedTaskId)) {
+  const removedFiles = new Set();
+  for (const t of tasks) collectTaskFileNames(t, removedFiles);
+  if (removedFiles.size > 0) {
+    const stillReferenced = new Set();
+    for (const t of appState.Tasks) collectTaskFileNames(t, stillReferenced);
+    deleteAttachmentFiles([...removedFiles].filter((name) => !stillReferenced.has(name)));
+  }
+
+  if (selectedTaskId && removedIds.has(selectedTaskId)) {
     selectedTaskId = null;
     showEmptyEditor();
   }
   markDirty();
 }
 
+function autoEmptyTrashIfNeeded() {
+  if (storage.get(AUTO_EMPTY_TRASH_ENABLED_KEY) !== 'true') return;
+  const days = Number(storage.get(AUTO_EMPTY_TRASH_DAYS_KEY)) || DEFAULT_AUTO_EMPTY_TRASH_DAYS;
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const expired = appState.Tasks.filter((t) => t.IsClosed && parseDotNetDate(t.ModifiedAt).getTime() < cutoffMs);
+  permanentlyRemoveTasks(expired);
+}
+
 async function deleteForever(task) {
   const confirmed = await confirmModal(`Delete "${task.Text || '(untitled)'}" permanently? This cannot be undone.`,
     { title: 'Delete Permanently', confirmLabel: 'Delete', danger: true });
   if (!confirmed) return;
-  appState.Tasks = appState.Tasks.filter((t) => t.Id !== task.Id);
-  recordTombstone(task.Id);
-
-  if (selectedTaskId === task.Id) {
-    selectedTaskId = null;
-    showEmptyEditor();
-  }
-  markDirty();
+  permanentlyRemoveTasks([task]);
   renderSidebar();
   renderList();
   showMobileView('list');
@@ -1653,16 +2145,7 @@ async function emptyTrash() {
   const confirmed = await confirmModal(`Permanently delete ${trashed.length} task(s) in Trash? This cannot be undone.`,
     { title: 'Empty Trash', confirmLabel: 'Delete All', danger: true });
   if (!confirmed) return;
-
-  const trashedIds = new Set(trashed.map((t) => t.Id));
-  appState.Tasks = appState.Tasks.filter((t) => !trashedIds.has(t.Id));
-  for (const id of trashedIds) recordTombstone(id);
-
-  if (selectedTaskId && trashedIds.has(selectedTaskId)) {
-    selectedTaskId = null;
-    showEmptyEditor();
-  }
-  markDirty();
+  permanentlyRemoveTasks(trashed);
   renderSidebar();
   renderList();
 }
@@ -1730,13 +2213,26 @@ const SWIPE_COMMIT_THRESHOLD = 64;
 const SWIPE_MAX_REVEAL = 92;
 const SWIPE_DIRECTION_DEADZONE = 8; // px of ambiguous movement before committing to horizontal vs. vertical
 
-function bindSwipeGesture(content, { onCommit }) {
+// onLongPress: a touch held in place for LONG_PRESS_MS without turning into a swipe or a scroll -
+// the standard Android/iOS "start selecting" gesture. Lives here rather than as a separate
+// listener set because the two gestures share one finger: a hold that starts moving becomes a
+// swipe (and cancels the hold), and a hold that fires must stop the swipe tracking so lifting
+// the finger afterwards can't also commit one.
+function bindSwipeGesture(content, { onCommit, onLongPress }) {
   let startX = 0;
   let startY = 0;
   let dx = 0;
   let dragging = false;
   let decided = false; // has direction (horizontal vs. vertical scroll) been determined yet?
   let horizontal = false;
+  let pressTimer = null;
+  let touchActive = false;
+
+  function reset() {
+    dragging = false;
+    content.style.transition = '';
+    content.style.transform = '';
+  }
 
   content.addEventListener(
     'touchstart',
@@ -1748,7 +2244,16 @@ function bindSwipeGesture(content, { onCommit }) {
       dragging = true;
       decided = false;
       horizontal = false;
+      touchActive = true;
       content.style.transition = 'none';
+      clearTimeout(pressTimer);
+      if (onLongPress) {
+        pressTimer = setTimeout(() => {
+          reset();
+          haptic();
+          onLongPress();
+        }, LONG_PRESS_MS);
+      }
     },
     { passive: true }
   );
@@ -1756,8 +2261,10 @@ function bindSwipeGesture(content, { onCommit }) {
   content.addEventListener(
     'touchmove',
     (e) => {
-      if (!dragging) return;
       const touch = e.touches[0];
+      // Same jitter allowance as attachQuickAddTrigger - a real finger never holds perfectly still.
+      if (Math.hypot(touch.clientX - startX, touch.clientY - startY) > LONG_PRESS_MOVE_CANCEL_PX) clearTimeout(pressTimer);
+      if (!dragging) return;
       const deltaX = touch.clientX - startX;
       const deltaY = touch.clientY - startY;
       if (!decided) {
@@ -1781,6 +2288,8 @@ function bindSwipeGesture(content, { onCommit }) {
   );
 
   function finish() {
+    clearTimeout(pressTimer);
+    touchActive = false;
     if (!dragging) return;
     dragging = false;
     content.style.transition = '';
@@ -1797,9 +2306,15 @@ function bindSwipeGesture(content, { onCommit }) {
 
   content.addEventListener('touchend', finish);
   content.addEventListener('touchcancel', () => {
-    dragging = false;
-    content.style.transition = '';
-    content.style.transform = '';
+    clearTimeout(pressTimer);
+    touchActive = false;
+    reset();
+  });
+  // Android fires contextmenu partway through a long touch - the browser's own menu would sit on
+  // top of the selection that just started. Only while a finger is down, so a mouse right-click
+  // keeps its normal menu.
+  content.addEventListener('contextmenu', (e) => {
+    if (touchActive) e.preventDefault();
   });
 }
 
@@ -1811,10 +2326,11 @@ function bindSwipeGesture(content, { onCommit }) {
 // dashboard cards below are the one exception: they set a filter and navigate to "All Tasks" in
 // the same gesture, so they opt out via preserveFilter.
 function selectSection(section, { preserveFilter = false } = {}) {
+  discardUntouchedNewTasks();
   currentSection = section;
   searchBox.value = '';
   searchQuery = '';
-  saveViewBtn.disabled = true;
+  updateSaveViewButton(); // a tag section is itself a saveable scope (see buildEffectiveSearchQuery)
   // A bulk selection is scoped to whatever list it was made in - carrying it across to an entirely
   // different section's task set would be confusing (and Trash's swipe/checkbox semantics differ
   // from every other section - see updateTaskRow's sectionKind branches).
@@ -1894,17 +2410,16 @@ function renderSidebar() {
   savedViewsList.innerHTML = '';
   for (const view of appState.SavedViews) {
     const li = document.createElement('li');
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', `View: ${view.Label}`);
-    li.innerHTML = `<span>${escapeHtml(view.Label)}</span><button class="view-delete-btn" aria-label="Delete view">${icon('x')}</button>`;
+    // Same split as the task rows: the label is the button and the delete control its sibling -
+    // a role="button" <li> can't validly contain the delete <button>.
+    li.innerHTML = `<span class="view-label" role="button" tabindex="0" aria-label="View: ${escapeHtml(view.Label)}">${escapeHtml(view.Label)}</span><button class="view-delete-btn" aria-label="Delete view">${icon('x')}</button>`;
     if (currentSection.kind === 'view' && currentSection.viewId === view.Id) {
       li.classList.add('active');
       li.setAttribute('aria-current', 'true');
     }
     const activate = () => selectSection({ kind: 'view', viewId: view.Id });
     li.addEventListener('click', activate);
-    li.addEventListener('keydown', activateOnEnterOrSpace(activate));
+    li.querySelector('.view-label').addEventListener('keydown', activateOnEnterOrSpace(activate));
     li.querySelector('.view-delete-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       deleteSavedView(view.Id);
@@ -1925,7 +2440,10 @@ function renderMobileTabbar() {
   mobileTabbar.innerHTML = '';
   const onSidebarView = appEl.dataset.view === 'sidebar';
 
-  for (const section of SECTIONS.filter((s) => s.kind !== 'today')) {
+  // Today · All · Completed · More. Today is what a phone opens most; Recurring and Trash are
+  // rare enough to live under More (with Sections & Tags, Dashboard, Settings) instead.
+  const TABBAR_KINDS = ['today', 'all', 'done'];
+  for (const section of SECTIONS.filter((s) => TABBAR_KINDS.includes(s.kind))) {
     const btn = document.createElement('button');
     btn.className = 'mobile-tab';
     btn.type = 'button';
@@ -1939,7 +2457,7 @@ function renderMobileTabbar() {
   moreBtn.className = 'mobile-tab';
   moreBtn.type = 'button';
   moreBtn.innerHTML = `${icon('menu')}<span>More</span>`;
-  if (onSidebarView || currentSection.kind === 'tag') moreBtn.classList.add('active');
+  if (onSidebarView || !TABBAR_KINDS.includes(currentSection.kind)) moreBtn.classList.add('active');
   // Same inline-popup idiom as filterToggleBtn below - anchored near the button rather than a
   // full-screen modal - just anchored by its bottom edge instead of its top, since this button
   // lives in the fixed bottom tab bar rather than the header.
@@ -2028,10 +2546,15 @@ function buildTaskRow(task) {
 
   content.append(selectCheckboxWrap, checkboxWrap, info);
   li.append(completeAction, trashAction, content);
-  li.tabIndex = 0;
-  li.setAttribute('role', 'button');
+  // The keyboard / screen-reader affordance is the title+meta block, not the <li>: a role="button"
+  // <li> wrapping two real checkboxes is invalid ARIA (interactive content inside a button) and
+  // read as one flattened button. The <li> keeps the mouse click-to-open below; this is what Tab
+  // lands on and Enter/Space opens, and it carries the row's accessible name (see updateTaskRow).
+  info.tabIndex = 0;
+  info.setAttribute('role', 'button');
 
   const openTask = () => {
+    discardUntouchedNewTasks({ keep: task.Id });
     selectedTaskId = task.Id;
     renderList();
     renderEditor(task);
@@ -2040,8 +2563,11 @@ function buildTaskRow(task) {
   // A swipe that crossed bindSwipeGesture's own commit threshold moved the touch point 64px+ -
   // real browsers already suppress the synthetic click that follows a drag that large, but this
   // flag is a belt-and-suspenders guard against the rare engine that doesn't, so a completed
-  // swipe never also opens the task underneath it.
+  // swipe never also opens the task underneath it. Also set by a long-press (iOS fires a click
+  // when the finger lifts after a hold; Android doesn't) - cleared on the next touchstart so a
+  // browser that never delivers that click doesn't swallow the next real tap instead.
   let suppressClick = false;
+  content.addEventListener('touchstart', () => { suppressClick = false; }, { passive: true });
   li.addEventListener('click', () => {
     if (suppressClick) {
       suppressClick = false;
@@ -2054,8 +2580,15 @@ function buildTaskRow(task) {
     }
     openTask();
   });
-  li.addEventListener('keydown', activateOnEnterOrSpace(openTask));
+  info.addEventListener('keydown', activateOnEnterOrSpace(openTask));
   bindSwipeGesture(content, {
+    onLongPress: () => {
+      if (selectionMode) return;
+      suppressClick = true;
+      selectionMode = true;
+      selectedIds.add(task.Id);
+      renderList();
+    },
     onCommit: (direction) => {
       if (selectionMode) return;
       suppressClick = true;
@@ -2116,14 +2649,16 @@ function updateTaskRow(refs, task, sectionKind) {
   checkbox.checked = task.IsDone;
   selectCheckbox.checked = selectedIds.has(task.Id);
 
-  const due = task.DueDate ? formatDate(parseDotNetDate(task.DueDate)) : '';
+  const due = task.DueDate ? formatDueLabel(parseDotNetDate(task.DueDate)) : '';
   const overdue = isTaskOverdue(task);
   const indicators = [];
   if (task.Recurrence !== RecurrenceRule.None) indicators.push(icon('repeat'));
-  if (task.Body.some((b) => b.Type === NoteBlockType.Link)) indicators.push(icon('link'));
+  // taskHasLink/taskHasChecklist mirror desktop's TaskMediaHelper, so a link typed into note text
+  // or a checklist embedded in desktop-authored Rtf gets the same badge here as there.
+  if (taskHasLink(task)) indicators.push(icon('link'));
   if (task.Body.some((b) => b.Type === NoteBlockType.Photo || blockHasInlineImage(b))) indicators.push(icon('image'));
   if (task.Body.some((b) => b.Type === NoteBlockType.File || blockHasInlineFile(b))) indicators.push(icon('paperclip'));
-  if (task.Body.some((b) => b.Type === NoteBlockType.Checklist)) indicators.push(icon('checklist'));
+  if (taskHasChecklist(task)) indicators.push(icon('checklist'));
   const tagChips = (task.Tags || []).map((t) => `<span class="task-tag-chip">#${escapeHtml(t)}</span>`).join('');
   // Mirrors desktop's row-level priority Ellipse (MainWindow.xaml + PriorityColorConverter) -
   // hidden entirely at None, same as there.
@@ -2134,7 +2669,14 @@ function updateTaskRow(refs, task, sectionKind) {
     <div class="task-sub">${due ? `<span class="${overdue ? 'task-due-overdue' : ''}">${due}</span>` : ''}${indicators.length ? `<span class="task-indicators">${indicators.join('')}</span>` : ''}${tagChips ? `<span class="task-tags">${tagChips}</span>` : ''}</div>
   `;
 
-  li.setAttribute('aria-label', `${task.Text || '(untitled)'}${due ? `, due ${due}` : ''}${overdue ? ' (overdue)' : ''}`);
+  const nameParts = [task.Text || '(untitled)'];
+  if (task.IsClosed) nameParts.push('in trash');
+  else if (task.IsDone) nameParts.push('completed');
+  if (task.IsPinned) nameParts.push('pinned');
+  if (priorityInfo) nameParts.push(`${priorityInfo[1].toLowerCase()} priority`);
+  if (due) nameParts.push(`due ${due}${overdue ? ', overdue' : ''}`);
+  if (task.Tags?.length) nameParts.push(`tags ${task.Tags.join(', ')}`);
+  info.setAttribute('aria-label', nameParts.join(', '));
 }
 
 function updateBulkActionsBar() {
@@ -2170,6 +2712,9 @@ function renderList() {
   trashActionsRow.classList.toggle('hidden', selectionMode || currentSection.kind !== 'trash' || tasksForSection({ kind: 'trash' }).length === 0);
   doneActionsRow.classList.toggle('hidden', selectionMode || currentSection.kind !== 'done' || tasksForSection({ kind: 'done' }).length === 0);
   taskListEl.classList.toggle('selecting', selectionMode);
+  // Trash rows hide the "Mark done" checkbox (see styles.css) - desktop's CanToggleComplete locks
+  // the Done toggle for a trashed task, since flipping IsDone in place there goes nowhere.
+  taskListEl.classList.toggle('in-trash', currentSection.kind === 'trash');
   updateBulkActionsBar();
   listEmpty.classList.toggle('hidden', tasks.length > 0 && !loadError);
   if (loadError) {
@@ -2196,7 +2741,7 @@ function renderList() {
       retryBtn.addEventListener('click', () => confirmSignInIfDirty());
     } else {
       retryBtn.textContent = 'Retry';
-      retryBtn.addEventListener('click', () => loadFromDriveWithRetry());
+      retryBtn.addEventListener('click', () => loadFromDrive());
     }
     listEmpty.append(msg, retryBtn);
   } else {
@@ -2267,6 +2812,7 @@ function setQuickFilterChip(value) {
     chip.classList.toggle('active', chip.dataset.filter === value);
   }
   updateFilterBadge();
+  updateSaveViewButton();
 }
 // Only the quick-filter chips count here, not Sort (that's an ordering preference, not a filter)
 // and not "All" (that's the unfiltered default, not a filter someone turned on) - so today this is
@@ -2308,6 +2854,7 @@ emptySettingsLink.addEventListener('click', (e) => {
 // currentSection/quickFilter - just closes whatever task is open, same as clicking the header logo
 // does in most apps.
 function goToDashboard() {
+  discardUntouchedNewTasks();
   selectedTaskId = null;
   renderList();
   showEmptyEditor();
@@ -2318,6 +2865,7 @@ brandHomeBtn.addEventListener('click', goToDashboard);
 function showEmptyEditor() {
   editorEmpty.classList.remove('hidden');
   editorContent.classList.add('hidden');
+  savePlace(); // selectedTaskId was just cleared by the caller - drop the remembered task and its #task= hash
   // Dashboard reuses the editor pane's "empty" slot (see goToDashboard), so data-view="editor" is
   // ambiguous between "viewing a task" (came from the list, back makes sense) and "on the
   // dashboard" (a top-level destination reached from the tab bar/brand logo, same as any section -
@@ -2331,30 +2879,57 @@ function renderEditor(task) {
   editorContent.classList.remove('hidden');
   navBack.classList.remove('hidden');
 
+  // Mirrors desktop's TaskDetailViewModel: IsEditable is false once a task is Done or in Trash
+  // (title, due/priority/repeat, tags and the body all lock), while Pin stays live throughout and
+  // the Done toggle stays live for a merely-Done task (unchecking it is how you reopen it) but
+  // locks in Trash, where flipping IsDone in place would go nowhere (CanToggleComplete). Web had
+  // no lock at all before: besides the parity gap, every edit to a trashed task bumped ModifiedAt,
+  // which both platforms use as the "trashed at" proxy for auto-empty-trash - so touching one
+  // silently reset its countdown.
+  const locked = task.IsDone || task.IsClosed;
+  editorContent.classList.toggle('locked', locked);
+  editorLockedNotice.classList.toggle('hidden', !locked);
+  editorLockedNotice.textContent = task.IsClosed
+    ? 'This task is in the Trash and can’t be edited. Restore it to make changes.'
+    : 'Completed tasks can’t be edited. Mark it not done to make changes.';
+
   editorDone.checked = task.IsDone;
+  editorDone.disabled = task.IsClosed;
+  editorDoneField.classList.toggle('disabled', task.IsClosed);
   editorPinBtn.classList.toggle('active', task.IsPinned);
   editorPinBtn.title = task.IsPinned ? 'Unpin' : 'Pin';
   editorPinBtn.setAttribute('aria-label', task.IsPinned ? 'Unpin' : 'Pin');
   editorPinLabel.textContent = task.IsPinned ? 'Pinned' : 'Pin';
   editorDoneBtn.textContent = task.IsDone ? 'Mark Not Done' : 'Mark Done';
+  editorDoneBtn.classList.toggle('hidden', task.IsClosed);
   editorTrashBtn.textContent = task.IsClosed ? 'Restore from Trash' : 'Move to Trash';
   editorDeleteBtn.classList.toggle('hidden', !task.IsClosed);
 
   editorTitle.value = task.Text;
+  editorTitle.readOnly = locked;
   autoResizeEditorTitle();
-  editorDue.value = task.DueDate ? toDateInputValue(parseDotNetDate(task.DueDate)) : '';
-  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
+  renderDueFields(task, locked);
   editorPriority.value = String(task.Priority ?? TaskPriority.None);
   editorRecurrence.value = String(task.Recurrence);
   editorRecurrenceInterval.value = String(task.RecurrenceInterval ?? 1);
   editorRecurrenceIntervalField.classList.toggle('hidden', task.Recurrence === RecurrenceRule.None);
+  updateMetaPillState(task);
+  for (const control of [editorDue, editorDueTime, editorPriority, editorRecurrence, editorRecurrenceInterval]) {
+    control.disabled = locked;
+    control.closest('.editor-field').classList.toggle('disabled', locked);
+  }
+  editorTagInput.disabled = locked;
+  editorTagInput.closest('.tag-input-wrap').classList.toggle('hidden', locked);
+  if (locked) closeTagSuggest();
 
   editorTags.innerHTML = '';
   for (const tag of task.Tags) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
-    chip.innerHTML = `#${escapeHtml(tag)} <button aria-label="Remove tag">${icon('x')}</button>`;
-    chip.querySelector('button').addEventListener('click', () => removeTag(task, tag));
+    chip.innerHTML = locked
+      ? `#${escapeHtml(tag)}`
+      : `#${escapeHtml(tag)} <button aria-label="Remove tag">${icon('x')}</button>`;
+    chip.querySelector('button')?.addEventListener('click', () => removeTag(task, tag));
     editorTags.appendChild(chip);
   }
 
@@ -2366,22 +2941,22 @@ function renderEditor(task) {
       setStatus(error);
       saveStatus.classList.toggle('save-status-action', !!isAuthFailure);
     }
-    if (rerenderBody) renderEditableBody(editorBody, task, onBodyChange);
+    if (rerenderBody) renderEditableBody(editorBody, task, onBodyChange, { readOnly: locked });
   };
-  renderEditableBody(editorBody, task, onBodyChange);
+  renderEditableBody(editorBody, task, onBodyChange, { readOnly: locked });
 }
 
 // --- Editor field listeners ---------------------------------------------------
 // A tap landing anywhere on the due/repeat pill opens its picker, rather than only the exact
 // native icon pixel - see the chevron comment above for why. showPicker() is a no-op/safe to call
 // even when the browser's own default click handling already opened the same picker.
-for (const control of [editorDue, editorPriority, editorRecurrence, editorRecurrenceInterval]) {
+for (const control of [editorDue, editorDueTime, editorPriority, editorRecurrence, editorRecurrenceInterval]) {
   control.closest('.editor-field').addEventListener('click', (e) => {
     // A click that lands on the control itself already opens the picker via the browser's own
     // default label/control activation - that activation then re-dispatches a second click, on
     // the control, which bubbles back through this same listener. Skipping that one avoids
     // calling showPicker() twice per tap (which can toggle some pickers closed again).
-    if (e.target === control) return;
+    if (e.target === control || control.disabled) return;
     try { control.showPicker(); } catch { /* unsupported browser - falls back to native click behavior */ }
   });
 }
@@ -2426,20 +3001,66 @@ editorTitle.addEventListener('input', (e) => {
   renderList();
 });
 
+// Due date / time pills (see #editor-due-field in index.html). The native inputs are invisible
+// overlays; these labels are what the user reads.
+function renderDueFields(task, locked) {
+  const due = task.DueDate ? parseDotNetDate(task.DueDate) : null;
+  editorDue.value = due ? toDateInputValue(due) : '';
+  editorDueLabel.textContent = due ? formatDueLabel(due, { includeTime: false }) : 'Due date';
+  editorDueField.classList.toggle('empty', !due);
+  editorDueField.classList.toggle('overdue', isTaskOverdue(task));
+  const hasTime = !!due && (due.getHours() !== 0 || due.getMinutes() !== 0);
+  editorDueTime.value = hasTime ? `${String(due.getHours()).padStart(2, '0')}:${String(due.getMinutes()).padStart(2, '0')}` : '';
+  editorDueTimeLabel.textContent = hasTime ? formatTimeOfDay(due) : 'Add time';
+  editorDueTimeField.classList.toggle('hidden', !due);
+  editorDueTimeField.classList.toggle('empty', !hasTime);
+  editorDueClear.classList.toggle('hidden', !due || locked);
+}
+
+function commitDueChange(task) {
+  touch(task);
+  markDirty();
+  renderList();
+  renderDueFields(task, task.IsDone || task.IsClosed);
+}
+
 editorDue.addEventListener('change', () => {
   const task = findTask(selectedTaskId);
   if (!task) return;
   task.DueDate = editorDue.value ? formatDotNetDate(withDatePickerValue(task.DueDate, editorDue.value)) : null;
-  touch(task);
-  markDirty();
-  renderList();
-  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
+  commitDueChange(task);
 });
+
+editorDueTime.addEventListener('change', () => {
+  const task = findTask(selectedTaskId);
+  if (!task || !task.DueDate) return;
+  const due = parseDotNetDate(task.DueDate);
+  const [h, m] = editorDueTime.value ? editorDueTime.value.split(':').map(Number) : [0, 0];
+  due.setHours(h, m, 0, 0); // clearing the time leaves a date-only due, same as desktop's date-only pick
+  task.DueDate = formatDotNetDate(due);
+  commitDueChange(task);
+});
+
+editorDueClear.addEventListener('click', () => {
+  const task = findTask(selectedTaskId);
+  if (!task) return;
+  task.DueDate = null;
+  commitDueChange(task);
+});
+
+// Priority "None" and Repeat "Never" say nothing, so those pills collapse to their icon until a
+// value is picked (styles.css .editor-field.unset) - the meta row on a phone was five text pills
+// wide before anything had been set. The pill still opens its picker and keeps its title/aria-label.
+function updateMetaPillState(task) {
+  editorPriority.closest('.editor-field').classList.toggle('unset', (task.Priority ?? TaskPriority.None) === TaskPriority.None);
+  editorRecurrence.closest('.editor-field').classList.toggle('unset', task.Recurrence === RecurrenceRule.None);
+}
 
 editorPriority.addEventListener('change', () => {
   const task = findTask(selectedTaskId);
   if (!task) return;
   task.Priority = Number(editorPriority.value);
+  updateMetaPillState(task);
   touch(task);
   markDirty();
   renderList();
@@ -2450,6 +3071,7 @@ editorRecurrence.addEventListener('change', () => {
   if (!task) return;
   task.Recurrence = Number(editorRecurrence.value);
   editorRecurrenceIntervalField.classList.toggle('hidden', task.Recurrence === RecurrenceRule.None);
+  updateMetaPillState(task);
   touch(task);
   markDirty();
   renderSidebar();
@@ -2559,7 +3181,10 @@ editorDone.addEventListener('change', () => {
   const task = findTask(selectedTaskId);
   if (!task) return;
   toggleDone(task);
-  editorDue.closest('.editor-field').classList.toggle('overdue', isTaskOverdue(task));
+  // Full re-render, not just the overdue class: completing locks the rest of the editor and
+  // un-completing unlocks it (see renderEditor's `locked`), and the More menu's Mark Done /
+  // Mark Not Done label has to follow the new state too.
+  renderEditor(task);
 });
 
 editorPinBtn.addEventListener('click', () => {
@@ -2643,17 +3268,30 @@ bulkDoneBtn.addEventListener('click', async () => {
   const confirmed = await confirmModal(`Mark ${targets.length} task(s) complete?`,
     { title: 'Mark Complete', confirmLabel: 'Mark Complete' });
   if (!confirmed) return;
+  // Used to set IsDone directly, which silently ended every recurring series completed this way
+  // (no next occurrence, unlike a single-row completion) - see spawnIfRecurring.
+  const spawned = [];
   for (const t of targets) {
     t.IsDone = true;
     touch(t);
+    const next = spawnIfRecurring(t);
+    if (next) spawned.push(next);
   }
   finishBulkAction();
-  pushUndo(`Completed ${targets.length} task(s)`, () => {
-    for (const t of targets) {
-      t.IsDone = false;
-      touch(t);
-    }
-  });
+  pushUndo(
+    spawned.length > 0
+      ? `Completed ${targets.length} task(s) — ${spawned.length} next occurrence(s) created`
+      : `Completed ${targets.length} task(s)`,
+    () => {
+      for (const t of targets) {
+        t.IsDone = false;
+        touch(t);
+      }
+      if (spawned.length > 0) {
+        const spawnedIds = new Set(spawned.map((s) => s.Id));
+        appState.Tasks = appState.Tasks.filter((t) => !spawnedIds.has(t.Id));
+      }
+    });
 });
 
 // Pin, due date, and tags, unlike the actions above, don't remove the selected tasks from view or
@@ -2855,61 +3493,37 @@ bulkDeleteBtn.addEventListener('click', async () => {
   const confirmed = await confirmModal(`Delete ${targets.length} task(s) permanently? This cannot be undone.`,
     { title: 'Delete Permanently', confirmLabel: 'Delete', danger: true });
   if (!confirmed) return;
-  const targetIds = new Set(targets.map((t) => t.Id));
-  appState.Tasks = appState.Tasks.filter((t) => !targetIds.has(t.Id));
-  for (const id of targetIds) recordTombstone(id);
-  if (selectedTaskId && targetIds.has(selectedTaskId)) {
-    selectedTaskId = null;
-    showEmptyEditor();
-  }
+  permanentlyRemoveTasks(targets);
   finishBulkAction();
 });
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
-    e.preventDefault();
-    createTask();
-  }
-});
-
-document.addEventListener('keydown', (e) => {
-  const isFindShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f';
-  if (!isFindShortcut && e.key !== '/') return;
-  if (e.key === '/') {
-    // Ctrl+F is a modifier combo (like Ctrl+N above) so it can't collide with normal typing, but
-    // a bare "/" is a real character - don't hijack it while the user is actually typing one into
-    // a task title, tag, or note body.
-    const target = document.activeElement;
-    const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-    if (isEditable) return;
-  }
-  e.preventDefault(); // also suppresses the browser's own native Ctrl+F find-in-page
-  searchBox.focus();
-  searchBox.select();
-});
-
 searchBox.addEventListener('input', () => {
   searchQuery = searchBox.value;
   searchClearBtn.classList.toggle('hidden', !searchQuery);
-  saveViewBtn.disabled = !searchQuery.trim();
+  updateSaveViewButton();
   renderList();
 });
 searchClearBtn.addEventListener('click', () => {
   searchBox.value = '';
   searchQuery = '';
   searchClearBtn.classList.add('hidden');
-  saveViewBtn.disabled = true;
+  updateSaveViewButton();
   renderList();
   searchBox.focus();
 });
 saveViewBtn.addEventListener('click', saveCurrentSearchAsView);
 
+function applySortChips() {
+  for (const chip of sortChipGroup.querySelectorAll('.chip')) chip.classList.toggle('active', chip.dataset.sort === sortKey);
+}
 sortChipGroup.addEventListener('click', (e) => {
   const btn = e.target.closest('.chip');
   if (!btn) return;
   sortKey = btn.dataset.sort;
-  for (const chip of sortChipGroup.querySelectorAll('.chip')) chip.classList.toggle('active', chip === btn);
+  storage.set(SORT_KEY, sortKey);
+  applySortChips();
   renderList();
 });
+applySortChips(); // the remembered sort, not index.html's static "Modified" chip
 filterChipGroup.addEventListener('click', (e) => {
   const btn = e.target.closest('.chip');
   if (!btn) return;
@@ -2976,6 +3590,11 @@ function updateQuickAddPreview(inputEl, previewEl) {
 // that "capture without interrupting" behavior for free.
 function openQuickAddPopup(anchorBtn) {
   openAnchoredPopup(quickAddPopup, anchorBtn);
+  // On a phone, ignore the anchor and pin the popup to the top of the screen instead - see
+  // .quick-add-popup.at-top in styles.css for why (the soft keyboard covers a bottom-anchored one).
+  const atTop = isSinglePaneLayout();
+  quickAddPopup.classList.toggle('at-top', atTop);
+  if (atTop) quickAddPopup.style.left = quickAddPopup.style.right = quickAddPopup.style.top = quickAddPopup.style.bottom = '';
   quickAddPopupInput.value = '';
   updateQuickAddPreview(quickAddPopupInput, quickAddPopupPreview);
   quickAddPopupInput.focus();
@@ -2996,6 +3615,7 @@ quickAddPopupInput.addEventListener('input', (e) => {
 // open the main window. A plain tap/click still calls onClick unchanged; the two only diverge once
 // a press has actually been held past the threshold.
 const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_CANCEL_PX = 10;
 function attachQuickAddTrigger(btn, onClick) {
   let pressTimer = null;
   let longPressed = false;
@@ -3007,7 +3627,6 @@ function attachQuickAddTrigger(btn, onClick) {
   // never actually open on a phone - reported live as "the long click to add task doesn't work on
   // mobile" despite passing in synthetic (perfectly-still) touchstart/touchend testing. 10px matches
   // the touch-slop constants native long-press gesture recognizers use for the same reason.
-  const MOVE_CANCEL_PX = 10;
   const start = (e) => {
     longPressed = false;
     clearTimeout(pressTimer);
@@ -3029,7 +3648,7 @@ function attachQuickAddTrigger(btn, onClick) {
     if (!touch) { cancel(); return; }
     const dx = touch.clientX - startX;
     const dy = touch.clientY - startY;
-    if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) cancel();
+    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_CANCEL_PX) cancel();
   };
   btn.addEventListener('touchstart', start, { passive: true });
   btn.addEventListener('touchend', cancel);
@@ -3058,12 +3677,18 @@ function attachQuickAddTrigger(btn, onClick) {
 }
 
 // --- Keyboard shortcuts modal --------------------------------------------------
+let shortcutsFocusTrap = null;
 function openShortcuts() {
   closeDropdowns({});
   shortcutsModal.classList.remove('hidden');
+  shortcutsFocusTrap?.();
+  shortcutsFocusTrap = trapFocus(shortcutsModal, { initialFocus: shortcutsCloseBtn });
 }
 function closeShortcuts() {
+  if (shortcutsModal.classList.contains('hidden')) return;
   shortcutsModal.classList.add('hidden');
+  shortcutsFocusTrap?.();
+  shortcutsFocusTrap = null;
 }
 shortcutsBtn.addEventListener('click', openShortcuts);
 emptyShortcutsBtn.addEventListener('click', openShortcuts);
@@ -3072,19 +3697,103 @@ shortcutsModal.addEventListener('click', (e) => {
   if (e.target === shortcutsModal) closeShortcuts();
 });
 
+// One table drives both the document-level dispatcher and the modal's list (renderShortcutsList),
+// so a binding can't be documented differently from how it actually fires - the five separate
+// keydown listeners this replaced each re-implemented the modifier / "am I typing?" checks, and
+// two of them (bare "/" and Ctrl+/) both claimed the same keystroke. Modifier combos can't
+// collide with normal typing, but a bare key ("/") and the browser's own text-field undo (Ctrl+Z
+// inside a title or note block) must not be hijacked - notWhileTyping keeps those out of inputs,
+// textareas and contenteditable blocks. displayOnly rows are documented here but handled by the
+// element they belong to (Enter in the quick-add inputs). "mod" is Ctrl or Cmd.
+const SHORTCUTS = [
+  { label: 'New task', bindings: [{ keys: 'mod+n' }], run: () => createTask() },
+  { label: 'Undo last action', bindings: [{ keys: 'mod+z', notWhileTyping: true }], run: () => popUndo() },
+  { label: 'Add task from the quick-add box', bindings: [{ keys: 'Enter' }], displayOnly: true },
+  {
+    label: 'Jump to search',
+    bindings: [{ keys: '/', notWhileTyping: true }, { keys: 'mod+f' }],
+    run: () => {
+      searchBox.focus();
+      searchBox.select();
+    },
+  },
+  // Escape keeps its default action - a dialog's own Escape handler and a native <select>/date
+  // picker closing both still need to see it.
+  { label: 'Close dialogs and menus', bindings: [{ keys: 'Escape' }], run: () => closeOpenPopups(), allowDefault: true },
+  { label: 'Show this help', bindings: [{ keys: 'F1' }, { keys: 'mod+/' }], run: () => openShortcuts() },
+  // Handled by the checklist inputs themselves (editor.js renderChecklistBlock).
+  { label: 'In a checklist: new item below / remove an empty item', bindings: [{ keys: 'Enter' }, { keys: 'Backspace' }], displayOnly: true },
+  { label: 'In a checklist: move the item up or down', bindings: [{ keys: 'alt+ArrowUp' }, { keys: 'alt+ArrowDown' }], displayOnly: true },
+];
+const KEY_DISPLAY_NAMES = { mod: 'Ctrl', alt: 'Alt', Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓' };
+
+function bindingMatches(binding, e) {
+  const parts = binding.keys.split('+');
+  const wantsMod = parts[0] === 'mod';
+  if (wantsMod !== (e.ctrlKey || e.metaKey)) return false;
+  const key = parts[wantsMod ? 1 : 0];
+  return key.length === 1 ? e.key.toLowerCase() === key : e.key === key;
+}
+function isTypingTarget(el) {
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+document.addEventListener('keydown', (e) => {
+  const typing = isTypingTarget(document.activeElement);
+  for (const shortcut of SHORTCUTS) {
+    if (shortcut.displayOnly) continue;
+    const binding = shortcut.bindings.find((b) => bindingMatches(b, e));
+    if (!binding || (binding.notWhileTyping && typing)) continue;
+    if (!shortcut.allowDefault) e.preventDefault(); // e.g. the browser's own Ctrl+F find-in-page
+    shortcut.run();
+    return;
+  }
+});
+
+function renderShortcutsList() {
+  const rows = SHORTCUTS.map((shortcut) => {
+    const row = document.createElement('div');
+    row.className = 'shortcut-row';
+    const keys = document.createElement('span');
+    keys.className = 'shortcut-keys';
+    shortcut.bindings.forEach((binding, i) => {
+      if (i > 0) keys.append(' or ');
+      binding.keys.split('+').forEach((part, j) => {
+        if (j > 0) keys.append('+');
+        const kbd = document.createElement('kbd');
+        kbd.textContent = KEY_DISPLAY_NAMES[part] ?? (part.length === 1 ? part.toUpperCase() : part);
+        keys.appendChild(kbd);
+      });
+    });
+    const label = document.createElement('span');
+    label.textContent = shortcut.label;
+    row.append(keys, label);
+    return row;
+  });
+  shortcutsList.replaceChildren(...rows);
+}
+renderShortcutsList();
+
 // --- First-run onboarding -------------------------------------------------------
 const ONBOARDED_KEY = 'tasky-onboarded';
+let onboardingFocusTrap = null;
+function showOnboarding() {
+  closeDropdowns({});
+  onboardingModal.classList.remove('hidden');
+  onboardingFocusTrap?.();
+  onboardingFocusTrap = trapFocus(onboardingModal, { initialFocus: onboardingDoneBtn });
+}
 function closeOnboarding() {
   onboardingModal.classList.add('hidden');
-  localStorage.setItem(ONBOARDED_KEY, '1');
+  onboardingFocusTrap?.();
+  onboardingFocusTrap = null;
+  storage.set(ONBOARDED_KEY, '1');
 }
-// Only fires from loadFromDriveWithRetry() the first time it finds a genuinely new Drive account
+// Only fires from loadFromDrive() the first time it finds a genuinely new Drive account
 // (no Tasky file yet) - not on every empty state, so it won't reappear once someone's actually
 // used the app, even if they later trash every task.
 function maybeShowOnboarding() {
-  if (localStorage.getItem(ONBOARDED_KEY)) return;
-  closeDropdowns({});
-  onboardingModal.classList.remove('hidden');
+  if (storage.get(ONBOARDED_KEY)) return;
+  showOnboarding();
 }
 // Each sample task pairs with one line of the tour's bullet list above (see onboarding-list) and
 // stays behind as a standing, revisitable reminder of it after the tour itself is dismissed - the
@@ -3111,10 +3820,7 @@ onboardingModal.addEventListener('click', (e) => {
 });
 // Bypasses the ONBOARDED_KEY check below - an explicit replay from the About popup should always
 // show it, regardless of whether it's been seen (or dismissed) before.
-aboutReplayTourBtn.addEventListener('click', () => {
-  closeDropdowns({});
-  onboardingModal.classList.remove('hidden');
-});
+aboutReplayTourBtn.addEventListener('click', showOnboarding);
 
 // --- Settings/About popups -------------------------------------------------------
 settingsBtn.addEventListener('click', (e) => {
@@ -3133,13 +3839,6 @@ moreSheetAboutBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   openAnchoredPopup(aboutDropdown, moreSheetAboutBtn);
 });
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'F1' || ((e.ctrlKey || e.metaKey) && e.key === '/')) {
-    e.preventDefault();
-    openShortcuts();
-  }
-});
-
 // --- Mobile "More" popup ------------------------------------------------------
 // The bottom tab bar's More button used to jump straight to the sections+tags list - the only
 // other way back to the dashboard was the header brand/logo. This popup offers both destinations
@@ -3156,6 +3855,14 @@ moreSheetSectionsBtn.addEventListener('click', () => {
   closeMoreSheet();
   showMobileView('sidebar');
 });
+moreSheetRecurringBtn.addEventListener('click', () => {
+  closeMoreSheet();
+  selectSection({ kind: 'recurring' });
+});
+moreSheetTrashBtn.addEventListener('click', () => {
+  closeMoreSheet();
+  selectSection({ kind: 'trash' });
+});
 
 // --- Mobile / tablet navigation ---------------------------------------------
 // Pushes each sidebar/list/editor transition onto browser history so Android's hardware/gesture
@@ -3165,13 +3872,23 @@ moreSheetSectionsBtn.addEventListener('click', () => {
 // (see armHistoryTrap above, which now defers to this for any popstate that lands on one of these
 // states, and only re-arms itself once back navigation runs past this stack).
 let restoringMobileView = false;
+// data-view only changes what's on screen under the 767px single-pane breakpoint (styles.css); at
+// tablet/desktop widths every pane is visible at once, so pushing a history entry per "view"
+// change there just made the browser's Back button cycle through invisible states before it
+// ever left the app.
+const singlePaneQuery = window.matchMedia('(max-width: 767px)');
+function isSinglePaneLayout() {
+  return singlePaneQuery.matches;
+}
 function showMobileView(view) {
+  if (view !== 'editor') discardUntouchedNewTasks();
   const prevView = appEl.dataset.view;
   appEl.dataset.view = view;
   renderMobileTabbar();
-  if (!restoringMobileView && view !== prevView) {
+  if (!restoringMobileView && view !== prevView && isSinglePaneLayout()) {
     history.pushState({ taskyView: view }, '', location.pathname + location.search);
   }
+  savePlace(); // every section/task/view transition passes through here - see restorePlace
 }
 window.addEventListener('popstate', (e) => {
   const view = e.state && e.state.taskyView;
@@ -3199,6 +3916,28 @@ history.replaceState({ taskyView: 'sidebar' }, '', location.pathname + location.
 function formatDate(date) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
+function formatTimeOfDay(date) {
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+// Relative, glanceable due label for task rows and the editor's due pill: Yesterday · Today ·
+// Tomorrow · a weekday name for the next six days · "Sep 24" (year only when it isn't this
+// year) - with the time appended whenever the due date carries one (midnight means date-only,
+// same convention as quick-add's @time and desktop's reminder time).
+function formatDueLabel(date, { includeTime = true } = {}) {
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startOfDue = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayDiff = Math.round((startOfDue - startOfToday) / 86400000);
+  let day;
+  if (dayDiff === 0) day = 'Today';
+  else if (dayDiff === 1) day = 'Tomorrow';
+  else if (dayDiff === -1) day = 'Yesterday';
+  else if (dayDiff > 1 && dayDiff < 7) day = date.toLocaleDateString(undefined, { weekday: 'short' });
+  else if (date.getFullYear() === today.getFullYear()) day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  else day = formatDate(date);
+  const hasTime = date.getHours() !== 0 || date.getMinutes() !== 0;
+  return includeTime && hasTime ? `${day} ${formatTimeOfDay(date)}` : day;
+}
 function toDateInputValue(date) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -3215,10 +3954,13 @@ function withDatePickerValue(existingDueDate, dateInputValue) {
     ? new Date(y, mo - 1, d, existing.getHours(), existing.getMinutes(), existing.getSeconds(), existing.getMilliseconds())
     : new Date(y, mo - 1, d);
 }
+// Runs once per task row per render (updateTaskRow) plus per tag chip, so this is a plain regex
+// replace rather than the textContent -> innerHTML round trip that allocates a throwaway <div>
+// each call. Also escapes both quote characters, which the DOM serializer never did - the
+// exported-HTML link builder interpolates block.Url into an href attribute.
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
+  return String(str ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
 // --- Whole-list export (ROADMAP.md #135) --------------------------------------
@@ -3277,7 +4019,7 @@ function exportAllToMarkdown() {
     appendBodyAsMarkdown(lines, task);
     lines.push('');
   }
-  downloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.md`, lines.join('\n'), 'text/markdown');
+  shareOrDownloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.md`, lines.join('\n'), 'text/markdown');
 }
 
 function appendBodyAsHtml(lines, task) {
@@ -3334,7 +4076,7 @@ function exportAllToHtml() {
     lines.push('</div>');
   }
   lines.push('</body>', '</html>');
-  downloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.html`, lines.join('\n'), 'text/html');
+  shareOrDownloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.html`, lines.join('\n'), 'text/html');
 }
 
 function downloadTextFile(filename, text, mimeType) {
@@ -3348,6 +4090,65 @@ function downloadTextFile(filename, text, mimeType) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// <a download> is unreliable inside an iOS standalone PWA (and lands in a Downloads folder nobody
+// opens on Android) - on a touch device the Web Share sheet is what "export" means: Files,
+// Mail, Notes, AirDrop. Desktop browsers keep the plain download so a mouse-and-keyboard user
+// isn't handed an OS share sheet for what is obviously a file save.
+const preferShareSheet = window.matchMedia('(pointer: coarse)').matches;
+async function shareOrDownloadTextFile(filename, text, mimeType) {
+  if (preferShareSheet && navigator.share && navigator.canShare) {
+    const file = new File([text], filename, { type: mimeType });
+    if (navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return; // user dismissed the sheet - not an error
+        console.warn('Tasky: share sheet failed, falling back to download', err);
+      }
+    }
+  }
+  downloadTextFile(filename, text, mimeType);
+}
+
+// One task as Markdown - the same shape exportAllToMarkdown gives each task - handed to the Web
+// Share sheet (title + text, so Messages/Mail/Notes each render it sensibly) or, where there's no
+// share sheet, copied to the clipboard. Mobile counterpart of desktop's Export/Print Note.
+function taskToMarkdown(task) {
+  const lines = [`# ${task.IsDone ? '[x] ' : ''}${escapeMarkdown(task.Text || '(untitled)')}`, ''];
+  if (task.DueDate) lines.push(`**Due:** ${formatDueLabel(parseDotNetDate(task.DueDate))}  `);
+  if (task.Tags.length > 0) lines.push(`**Tags:** ${task.Tags.map((t) => `#${t}`).join(' ')}  `);
+  if (task.DueDate || task.Tags.length > 0) lines.push('');
+  appendBodyAsMarkdown(lines, task);
+  return lines.join('\n').trim() + '\n';
+}
+
+async function shareTask(task) {
+  const text = taskToMarkdown(task);
+  const title = task.Text || '(untitled)';
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text });
+      return;
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      console.warn('Tasky: share failed, copying instead', err);
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus('Task copied to the clipboard as Markdown', { autoHide: true });
+  } catch (err) {
+    setStatus(`Couldn't share: ${err.message}`);
+  }
+}
+
+editorShareBtn.addEventListener('click', () => {
+  closeDropdowns({});
+  const task = findTask(selectedTaskId);
+  if (task) shareTask(task);
+});
 
 exportMarkdownBtn.addEventListener('click', () => {
   closeDropdowns({});
@@ -3364,13 +4165,18 @@ exportHtmlBtn.addEventListener('click', () => {
 // navigator.standalone flag (display-mode never reports standalone there even when installed).
 const INSTALL_DISMISSED_KEY = 'tasky-install-dismissed';
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-const isIos = /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
+// iPadOS 13+ presents itself as a Mac in the user agent, so it used to take the Android/no-prompt
+// path and never see the Share > Add to Home Screen hint - the touch-point count is what gives it
+// away (a real Mac reports 0).
+const isIos =
+  /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase()) ||
+  (/mac/i.test(navigator.platform) && navigator.maxTouchPoints > 1);
 let deferredInstallPrompt = null;
 
 function dismissInstallBanner() {
   installBanner.classList.add('hidden');
   try {
-    localStorage.setItem(INSTALL_DISMISSED_KEY, '1');
+    storage.set(INSTALL_DISMISSED_KEY, '1');
   } catch {
     // Best-effort - worst case the banner can reappear next session, not worth failing over.
   }
@@ -3379,7 +4185,7 @@ function dismissInstallBanner() {
 function showInstallBanner() {
   if (isStandalone) return;
   try {
-    if (localStorage.getItem(INSTALL_DISMISSED_KEY)) return;
+    if (storage.get(INSTALL_DISMISSED_KEY)) return;
   } catch {
     // If storage is blocked, fall through and show it rather than assume dismissed.
   }
@@ -3447,15 +4253,20 @@ window.addEventListener('appinstalled', () => {
   installBanner.classList.add('hidden');
 });
 
-// A no-op service worker, registered purely because Chrome/Android's installability check
-// requires *some* registered service worker with a fetch handler before beforeinstallprompt will
-// fire at all - see ROADMAP.md gating decision #4. It deliberately does no caching and has no
-// offline behavior of its own (that's #6/#7, both deferred): every fetch just passes straight
-// through to the network, unchanged.
+// sw.js precaches the app shell (network-first for the page, cache-first for versioned assets) so
+// an installed PWA launches offline - see its header. Task data itself lives in the IndexedDB
+// snapshot (snapshot.js), not the service worker cache. Also what makes Chrome/Android's
+// installability check pass (a registered worker with a fetch handler, ROADMAP.md gating
+// decision #4).
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch((err) => {
     console.warn('Tasky: service worker registration failed (install banner may not appear)', err);
   });
 }
+
+// Every module in the import graph has parsed and evaluated by this point, so whatever
+// js/boot-guard.js (a classic script loaded ahead of this module) was waiting for has happened -
+// tell it, or its "this browser is too old" fallback fires on a perfectly good boot.
+window.__taskyBootGuard?.dismiss();
 
 boot();

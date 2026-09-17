@@ -22,13 +22,13 @@ public class SidebarFilterItem
 
     public string Icon => Kind switch
     {
-        SidebarFilterKind.Today => "\U0001F4C5",
-        SidebarFilterKind.All => "\U0001F4CB",
-        SidebarFilterKind.Done => "✅",
-        SidebarFilterKind.Trash => "\U0001F5D1",
-        SidebarFilterKind.Recurring => "\U0001F501",
-        SidebarFilterKind.View => "⭐",
-        _ => "#"
+        SidebarFilterKind.Today => "\uE787",
+        SidebarFilterKind.All => "\uE8C0",
+        SidebarFilterKind.Done => "\uE73E",
+        SidebarFilterKind.Trash => "\uE74D",
+        SidebarFilterKind.Recurring => "\uE72C",
+        SidebarFilterKind.View => "\uE735",
+        _ => "\uE8EC"
     };
 
     public SidebarFilterItem(SidebarFilterKind kind, string label, string? tagName = null, string? viewId = null)

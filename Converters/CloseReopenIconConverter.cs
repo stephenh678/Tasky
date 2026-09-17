@@ -7,7 +7,7 @@ namespace TodoApp.Converters;
 public class CloseReopenIconConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object parameter, CultureInfo culture)
-        => value is true ? "↩" : "\U0001F5D1";
+        => value is true ? "\uE7A7" : "\uE74D";
 
     public object ConvertBack(object? value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotSupportedException();

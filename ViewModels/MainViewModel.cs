@@ -753,6 +753,11 @@ public class MainViewModel : INotifyPropertyChanged
     {
         AddTaskCommand = new RelayCommand(_ =>
         {
+            if (SelectedSidebarItem?.Kind == SidebarFilterKind.Done || SelectedSidebarItem?.Kind == SidebarFilterKind.Trash)
+            {
+                SelectedSidebarItem = _allItem;
+            }
+
             var task = new TaskItem { Text = "New Task" };
             AllTasks.Add(task);
             AttachTask(task);
@@ -1793,7 +1798,7 @@ public class MainViewModel : INotifyPropertyChanged
     // two-way bound and saves on every keystroke, so there's no equivalent safe commit point:
     // stripping a "#tag" out from under the user while they're still mid-word typing it would be
     // actively wrong, not just unnecessary.
-    public void AddQuickTask(string title)
+    public TaskItem AddQuickTask(string title)
     {
         var parsed = QuickEntryParser.Parse(title);
         var text = string.IsNullOrWhiteSpace(parsed.Text) ? title : parsed.Text;
@@ -1801,9 +1806,16 @@ public class MainViewModel : INotifyPropertyChanged
         var task = new TaskItem { Text = text, DueDate = parsed.DueDate };
         foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
 
+        if (SelectedSidebarItem?.Kind == SidebarFilterKind.Done || SelectedSidebarItem?.Kind == SidebarFilterKind.Trash)
+        {
+            SelectedSidebarItem = _allItem;
+        }
+
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
+        SelectedTask = task;
+        return task;
     }
 
     // Welcome tour's sample tasks (WelcomeWindow). Unlike AddQuickTask, the title is kept verbatim

@@ -499,6 +499,74 @@ public partial class MainWindow : Window
 
     private void QuickAdd_Click(object sender, RoutedEventArgs e) => ShowQuickAdd();
 
+    private void QuickAddInput_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            CommitInlineQuickAdd();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            QuickAddInput.Text = string.Empty;
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+            TaskListBox.Focus();
+            e.Handled = true;
+        }
+    }
+
+    private void QuickAddInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(QuickAddInput.Text))
+        {
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var parsed = QuickEntryParser.Parse(QuickAddInput.Text);
+        var parts = new List<string>();
+        if (parsed.DueDate is { } due)
+        {
+            parts.Add(due.TimeOfDay == TimeSpan.Zero
+                ? $"Due: {due:ddd, MMM d}"
+                : $"Due: {due:ddd, MMM d 'at' h:mmtt}");
+        }
+        if (parsed.Tags.Count > 0)
+        {
+            parts.Add(string.Join(" ", parsed.Tags.Select(t => $"#{t}")));
+        }
+
+        if (parts.Count > 0)
+        {
+            QuickAddPreviewText.Text = string.Join("  ·  ", parts);
+            QuickAddPreviewBorder.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void QuickAddInput_CommitClick(object sender, RoutedEventArgs e)
+    {
+        CommitInlineQuickAdd();
+        QuickAddInput.Focus();
+    }
+
+    private void CommitInlineQuickAdd()
+    {
+        var text = QuickAddInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var task = _viewModel.AddQuickTask(text);
+        QuickAddInput.Text = string.Empty;
+        QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+        if (task is not null)
+        {
+            TaskListBox.ScrollIntoView(task);
+        }
+    }
+
     // About Tasky's "Replay welcome tour" button (see ReplayTourRequested below) and the
     // first-run auto-show both land here. HasSeenWelcomeTour is set true regardless of how the
     // tour was reached, matching Tasky Web's "Replay welcome tour" button, which doesn't re-arm
@@ -525,6 +593,14 @@ public partial class MainWindow : Window
         {
             SearchTextBox.Focus();
             SearchTextBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control && _viewModel.ViewMode != ViewMode.Calendar)
+        {
+            QuickAddInput.Focus();
+            QuickAddInput.SelectAll();
             e.Handled = true;
             return;
         }

@@ -230,16 +230,19 @@
                     <MenuItem Header="_Quick Add..." InputGestureText="Ctrl+Alt+T" Click="QuickAdd_Click"/>
                     <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
                     <Separator/>
-                    <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
-                    <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
-                    <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
                     <MenuItem Header="_Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
                     <MenuItem Header="Export All _Tasks..." Command="{Binding ExportAllTasksCommand}"/>
-                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
                     <Separator/>
                     <MenuItem Header="Export _Full Backup..." Command="{Binding ExportBackupCommand}"/>
                     <MenuItem Header="_Import Full Backup..." Command="{Binding ImportBackupCommand}"/>
-                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
+                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Data_base Files">
+                        <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
+                        <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
+                        <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
+                    </MenuItem>
                     <Separator/>
                     <MenuItem Header="Sync _Google Drive Now" InputGestureText="Ctrl+Shift+G" Command="{Binding SyncGoogleDriveNowCommand}"/>
                     <Separator/>
@@ -322,16 +325,7 @@
                     <TextBlock Text="Delete" VerticalAlignment="Center"/>
                 </StackPanel>
             </Button>
-            <Separator/>
-            <Button ToolTip="Show all open tasks" Command="{Binding ShowAllCommand}" Padding="6,3">
-                <TextBlock Text="All Tasks"/>
-            </Button>
-            <Button ToolTip="Show completed tasks" Command="{Binding ShowClosedCommand}" Padding="6,3">
-                <TextBlock Text="Completed"/>
-            </Button>
-            <Button ToolTip="Show trash" Command="{Binding ShowTrashCommand}" Padding="6,3">
-                <TextBlock Text="Trash"/>
-            </Button>
+
             <Separator/>
             <Button ToolTip="List view" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.List}" Padding="6,3">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

@@ -473,8 +473,8 @@ public partial class MainWindow : Window
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Export Task Note",
-            Filter = "HTML Document (*.html)|*.html|Markdown Document (*.md)|*.md|Print / PDF Document (*.*)|*.*",
-            FileName = $"{task.Text}.html"
+            Filter = "Markdown Document (*.md)|*.md|Print / PDF Document (*.*)|*.*",
+            FileName = $"{task.Text}.md"
         };
 
         if (dialog.ShowDialog() == true)
@@ -484,11 +484,6 @@ public partial class MainWindow : Window
             {
                 ExportService.ExportToMarkdown(task, NoteEditor.Document, dialog.FileName);
                 ThemedMessageBox.Show($"Task exported successfully to Markdown:\n{dialog.FileName}", "Export Note", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else if (ext == ".html" || ext == ".htm")
-            {
-                ExportService.ExportToHtml(task, NoteEditor.Document, dialog.FileName);
-                ThemedMessageBox.Show($"Task exported successfully to HTML:\n{dialog.FileName}", "Export Note", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {

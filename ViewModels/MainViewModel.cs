@@ -1230,18 +1230,14 @@ public class MainViewModel : INotifyPropertyChanged
             var dialog = new SaveFileDialog
             {
                 Title = "Export All Tasks",
-                Filter = "Markdown Document (*.md)|*.md|HTML Document (*.html)|*.html",
+                Filter = "Markdown Document (*.md)|*.md",
                 FileName = $"Tasky Export {DateTime.Now:yyyy-MM-dd}.md"
             };
             if (dialog.ShowDialog() != true) return;
 
             try
             {
-                var ext = Path.GetExtension(dialog.FileName)?.ToLowerInvariant() ?? string.Empty;
-                if (ext == ".html" || ext == ".htm")
-                    ExportService.ExportAllToHtml(AllTasks, dialog.FileName);
-                else
-                    ExportService.ExportAllToMarkdown(AllTasks, dialog.FileName);
+                ExportService.ExportAllToMarkdown(AllTasks, dialog.FileName);
                 ThemedMessageBox.Show($"Exported all tasks to:\n{dialog.FileName}", "Export All Tasks", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)

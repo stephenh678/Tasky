@@ -5,7 +5,9 @@ namespace TodoApp.ViewModels;
 public enum SidebarFilterKind
 {
     Today,
+    Tomorrow,
     All,
+    Someday,
     Done,
     Trash,
     Recurring,
@@ -23,7 +25,9 @@ public class SidebarFilterItem
     public string Icon => Kind switch
     {
         SidebarFilterKind.Today => "\uE787",
+        SidebarFilterKind.Tomorrow => "\uE916",
         SidebarFilterKind.All => "\uE8C0",
+        SidebarFilterKind.Someday => "\uE8B7",
         SidebarFilterKind.Done => "\uE73E",
         SidebarFilterKind.Trash => "\uE74D",
         SidebarFilterKind.Recurring => "\uE72C",

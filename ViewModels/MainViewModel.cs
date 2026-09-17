@@ -31,7 +31,9 @@ public class MainViewModel : INotifyPropertyChanged
     private string _currentFilePath = null!;
 
     private readonly SidebarFilterItem _todayItem = new(SidebarFilterKind.Today, "Today");
+    private readonly SidebarFilterItem _tomorrowItem = new(SidebarFilterKind.Tomorrow, "Tomorrow");
     private readonly SidebarFilterItem _allItem = new(SidebarFilterKind.All, "All Tasks");
+    private readonly SidebarFilterItem _somedayItem = new(SidebarFilterKind.Someday, "Someday");
     private readonly SidebarFilterItem _doneItem = new(SidebarFilterKind.Done, "Completed");
     private readonly SidebarFilterItem _trashItem = new(SidebarFilterKind.Trash, "Trash");
     private readonly SidebarFilterItem _recurringItem = new(SidebarFilterKind.Recurring, "Recurring");
@@ -237,6 +239,10 @@ public class MainViewModel : INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(SearchText) || HasActiveQuickFilters)
                 return "No tasks match your search or filter.";
+            if (SelectedSidebarItem.Kind == SidebarFilterKind.Tomorrow)
+                return "No tasks scheduled for tomorrow.";
+            if (SelectedSidebarItem.Kind == SidebarFilterKind.Someday)
+                return "No unscheduled tasks.";
             if (SelectedSidebarItem.Kind == SidebarFilterKind.Tag)
                 return "No open or completed tasks have this tag. Check Trash?";
             return "No tasks here yet.";
@@ -665,7 +671,9 @@ public class MainViewModel : INotifyPropertyChanged
         AppLogger.IsVerbose = _settings.IsVerboseLogging;
 
         SidebarItems.Add(_todayItem);
+        SidebarItems.Add(_tomorrowItem);
         SidebarItems.Add(_allItem);
+        SidebarItems.Add(_somedayItem);
         SidebarItems.Add(_recurringItem);
         SidebarItems.Add(_doneItem);
         SidebarItems.Add(_trashItem);
@@ -810,6 +818,19 @@ public class MainViewModel : INotifyPropertyChanged
             }
 
             var task = new TaskItem { Text = "New Task" };
+            if (SelectedSidebarItem?.Kind == SidebarFilterKind.Today)
+            {
+                task.DueDate = DateTime.Today;
+            }
+            else if (SelectedSidebarItem?.Kind == SidebarFilterKind.Tomorrow)
+            {
+                task.DueDate = DateTime.Today.AddDays(1);
+            }
+            else if (SelectedSidebarItem?.Kind == SidebarFilterKind.Tag && SelectedSidebarItem.TagName is { } tagName)
+            {
+                task.Tags.Add(tagName);
+            }
+
             AllTasks.Add(task);
             AttachTask(task);
             OnTaskChanged();
@@ -2097,6 +2118,10 @@ public class MainViewModel : INotifyPropertyChanged
         {
             SidebarFilterKind.Today => !t.IsClosed && !t.IsDone
                 && (t.IsPinned || (t.DueDate.HasValue && t.DueDate.Value.Date <= DateTime.Today)),
+            SidebarFilterKind.Tomorrow => !t.IsClosed && !t.IsDone
+                && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today.AddDays(1),
+            SidebarFilterKind.Someday => !t.IsClosed && !t.IsDone
+                && !t.DueDate.HasValue,
             SidebarFilterKind.Trash => t.IsClosed,
             SidebarFilterKind.Done => !t.IsClosed && t.IsDone,
             SidebarFilterKind.Recurring => !t.IsClosed && !t.IsDone && t.Recurrence != RecurrenceRule.None,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -169,6 +170,83 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     // never needs to go higher than "every 30 days/weeks/months/years" anyway).
     public int[] RecurrenceIntervalOptions { get; } = Enumerable.Range(1, 30).ToArray();
 
+    public static readonly string[] DueTimeOptions =
+    [
+        "All Day",
+        "12:00 AM", "12:30 AM", "01:00 AM", "01:30 AM", "02:00 AM", "02:30 AM",
+        "03:00 AM", "03:30 AM", "04:00 AM", "04:30 AM", "05:00 AM", "05:30 AM",
+        "06:00 AM", "06:30 AM", "07:00 AM", "07:30 AM", "08:00 AM", "08:30 AM",
+        "09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM",
+        "12:00 PM", "12:30 PM", "01:00 PM", "01:30 PM", "02:00 PM", "02:30 PM",
+        "03:00 PM", "03:30 PM", "04:00 PM", "04:30 PM", "05:00 PM", "05:30 PM",
+        "06:00 PM", "06:30 PM", "07:00 PM", "07:30 PM", "08:00 PM", "08:30 PM",
+        "09:00 PM", "09:30 PM", "10:00 PM", "10:30 PM", "11:00 PM", "11:30 PM"
+    ];
+
+    public string SelectedDueTime
+    {
+        get
+        {
+            if (!Task.DueDate.HasValue) return "All Day";
+            var time = Task.DueDate.Value.TimeOfDay;
+            if (time == TimeSpan.Zero) return "All Day";
+            return DateTime.Today.Add(time).ToString("hh:mm tt", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Equals("All Day", StringComparison.OrdinalIgnoreCase))
+            {
+                if (Task.DueDate.HasValue && Task.DueDate.Value.TimeOfDay != TimeSpan.Zero)
+                {
+                    Task.DueDate = Task.DueDate.Value.Date;
+                    OnPropertyChanged(nameof(SelectedDueTime));
+                    OnPropertyChanged(nameof(HasDueTime));
+                }
+                return;
+            }
+
+            if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed) ||
+                DateTime.TryParse(value, System.Globalization.CultureInfo.CurrentCulture, System.Globalization.DateTimeStyles.None, out parsed))
+            {
+                var date = Task.DueDate?.Date ?? DateTime.Today;
+                Task.DueDate = date.Add(parsed.TimeOfDay);
+                OnPropertyChanged(nameof(SelectedDueTime));
+                OnPropertyChanged(nameof(HasDueTime));
+                OnPropertyChanged(nameof(HasDueDate));
+            }
+        }
+    }
+
+    public bool HasDueTime => Task.DueDate.HasValue && Task.DueDate.Value.TimeOfDay != TimeSpan.Zero;
+    public bool HasDueDate => Task.DueDate.HasValue;
+    public RelayCommand ClearDueDateCommand { get; }
+
+    private string _newSubtaskText = string.Empty;
+    public string NewSubtaskText
+    {
+        get => _newSubtaskText;
+        set => SetField(ref _newSubtaskText, value);
+    }
+
+    public ObservableCollection<ChecklistItem> Subtasks
+    {
+        get
+        {
+            var block = Task.Body.FirstOrDefault(b => b.Type == NoteBlockType.Checklist);
+            return block?.ChecklistItems ?? _emptySubtasks;
+        }
+    }
+    private static readonly ObservableCollection<ChecklistItem> _emptySubtasks = new();
+
+    public bool HasSubtasks => Subtasks.Count > 0;
+    public int SubtasksTotal => Subtasks.Count;
+    public int SubtasksCompleted => Subtasks.Count(s => s.IsChecked);
+    public double SubtaskProgressPercent => SubtasksTotal > 0 ? (double)SubtasksCompleted / SubtasksTotal * 100.0 : 0.0;
+    public string SubtaskProgressText => $"{SubtasksCompleted} of {SubtasksTotal} completed";
+
+    public RelayCommand AddSubtaskCommand { get; }
+    public RelayCommand RemoveSubtaskCommand { get; }
+
     // Completed and trashed tasks are meant to be reviewed, restored, or reopened - not edited in
     // place. "Open" (neither) is the only status where content should actually be changeable.
     public bool IsEditable => !Task.IsDone && !Task.IsClosed;
@@ -303,6 +381,63 @@ public class TaskDetailViewModel : INotifyPropertyChanged
                 _onChanged();
             });
         });
+
+        ClearDueDateCommand = new RelayCommand(_ => Task.DueDate = null, _ => Task.DueDate.HasValue);
+        AddSubtaskCommand = new RelayCommand(_ => AddSubtask());
+        RemoveSubtaskCommand = new RelayCommand(p => RemoveSubtask(p as ChecklistItem));
+    }
+
+    public void AddSubtask(string? text = null)
+    {
+        var input = (text ?? NewSubtaskText).Trim();
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        var block = Task.Body.FirstOrDefault(b => b.Type == NoteBlockType.Checklist);
+        if (block is null)
+        {
+            block = new NoteBlock { Type = NoteBlockType.Checklist };
+            Task.Body.Add(block);
+        }
+
+        var item = new ChecklistItem { Text = input, IsChecked = false };
+        block.ChecklistItems.Add(item);
+        NewSubtaskText = string.Empty;
+        RefreshSubtasks();
+        _onChanged();
+        _pushUndo($"Add subtask \"{input}\"", () =>
+        {
+            block.ChecklistItems.Remove(item);
+            RefreshSubtasks();
+        });
+    }
+
+    public void RemoveSubtask(ChecklistItem? item)
+    {
+        if (item is null) return;
+        var block = Task.Body.FirstOrDefault(b => b.Type == NoteBlockType.Checklist);
+        if (block is null) return;
+
+        var idx = block.ChecklistItems.IndexOf(item);
+        if (idx < 0) return;
+
+        block.ChecklistItems.RemoveAt(idx);
+        RefreshSubtasks();
+        _onChanged();
+        _pushUndo($"Delete subtask \"{item.Text}\"", () =>
+        {
+            block.ChecklistItems.Insert(idx, item);
+            RefreshSubtasks();
+        });
+    }
+
+    private void RefreshSubtasks()
+    {
+        OnPropertyChanged(nameof(Subtasks));
+        OnPropertyChanged(nameof(HasSubtasks));
+        OnPropertyChanged(nameof(SubtasksTotal));
+        OnPropertyChanged(nameof(SubtasksCompleted));
+        OnPropertyChanged(nameof(SubtaskProgressPercent));
+        OnPropertyChanged(nameof(SubtaskProgressText));
     }
 
     public static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp" };
@@ -325,6 +460,12 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(ModifiedDisplay));
         if (e.PropertyName is nameof(TaskItem.DueDate) or nameof(TaskItem.Recurrence) or nameof(TaskItem.RecurrenceInterval))
             OnPropertyChanged(nameof(RecurrenceSummary));
+        if (e.PropertyName == nameof(TaskItem.DueDate))
+        {
+            OnPropertyChanged(nameof(SelectedDueTime));
+            OnPropertyChanged(nameof(HasDueTime));
+            OnPropertyChanged(nameof(HasDueDate));
+        }
         if (e.PropertyName is nameof(TaskItem.IsDone) or nameof(TaskItem.IsClosed))
         {
             OnPropertyChanged(nameof(IsEditable));
@@ -346,6 +487,8 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         if (e.OldItems is not null)
             foreach (NoteBlock block in e.OldItems)
                 DetachBlock(block);
+
+        RefreshSubtasks();
 
         // Task.PropertyChanged (which MainViewModel listens to for ModifiedAt) only fires for
         // TaskItem's own direct properties - it never sees changes nested inside Body, since
@@ -410,6 +553,7 @@ public class TaskDetailViewModel : INotifyPropertyChanged
             foreach (ChecklistItem item in e.OldItems)
                 DetachChecklistItem(item);
         Task.ModifiedAt = DateTime.UtcNow;
+        RefreshSubtasks();
         _onChanged();
     }
 
@@ -421,9 +565,14 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     {
         Task.ModifiedAt = DateTime.UtcNow;
         if (e.PropertyName == nameof(ChecklistItem.IsChecked))
+        {
+            RefreshSubtasks();
             _onChanged();
+        }
         else
+        {
             _onTypingChanged();
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

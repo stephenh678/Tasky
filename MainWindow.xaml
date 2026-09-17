@@ -54,6 +54,8 @@
         <conv:NoteBlockToPhotoSourceConverter x:Key="NoteBlockToPhotoSource"/>
         <conv:QuickFilterActiveConverter x:Key="QuickFilterActive"/>
         <conv:QuickFilterLabelConverter x:Key="QuickFilterLabel"/>
+        <conv:ChecklistProgressTextConverter x:Key="ChecklistProgressText"/>
+        <conv:ChecklistProgressToolTipConverter x:Key="ChecklistProgressToolTip"/>
 
         <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
              auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
@@ -498,6 +500,7 @@
                             <TextBox x:Name="SearchTextBox" Padding="26,6,8,6" FontSize="13" Foreground="{DynamicResource PrimaryTextBrush}"
                                      Background="Transparent" BorderThickness="0"
                                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     PreviewKeyDown="SearchTextBox_PreviewKeyDown"
                                      ToolTip="Search tasks, notes, and tags. Operators: tag:name, is:overdue, is:pinned, is:recurring, is:done, has:link, has:attachment, due:today - combine with plain text or each other. Ctrl+F to jump here."/>
                             <TextBlock Text="&#xE721;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
                                        Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
@@ -659,6 +662,7 @@
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                       SelectionChanged="TaskListBox_SelectionChanged"
                       PreviewMouseRightButtonDown="TaskListBox_PreviewMouseRightButtonDown"
+                      KeyDown="TaskListBox_KeyDown"
                       Tag="{Binding}">
                 <ListBox.ContextMenu>
                     <ContextMenu>
@@ -765,10 +769,18 @@
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has link"
                                                Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Link}"/>
-                                    <TextBlock Text="&#xEA37;" FontFamily="{StaticResource FluentIconFont}" FontSize="10"
-                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
-                                               ToolTip="Has checklist"
-                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}"/>
+                                    <Border Background="{DynamicResource SecondaryBrush}" CornerRadius="4" Padding="4,1" Margin="0,0,6,0"
+                                            VerticalAlignment="Center"
+                                            ToolTip="{Binding Converter={StaticResource ChecklistProgressToolTip}}"
+                                            Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="&#xEA37;" FontFamily="{StaticResource FluentIconFont}" FontSize="9.5"
+                                                       Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                            <TextBlock Text="{Binding Converter={StaticResource ChecklistProgressText}}" FontSize="10"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
                                     <ItemsControl ItemsSource="{Binding Tags}" Margin="0,0,6,0">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
@@ -1094,11 +1106,23 @@
                              each is just a label+control pair; Tags stays on its own row below,
                              both because its chips wrap onto following lines and to keep it last. -->
                         <WrapPanel Margin="0,14,0,0" VerticalAlignment="Center">
-                            <!-- Due date -->
+                            <!-- Due date & Time -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,16,8" VerticalAlignment="Center">
                                 <TextBlock Text="Due date:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
                                            Foreground="{DynamicResource ForegroundBrush}"/>
                                 <DatePicker SelectedDate="{Binding Task.DueDate}" HorizontalAlignment="Left" Width="130"/>
+                                <ComboBox IsEditable="True" Width="105" Margin="6,0,0,0"
+                                          ItemsSource="{Binding DueTimeOptions}"
+                                          Text="{Binding SelectedDueTime, UpdateSourceTrigger=LostFocus}"
+                                          SelectedItem="{Binding SelectedDueTime}"
+                                          ToolTip="Due time (e.g. 09:00 AM, 3:00 PM, or All Day)"
+                                          IsEnabled="{Binding HasDueDate}"/>
+                                <Button Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                        ToolTip="Clear due date &amp; time"
+                                        Command="{Binding ClearDueDateCommand}"
+                                        Visibility="{Binding HasDueDate, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="&#xE711;" FontSize="9" Style="{StaticResource IconGlyph}"/>
+                                </Button>
                             </StackPanel>
 
                             <!-- Priority -->
@@ -1218,6 +1242,77 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+
+                        <!-- Subtasks / Checklist Section -->
+                        <Border Background="{DynamicResource SidebarBackgroundBrush}" CornerRadius="6"
+                                Padding="12,10" Margin="0,8,0,8" BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xEA37;" FontFamily="{StaticResource FluentIconFont}" FontSize="12"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Subtasks" FontSize="12.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <ProgressBar Grid.Column="1" Height="4" Margin="14,0" VerticalAlignment="Center"
+                                                 Minimum="0" Maximum="100" Value="{Binding SubtaskProgressPercent}"
+                                                 Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding SubtaskProgressText}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"
+                                               Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding Subtasks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox Grid.Column="0" IsChecked="{Binding IsChecked}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <TextBox Grid.Column="1" Text="{Binding Text, UpdateSourceTrigger=LostFocus}"
+                                                         Background="Transparent" BorderThickness="0" FontSize="13" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="20" Height="20"
+                                                        Command="{Binding DataContext.RemoveSubtaskCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" ToolTip="Delete subtask">
+                                                    <TextBlock Text="&#xE711;" FontSize="8" Style="{StaticResource IconGlyph}"/>
+                                                </Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center" Margin="2,0,8,0"/>
+                                    <TextBox Grid.Column="1" x:Name="NewSubtaskTextBox"
+                                             Text="{Binding NewSubtaskText, UpdateSourceTrigger=PropertyChanged}"
+                                             Padding="4,3" FontSize="12.5"
+                                             Background="Transparent" BorderThickness="0,0,0,1"
+                                             BorderBrush="{DynamicResource SecondaryBrush}"
+                                             Foreground="{DynamicResource PrimaryTextBrush}"
+                                             KeyDown="NewSubtaskTextBox_KeyDown"
+                                             ToolTip="Add a subtask (press Enter)"/>
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                            Command="{Binding AddSubtaskCommand}" ToolTip="Add subtask">
+                                        <TextBlock Text="&#xE710;" FontSize="10" Style="{StaticResource IconGlyph}"/>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
 
                         <!-- Note Formatting Toolbar (Contextual to Note Editor) -->
                         <Border x:Name="FormattingGroup"

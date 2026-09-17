@@ -531,6 +531,100 @@ public partial class MainWindow : Window
         TaskListBox.SelectedItem = task;
     }
 
+    private void TaskListBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkMarkDoneCommand.CanExecute(null))
+                    _viewModel.BulkMarkDoneCommand.Execute(null);
+            }
+            else if (_viewModel.SelectedTask is { } task && !task.IsClosed)
+            {
+                task.IsDone = !task.IsDone;
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkTrashCommand.CanExecute(null))
+                    _viewModel.BulkTrashCommand.Execute(null);
+            }
+            else if (_viewModel.DeleteSelectedCommand.CanExecute(null))
+            {
+                _viewModel.DeleteSelectedCommand.Execute(null);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkTogglePinCommand.CanExecute(null))
+                    _viewModel.BulkTogglePinCommand.Execute(null);
+            }
+            else if (_viewModel.SelectedTask is { } task)
+            {
+                _viewModel.TogglePinCommand.Execute(task);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter)
+        {
+            if (_viewModel.SelectedTask is not null)
+            {
+                TitleTextBox.Focus();
+                TitleTextBox.SelectAll();
+                e.Handled = true;
+            }
+        }
+    }
+
+    private void SearchTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Down)
+        {
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            SearchTextBox.Text = string.Empty;
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+    }
+
+    private void MoveFocusToTaskList()
+    {
+        if (TaskListBox.Items.Count > 0)
+        {
+            if (TaskListBox.SelectedIndex < 0)
+                TaskListBox.SelectedIndex = 0;
+
+            TaskListBox.Focus();
+            if (TaskListBox.ItemContainerGenerator.ContainerFromIndex(TaskListBox.SelectedIndex) is ListBoxItem item)
+            {
+                item.Focus();
+            }
+        }
+    }
+
+    private void NewSubtaskTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            if (_viewModel.SelectedTaskDetail?.AddSubtaskCommand.CanExecute(null) == true)
+            {
+                _viewModel.SelectedTaskDetail.AddSubtaskCommand.Execute(null);
+                e.Handled = true;
+            }
+        }
+    }
+
     private void ShowShortcuts_Click(object sender, RoutedEventArgs e) => new ShortcutsWindow { Owner = this }.ShowDialog();
 
     private void QuickAdd_Click(object sender, RoutedEventArgs e) => ShowQuickAdd();
@@ -546,7 +640,12 @@ public partial class MainWindow : Window
         {
             QuickAddInput.Text = string.Empty;
             QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
-            TaskListBox.Focus();
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            MoveFocusToTaskList();
             e.Handled = true;
         }
     }
@@ -1221,7 +1320,11 @@ public partial class MainWindow : Window
 
     private void TitleTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        // No action needed - just here to handle events
+        if (e.Key == Key.Escape)
+        {
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
     }
 
     private static FrameworkElement? FindFirstVisualDescendantWithContextMenu(DependencyObject root)

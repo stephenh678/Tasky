@@ -20,6 +20,7 @@ public class TaskComparer : IComparer
 
         return _option switch
         {
+            SortOption.Manual => a.SortOrder != b.SortOrder ? a.SortOrder.CompareTo(b.SortOrder) : b.CreatedAt.CompareTo(a.CreatedAt),
             SortOption.NameAZ => string.Compare(a.Text, b.Text, StringComparison.OrdinalIgnoreCase),
             SortOption.NameZA => string.Compare(b.Text, a.Text, StringComparison.OrdinalIgnoreCase),
             SortOption.DueDateSoonest => CompareDueDates(a.DueDate, b.DueDate),

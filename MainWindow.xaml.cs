@@ -37,6 +37,10 @@ public partial class MainWindow : Window
     private bool _readyToClose;
     private bool _flushInProgress;
     private bool _isExplicitExit;
+    private Point _dragStartPoint;
+    private TaskItem? _draggedTask;
+    private bool _isTaskDragging;
+    private TaskDropAdorner? _dropAdorner;
 
     public MainWindow()
     {
@@ -529,6 +533,191 @@ public partial class MainWindow : Window
         if (element is not ListBoxItem { DataContext: TaskItem task }) return;
         if (TaskListBox.SelectedItems.Contains(task)) return;
         TaskListBox.SelectedItem = task;
+    }
+
+    private void TaskListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var element = e.OriginalSource as DependencyObject;
+        while (element != null && element != TaskListBox)
+        {
+            if (element is CheckBox or Button)
+            {
+                _draggedTask = null;
+                return;
+            }
+            if (element is TextBlock tb && (tb.ToolTip as string == "Pin to top" || tb.ToolTip as string == "Unpin"))
+            {
+                _draggedTask = null;
+                return;
+            }
+            if (element is ListBoxItem item && item.DataContext is TaskItem task)
+            {
+                _dragStartPoint = e.GetPosition(TaskListBox);
+                _draggedTask = task;
+                return;
+            }
+            element = VisualTreeHelper.GetParent(element);
+        }
+        _draggedTask = null;
+    }
+
+    private void TaskListBox_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _draggedTask == null || _isTaskDragging) return;
+
+        Point pos = e.GetPosition(TaskListBox);
+        Vector diff = _dragStartPoint - pos;
+
+        if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+        {
+            _isTaskDragging = true;
+            try
+            {
+                var data = new DataObject("TaskItem", _draggedTask);
+                DragDrop.DoDragDrop(TaskListBox, data, DragDropEffects.Move);
+            }
+            finally
+            {
+                _isTaskDragging = false;
+                _draggedTask = null;
+                RemoveInsertionAdorner();
+            }
+        }
+    }
+
+    private void TaskListBox_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("TaskItem"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            RemoveInsertionAdorner();
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        Point pt = e.GetPosition(TaskListBox);
+        var targetItem = FindListBoxItemAt(pt);
+
+        if (targetItem != null)
+        {
+            Point itemPt = e.GetPosition(targetItem);
+            bool isAfter = itemPt.Y > targetItem.ActualHeight / 2.0;
+            UpdateInsertionAdorner(targetItem, isAfter);
+        }
+        else
+        {
+            var lastItem = GetLastVisibleListBoxItem();
+            if (lastItem != null)
+            {
+                UpdateInsertionAdorner(lastItem, true);
+            }
+            else
+            {
+                RemoveInsertionAdorner();
+            }
+        }
+    }
+
+    private void TaskListBox_DragLeave(object sender, DragEventArgs e)
+    {
+        Point pt = e.GetPosition(TaskListBox);
+        if (pt.X < 0 || pt.Y < 0 || pt.X > TaskListBox.ActualWidth || pt.Y > TaskListBox.ActualHeight)
+        {
+            RemoveInsertionAdorner();
+        }
+    }
+
+    private void TaskListBox_Drop(object sender, DragEventArgs e)
+    {
+        RemoveInsertionAdorner();
+
+        if (!e.Data.GetDataPresent("TaskItem")) return;
+        if (e.Data.GetData("TaskItem") is not TaskItem sourceTask) return;
+
+        Point pt = e.GetPosition(TaskListBox);
+        var targetItem = FindListBoxItemAt(pt);
+
+        TaskItem? targetTask = null;
+        bool isAfter = false;
+
+        if (targetItem != null)
+        {
+            targetTask = targetItem.DataContext as TaskItem;
+            Point itemPt = e.GetPosition(targetItem);
+            isAfter = itemPt.Y > targetItem.ActualHeight / 2.0;
+        }
+        else
+        {
+            var lastItem = GetLastVisibleListBoxItem();
+            if (lastItem != null)
+            {
+                targetTask = lastItem.DataContext as TaskItem;
+                isAfter = true;
+            }
+        }
+
+        if (targetTask != null && !ReferenceEquals(sourceTask, targetTask))
+        {
+            _viewModel.ReorderTask(sourceTask, targetTask, isAfter);
+            TaskListBox.SelectedItem = sourceTask;
+        }
+    }
+
+    private ListBoxItem? FindListBoxItemAt(Point pt)
+    {
+        var hit = TaskListBox.InputHitTest(pt) as DependencyObject;
+        while (hit != null && hit != TaskListBox)
+        {
+            if (hit is ListBoxItem lbi) return lbi;
+            hit = VisualTreeHelper.GetParent(hit);
+        }
+        return null;
+    }
+
+    private ListBoxItem? GetLastVisibleListBoxItem()
+    {
+        if (TaskListBox.Items.Count == 0) return null;
+        for (int i = TaskListBox.Items.Count - 1; i >= 0; i--)
+        {
+            if (TaskListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
+                return item;
+        }
+        return null;
+    }
+
+    private void UpdateInsertionAdorner(ListBoxItem item, bool isAfter)
+    {
+        var layer = AdornerLayer.GetAdornerLayer(item);
+        if (layer == null) return;
+
+        if (_dropAdorner != null)
+        {
+            if (_dropAdorner.AdornedElement == item)
+            {
+                _dropAdorner.IsAfter = isAfter;
+                return;
+            }
+            var oldLayer = AdornerLayer.GetAdornerLayer(_dropAdorner.AdornedElement);
+            oldLayer?.Remove(_dropAdorner);
+            _dropAdorner = null;
+        }
+
+        _dropAdorner = new TaskDropAdorner(item, isAfter);
+        layer.Add(_dropAdorner);
+    }
+
+    private void RemoveInsertionAdorner()
+    {
+        if (_dropAdorner != null)
+        {
+            var layer = AdornerLayer.GetAdornerLayer(_dropAdorner.AdornedElement);
+            layer?.Remove(_dropAdorner);
+            _dropAdorner = null;
+        }
     }
 
     private void TaskListBox_KeyDown(object sender, KeyEventArgs e)

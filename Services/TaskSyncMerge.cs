@@ -130,6 +130,7 @@ public static class TaskSyncMerge
         target.IsDone = source.IsDone;
         target.IsClosed = source.IsClosed;
         target.IsPinned = source.IsPinned;
+        target.SortOrder = source.SortOrder;
         target.DueDate = source.DueDate;
         target.Recurrence = source.Recurrence;
         target.RecurrenceInterval = source.RecurrenceInterval;

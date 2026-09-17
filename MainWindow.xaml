@@ -177,6 +177,10 @@
                     <ContextMenu>
                         <MenuItem Header="SORT BY" IsEnabled="False" FontSize="11" FontWeight="Bold"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"/>
+                        <MenuItem Header="Custom Order"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.Manual}"/>
                         <MenuItem Header="Name (A-Z)"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
                                   Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -662,6 +666,12 @@
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                       SelectionChanged="TaskListBox_SelectionChanged"
                       PreviewMouseRightButtonDown="TaskListBox_PreviewMouseRightButtonDown"
+                      PreviewMouseLeftButtonDown="TaskListBox_PreviewMouseLeftButtonDown"
+                      PreviewMouseMove="TaskListBox_PreviewMouseMove"
+                      AllowDrop="True"
+                      DragOver="TaskListBox_DragOver"
+                      DragLeave="TaskListBox_DragLeave"
+                      Drop="TaskListBox_Drop"
                       KeyDown="TaskListBox_KeyDown"
                       Tag="{Binding}">
                 <ListBox.ContextMenu>

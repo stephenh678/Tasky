@@ -24,6 +24,7 @@ public class TaskItem : INotifyPropertyChanged
     private bool _isDone;
     private bool _isClosed;
     private bool _isPinned;
+    private int _sortOrder;
     private DateTime? _dueDate;
     private string _notes = string.Empty;
     private DateTime _modifiedAt = DateTime.UtcNow;
@@ -48,6 +49,12 @@ public class TaskItem : INotifyPropertyChanged
     {
         get => _isPinned;
         set => SetField(ref _isPinned, value);
+    }
+
+    public int SortOrder
+    {
+        get => _sortOrder;
+        set => SetField(ref _sortOrder, value);
     }
 
     /// <summary>
@@ -176,6 +183,7 @@ public class TaskItem : INotifyPropertyChanged
         CreatedAt = CreatedAt,
         ModifiedAt = ModifiedAt,
         IsPinned = IsPinned,
+        SortOrder = SortOrder,
         Text = Text,
         IsDone = IsDone,
         IsClosed = IsClosed,

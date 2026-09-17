@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Linq;
 using TodoApp.Converters;
 using TodoApp.Models;
+using TodoApp.Services;
 using TodoApp.ViewModels;
 using Xunit;
 
@@ -197,5 +198,82 @@ public class EnhancedFeaturesTests
         Assert.False(string.IsNullOrWhiteSpace(somedayItem.Icon));
         Assert.Equal("Tomorrow", tomorrowItem.Label);
         Assert.Equal("Someday", somedayItem.Label);
+    }
+
+    [Fact]
+    public void TaskItem_SortOrder_ClonesProperly()
+    {
+        var task = new TaskItem { Text = "Test", SortOrder = 42 };
+        var clone = task.Clone();
+        Assert.Equal(42, clone.SortOrder);
+    }
+
+    [Fact]
+    public void TaskSyncMerge_ApplyTaskFields_CopiesSortOrder()
+    {
+        var source = new TaskItem { Text = "Source", SortOrder = 99 };
+        var target = new TaskItem { Text = "Target", SortOrder = 1 };
+        TaskSyncMerge.ApplyTaskFields(target, source);
+        Assert.Equal(99, target.SortOrder);
+    }
+
+    [Fact]
+    public void MainViewModel_ReorderTask_MovesTaskAndSetsSortOrder()
+    {
+        var vm = new MainViewModel();
+        vm.AllTasks.Clear();
+
+        var taskA = new TaskItem { Text = "A", SortOrder = 0 };
+        var taskB = new TaskItem { Text = "B", SortOrder = 1 };
+        var taskC = new TaskItem { Text = "C", SortOrder = 2 };
+
+        vm.AllTasks.Add(taskA);
+        vm.AllTasks.Add(taskB);
+        vm.AllTasks.Add(taskC);
+
+        // Reorder: Move taskC before taskA
+        vm.ReorderTask(taskC, taskA, insertAfter: false);
+
+        Assert.Equal(SortOption.Manual, vm.CurrentSort);
+        Assert.Equal(taskC, vm.AllTasks[0]);
+        Assert.Equal(taskA, vm.AllTasks[1]);
+        Assert.Equal(taskB, vm.AllTasks[2]);
+
+        Assert.Equal(0, taskC.SortOrder);
+        Assert.Equal(1, taskA.SortOrder);
+        Assert.Equal(2, taskB.SortOrder);
+
+        // Undo
+        vm.UndoCommand.Execute(null);
+
+        Assert.Equal(taskA, vm.AllTasks[0]);
+        Assert.Equal(taskB, vm.AllTasks[1]);
+        Assert.Equal(taskC, vm.AllTasks[2]);
+        Assert.Equal(0, taskA.SortOrder);
+        Assert.Equal(1, taskB.SortOrder);
+        Assert.Equal(2, taskC.SortOrder);
+    }
+
+    [Fact]
+    public void MainViewModel_ReorderTask_AutoPinsAndUnpinsAcrossBoundary()
+    {
+        var vm = new MainViewModel();
+        vm.AllTasks.Clear();
+
+        var pinned = new TaskItem { Text = "Pinned", IsPinned = true, SortOrder = 0 };
+        var unpinned1 = new TaskItem { Text = "Unpinned 1", IsPinned = false, SortOrder = 1 };
+        var unpinned2 = new TaskItem { Text = "Unpinned 2", IsPinned = false, SortOrder = 2 };
+
+        vm.AllTasks.Add(pinned);
+        vm.AllTasks.Add(unpinned1);
+        vm.AllTasks.Add(unpinned2);
+
+        // Drag unpinned1 above pinned -> gets pinned
+        vm.ReorderTask(unpinned1, pinned, insertAfter: false);
+        Assert.True(unpinned1.IsPinned);
+
+        // Drag now-pinned unpinned1 below unpinned2 -> gets unpinned
+        vm.ReorderTask(unpinned1, unpinned2, insertAfter: true);
+        Assert.False(unpinned1.IsPinned);
     }
 }

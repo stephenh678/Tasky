@@ -831,6 +831,7 @@ public class MainViewModel : INotifyPropertyChanged
                 task.Tags.Add(tagName);
             }
 
+            task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
             AllTasks.Add(task);
             AttachTask(task);
             OnTaskChanged();
@@ -913,6 +914,73 @@ public class MainViewModel : INotifyPropertyChanged
                 CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
+            OnTaskChanged();
+        });
+    }
+
+    public void ReorderTask(TaskItem sourceTask, TaskItem targetTask, bool insertAfter)
+    {
+        if (sourceTask is null || targetTask is null || ReferenceEquals(sourceTask, targetTask)) return;
+
+        int sourceIndex = AllTasks.IndexOf(sourceTask);
+        int targetIndex = AllTasks.IndexOf(targetTask);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+
+        bool wasPinned = sourceTask.IsPinned;
+        if (targetTask.IsPinned && !sourceTask.IsPinned && !insertAfter)
+        {
+            sourceTask.IsPinned = true;
+        }
+        else if (!targetTask.IsPinned && sourceTask.IsPinned && insertAfter)
+        {
+            sourceTask.IsPinned = false;
+        }
+
+        if (CurrentSort != SortOption.Manual)
+        {
+            CurrentSort = SortOption.Manual;
+        }
+
+        int newIndex = targetIndex;
+        if (insertAfter)
+        {
+            if (sourceIndex > targetIndex)
+                newIndex = targetIndex + 1;
+        }
+        else
+        {
+            if (sourceIndex < targetIndex)
+                newIndex = targetIndex - 1;
+        }
+
+        if (newIndex < 0) newIndex = 0;
+        if (newIndex >= AllTasks.Count) newIndex = AllTasks.Count - 1;
+        if (newIndex == sourceIndex && wasPinned == sourceTask.IsPinned) return;
+
+        var oldSnapshot = AllTasks.Select((t, i) => (Task: t, Index: i, Pinned: t.IsPinned)).ToList();
+
+        AllTasks.Move(sourceIndex, newIndex);
+
+        for (int i = 0; i < AllTasks.Count; i++)
+        {
+            AllTasks[i].SortOrder = i;
+        }
+
+        sourceTask.ModifiedAt = DateTime.UtcNow;
+        FilteredTasksView.Refresh();
+        OnTaskChanged();
+
+        PushUndo($"Reorder \"{sourceTask.Text}\"", () =>
+        {
+            sourceTask.IsPinned = wasPinned;
+            var sorted = AllTasks.OrderBy(t => oldSnapshot.FirstOrDefault(x => x.Task == t).Index).ToList();
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                var cur = AllTasks.IndexOf(sorted[i]);
+                if (cur != i) AllTasks.Move(cur, i);
+                AllTasks[i].SortOrder = i;
+            }
+            FilteredTasksView.Refresh();
             OnTaskChanged();
         });
     }
@@ -1879,6 +1947,7 @@ public class MainViewModel : INotifyPropertyChanged
             SelectedSidebarItem = _allItem;
         }
 
+        task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
@@ -1901,6 +1970,7 @@ public class MainViewModel : INotifyPropertyChanged
             task.DueDate = parsed.DueDate;
             foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
         }
+        task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
@@ -2062,6 +2132,13 @@ public class MainViewModel : INotifyPropertyChanged
         _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
+        if (AllTasks.Count > 0 && AllTasks.All(t => t.SortOrder == 0))
+        {
+            for (int i = 0; i < AllTasks.Count; i++)
+            {
+                AllTasks[i].SortOrder = i;
+            }
+        }
 
         SelectedTask = null;
         SelectedSidebarItem = _allItem;
@@ -2183,7 +2260,7 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TaskItem.ModifiedAt)) return;
+        if (e.PropertyName == nameof(TaskItem.ModifiedAt) || e.PropertyName == nameof(TaskItem.SortOrder)) return;
         if (sender is not TaskItem task) return;
         task.ModifiedAt = DateTime.UtcNow;
 

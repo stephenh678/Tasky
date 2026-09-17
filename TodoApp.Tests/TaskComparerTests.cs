@@ -129,4 +129,30 @@ public class TaskComparerTests
         Assert.Equal("Bravo", list[1].Text);
         Assert.Equal("Charlie", list[2].Text);
     }
+
+    [Fact]
+    public void ManualSort_OrdersBySortOrder()
+    {
+        var a = Make("First");
+        a.SortOrder = 1;
+        var b = Make("Second");
+        b.SortOrder = 2;
+        var comparer = new TaskComparer(SortOption.Manual);
+
+        Assert.True(comparer.Compare(a, b) < 0);
+        Assert.True(comparer.Compare(b, a) > 0);
+    }
+
+    [Fact]
+    public void ManualSort_PinnedOverridesSortOrder()
+    {
+        var pinned = Make("Pinned", pinned: true);
+        pinned.SortOrder = 10;
+        var unpinned = Make("Unpinned", pinned: false);
+        unpinned.SortOrder = 1;
+        var comparer = new TaskComparer(SortOption.Manual);
+
+        Assert.True(comparer.Compare(pinned, unpinned) < 0);
+        Assert.True(comparer.Compare(unpinned, pinned) > 0);
+    }
 }

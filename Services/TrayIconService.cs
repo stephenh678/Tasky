@@ -197,10 +197,17 @@ public class TrayIconService : IDisposable, ITrayNotifier
 
     private static System.Drawing.Icon LoadAppIcon()
     {
-        var streamInfo = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/icon.ico"));
-        return streamInfo is not null
-            ? new System.Drawing.Icon(streamInfo.Stream)
-            : System.Drawing.SystemIcons.Application;
+        try
+        {
+            var streamInfo = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/icon.ico"));
+            return streamInfo is not null
+                ? new System.Drawing.Icon(streamInfo.Stream)
+                : System.Drawing.SystemIcons.Application;
+        }
+        catch
+        {
+            return System.Drawing.SystemIcons.Application;
+        }
     }
 
     public void Dispose()

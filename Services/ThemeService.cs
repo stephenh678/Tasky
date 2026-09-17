@@ -14,19 +14,28 @@ public static class ThemeService
     {
         IsDark = themeName == "Dark";
 
-        var dict = new ResourceDictionary
+        try
         {
-            Source = new Uri($"Themes/{themeName}Theme.xaml", UriKind.Relative)
-        };
+            var app = Application.Current;
+            if (app is null) return;
 
-        var app = Application.Current;
-        var existing = app.Resources.MergedDictionaries
-            .FirstOrDefault(d => d.Source is not null && d.Source.OriginalString.Contains("Theme.xaml"));
+            var dict = new ResourceDictionary
+            {
+                Source = new Uri($"Themes/{themeName}Theme.xaml", UriKind.Relative)
+            };
 
-        if (existing is not null)
-            app.Resources.MergedDictionaries.Remove(existing);
+            var existing = app.Resources.MergedDictionaries
+                .FirstOrDefault(d => d.Source is not null && d.Source.OriginalString.Contains("Theme.xaml"));
 
-        app.Resources.MergedDictionaries.Insert(0, dict);
+            if (existing is not null)
+                app.Resources.MergedDictionaries.Remove(existing);
+
+            app.Resources.MergedDictionaries.Insert(0, dict);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("ThemeService", $"Could not load theme '{themeName}': {ex.Message}");
+        }
 
         // Tried .NET 9's ThemeMode (Fluent theme, auto dark-mode-aware controls) here - reverted.
         // It's marked WPF0001 ("evaluation purposes only") for a reason: it visibly broke parts

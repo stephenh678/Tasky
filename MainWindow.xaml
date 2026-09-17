@@ -258,6 +258,8 @@
                     <MenuItem Header="_Paste" Command="Paste"/>
                 </MenuItem>
                 <MenuItem Header="_View" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_Toggle Sidebar" Command="{Binding ToggleSidebarCommand}"/>
+                    <Separator/>
                     <MenuItem Header="_All Tasks" Command="{Binding ShowAllCommand}"/>
                     <MenuItem Header="_Completed" Command="{Binding ShowClosedCommand}"/>
                     <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
@@ -410,13 +412,10 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
-                           Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
-                <!-- Hidden in Focus Mode: the sidebar's icon-rail width there is forced (see
-                     SidebarWidth), not a persisted choice, so there's nothing for this toggle to
-                     do until Focus Mode ends. -->
+                           Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"/>
+                <!-- Hidden in Focus Mode: the sidebar's width there is forced to 0 -->
                 <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar"
+                        ToolTip="Collapse sidebar" AutomationProperties.Name="Collapse sidebar"
                         Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}">
                     <TextBlock Text="&#xE700;" Style="{StaticResource IconGlyph}"/>
                 </Button>
@@ -428,7 +427,8 @@
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"/>
 
-            <Separator Grid.Row="2" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
+            <Separator Grid.Row="2" Margin="10,6" Background="{DynamicResource SecondaryBrush}"
+                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
 
             <TextBlock Grid.Row="3" Text="TAGS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
@@ -438,9 +438,11 @@
                       ItemsSource="{Binding TagItems}" SelectedItem="{Binding SelectedSidebarItem}"
                       ItemContainerStyle="{StaticResource SidebarListBoxItem}"
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
-                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
 
-            <Separator Grid.Row="5" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
+            <Separator Grid.Row="5" Margin="10,6" Background="{DynamicResource SecondaryBrush}"
+                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
 
             <TextBlock Grid.Row="6" Text="VIEWS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
@@ -450,7 +452,8 @@
                       ItemsSource="{Binding ViewItems}" SelectedItem="{Binding SelectedSidebarItem}"
                       ItemContainerStyle="{StaticResource SidebarListBoxItem}"
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
-                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
         </Grid>
 
         <!-- Task list -->
@@ -466,17 +469,26 @@
             <Grid Grid.Row="0" Margin="8,10,8,6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
+                <!-- Show sidebar button (visible only when sidebar is collapsed) -->
+                <Button Grid.Column="0" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                        ToolTip="Show sidebar" AutomationProperties.Name="Show sidebar"
+                        Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource BoolToVis}}"
+                        Margin="0,0,6,0">
+                    <TextBlock Text="&#xE700;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" Style="{StaticResource IconGlyph}"/>
+                </Button>
+
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
                         AutomationProperties.Name="New task"
                         Command="{Binding AddTaskCommand}">
                     <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" Style="{StaticResource IconGlyph}"/>
                 </Button>
 
-                <Grid Grid.Column="1" Margin="6,0">
+                <Grid Grid.Column="2" Margin="6,0">
                     <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
                             BorderThickness="1" CornerRadius="16">
                         <Grid>
@@ -498,7 +510,7 @@
                      icon glyph rather than beside it (confirmed by rendering this exact markup
                      through WPF's layout engine before and after - the corner-anchored-with-
                      negative-margin version visibly covered the funnel's tip). -->
-                <Grid Grid.Column="2" Width="34" Height="32">
+                <Grid Grid.Column="3" Width="34" Height="32">
                     <Button x:Name="FilterButton" Style="{StaticResource IconButton}"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             ToolTip="Filters - combine as many as you like" AutomationProperties.Name="Filters"

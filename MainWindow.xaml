@@ -140,13 +140,18 @@
         </ContextMenu>
 
         <DataTemplate x:Key="SidebarItemTemplate">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Background="Transparent"
-                        ToolTip="{Binding Label}"
-                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
-                <TextBlock Text="{Binding Icon}" FontFamily="{StaticResource FluentIconFont}" FontSize="13"
-                           Width="18" TextAlignment="Center" Foreground="{DynamicResource PrimaryTextBrush}"/>
-                <TextBlock Text="{Binding Label}" FontSize="13.5" Margin="8,0,0,0"
-                           Foreground="{DynamicResource PrimaryTextBrush}"
+            <Grid Background="Transparent" HorizontalAlignment="Stretch"
+                  ToolTip="{Binding Label}"
+                  Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="48"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Icon}" FontFamily="{StaticResource FluentIconFont}" FontSize="13"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                           Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13.5" Margin="0,0,8,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PrimaryTextBrush}"
                            Visibility="{Binding DataContext.IsSidebarShowingIconsOnly, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBoolToVis}}"/>
                 <!-- Selection is driven by this MouseBinding, not by SelectedItem's TwoWay binding
                      below (the ListBox still declares SelectedItem for keyboard/arrow-key nav and
@@ -156,17 +161,17 @@
                      whatever the ListBox's own internal (and, per that history, occasionally stale)
                      notion of "already selected" is - so a click here is guaranteed to reach the VM
                      even in the exact state that previously made re-clicking silently do nothing. -->
-                <StackPanel.InputBindings>
+                <Grid.InputBindings>
                     <MouseBinding MouseAction="LeftClick"
                                   Command="{Binding DataContext.SelectSidebarItemCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                   CommandParameter="{Binding}"/>
-                </StackPanel.InputBindings>
+                </Grid.InputBindings>
 
                 <!-- ContextMenu opens in its own popup, disconnected from the main visual tree, so
                      RelativeSource AncestorType=Window can't find the ancestor from in here. Instead,
-                     the MainViewModel was stashed on the StackPanel's Tag above (where AncestorType=Window
+                     the MainViewModel was stashed on the Grid's Tag above (where AncestorType=Window
                      still works), and each item reaches it via ContextMenu.PlacementTarget.Tag. -->
-                <StackPanel.ContextMenu>
+                <Grid.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="SORT BY" IsEnabled="False" FontSize="11" FontWeight="Bold"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"/>
@@ -208,10 +213,10 @@
                         <MenuItem Header="Delete Tag"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Tag}"
                                   Command="{Binding PlacementTarget.Tag.DeleteTagCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                  CommandParameter="{Binding}"/>
+                                  CommandParameter="{Binding TagName}"/>
                     </ContextMenu>
-                </StackPanel.ContextMenu>
-            </StackPanel>
+                </Grid.ContextMenu>
+            </Grid>
         </DataTemplate>
 
     </Window.Resources>
@@ -406,17 +411,28 @@
                 <RowDefinition Height="1*"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="10,10,10,6">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"/>
-                <!-- Hidden in Focus Mode: the sidebar's width there is forced to 0 -->
-                <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Collapse sidebar" AutomationProperties.Name="Collapse sidebar"
-                        Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}">
+            <Grid Grid.Row="0" Margin="0,10,0,6" Height="32">
+                <!-- Expanded header: "TASKY" title and collapse button on right -->
+                <Grid Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ForegroundBrush}" Margin="16,0,0,0"/>
+                    <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                            ToolTip="Collapse sidebar" AutomationProperties.Name="Collapse sidebar"
+                            Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}"
+                            Margin="0,0,10,0">
+                        <TextBlock Text="&#xE700;" Style="{StaticResource IconGlyph}"/>
+                    </Button>
+                </Grid>
+
+                <!-- Collapsed header: centered hamburger button to expand -->
+                <Button Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                        ToolTip="Expand sidebar" AutomationProperties.Name="Expand sidebar"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="&#xE700;" Style="{StaticResource IconGlyph}"/>
                 </Button>
             </Grid>
@@ -427,8 +443,7 @@
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"/>
 
-            <Separator Grid.Row="2" Margin="10,6" Background="{DynamicResource SecondaryBrush}"
-                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
+            <Separator Grid.Row="2" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
 
             <TextBlock Grid.Row="3" Text="TAGS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
@@ -438,11 +453,9 @@
                       ItemsSource="{Binding TagItems}" SelectedItem="{Binding SelectedSidebarItem}"
                       ItemContainerStyle="{StaticResource SidebarListBoxItem}"
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
-                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                      Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
 
-            <Separator Grid.Row="5" Margin="10,6" Background="{DynamicResource SecondaryBrush}"
-                       Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
+            <Separator Grid.Row="5" Margin="10,6" Background="{DynamicResource SecondaryBrush}"/>
 
             <TextBlock Grid.Row="6" Text="VIEWS" FontSize="11" FontWeight="Bold"
                        Foreground="{DynamicResource ForegroundBrush}" Margin="14,0,14,6"
@@ -452,8 +465,7 @@
                       ItemsSource="{Binding ViewItems}" SelectedItem="{Binding SelectedSidebarItem}"
                       ItemContainerStyle="{StaticResource SidebarListBoxItem}"
                       ItemTemplate="{StaticResource SidebarItemTemplate}"
-                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                      Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
         </Grid>
 
         <!-- Task list -->
@@ -469,26 +481,17 @@
             <Grid Grid.Row="0" Margin="8,10,8,6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Show sidebar button (visible only when sidebar is collapsed) -->
-                <Button Grid.Column="0" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Show sidebar" AutomationProperties.Name="Show sidebar"
-                        Visibility="{Binding IsSidebarCollapsed, Converter={StaticResource BoolToVis}}"
-                        Margin="0,0,6,0">
-                    <TextBlock Text="&#xE700;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" Style="{StaticResource IconGlyph}"/>
-                </Button>
-
-                <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
+                <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
                         AutomationProperties.Name="New task"
                         Command="{Binding AddTaskCommand}">
                     <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" Style="{StaticResource IconGlyph}"/>
                 </Button>
 
-                <Grid Grid.Column="2" Margin="6,0">
+                <Grid Grid.Column="1" Margin="6,0">
                     <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
                             BorderThickness="1" CornerRadius="16">
                         <Grid>
@@ -510,7 +513,7 @@
                      icon glyph rather than beside it (confirmed by rendering this exact markup
                      through WPF's layout engine before and after - the corner-anchored-with-
                      negative-margin version visibly covered the funnel's tip). -->
-                <Grid Grid.Column="3" Width="34" Height="32">
+                <Grid Grid.Column="2" Width="34" Height="32">
                     <Button x:Name="FilterButton" Style="{StaticResource IconButton}"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             ToolTip="Filters - combine as many as you like" AutomationProperties.Name="Filters"

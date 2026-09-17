@@ -511,11 +511,10 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    // When collapsed (or in Focus Mode), the sidebar collapses completely (width 0) rather than
-    // over-collapsing into a cramped 46px rail that strips all text labels into anonymous icons.
-    // The task list reclaims the full 220px, with an expand button on the task list header to restore it.
+    // When collapsed (or in Focus Mode), the sidebar displays a clean 56px icon rail
+    // with centered icons and tooltips, keeping quick navigation accessible.
     public GridLength SidebarWidth => (IsFocusMode || IsSidebarCollapsed)
-        ? new GridLength(0)
+        ? new GridLength(56)
         : new GridLength(220);
 
     public bool IsSidebarShowingIconsOnly => IsFocusMode || IsSidebarCollapsed;

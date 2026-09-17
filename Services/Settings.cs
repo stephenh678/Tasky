@@ -19,6 +19,8 @@ public class Settings
     public double WindowWidth { get; set; } = 1180;
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
+    public bool CloseToTray { get; set; } = true;
+    public bool HasSeenCloseToTrayNotice { get; set; } = false;
     public bool IsVerboseLogging { get; set; } = false;
     // Automatic Backups\ snapshots (see TodoStore.BackupExistingFile) - originally fired on every
     // single save, which during active editing meant a new snapshot every ~700ms and only a

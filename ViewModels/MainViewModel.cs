@@ -315,6 +315,30 @@ public class MainViewModel : INotifyPropertyChanged
     // Only gates the once-a-day silent background check MainWindow runs after Loaded - Help >
     // Check for Updates always works regardless of this setting, same relationship
     // AutoBackupEnabled has to the manual Export/Import commands.
+    public bool CloseToTray
+    {
+        get => _settings.CloseToTray;
+        set
+        {
+            if (_settings.CloseToTray == value) return;
+            _settings.CloseToTray = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasSeenCloseToTrayNotice
+    {
+        get => _settings.HasSeenCloseToTrayNotice;
+        set
+        {
+            if (_settings.HasSeenCloseToTrayNotice == value) return;
+            _settings.HasSeenCloseToTrayNotice = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
     public bool AutoCheckForUpdates
     {
         get => _settings.AutoCheckForUpdates;
@@ -662,6 +686,7 @@ public class MainViewModel : INotifyPropertyChanged
         AllTasks.CollectionChanged += (_, _) =>
         {
             if (ViewMode == ViewMode.Calendar) RefreshCalendarDays();
+            UpdateTrayStatus();
         };
 
         var initialPath = ResolveInitialFilePath();
@@ -689,6 +714,38 @@ public class MainViewModel : INotifyPropertyChanged
         _reminders = new ReminderScheduler(() => AllTasks, () => RemindersEnabled, _tray,
             initialNotifiedIds, PersistNotifiedTaskIds);
         _reminders.Start();
+
+        _tray.MenuInfoProvider = () =>
+        {
+            var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
+            var today = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today);
+            var overdue = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date < DateTime.Today);
+            return new TrayMenuInfo(open, today, overdue, IsGoogleDriveConnected, GoogleDriveStatusTooltip);
+        };
+        _tray.ShowTodayRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                SelectedSidebarItem = _todayItem;
+                _tray.RaiseShowRequested();
+            });
+        };
+        _tray.SyncGoogleDriveRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                if (SyncGoogleDriveNowCommand.CanExecute(null))
+                    SyncGoogleDriveNowCommand.Execute(null);
+            });
+        };
+        _tray.SettingsRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                if (SettingsCommand.CanExecute(null))
+                    SettingsCommand.Execute(null);
+            });
+        };
 
         _autoSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _autoSyncTimer.Tick += async (_, _) =>
@@ -724,6 +781,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         LoadFile(initialPath, restoreSelection: true);
         _reminders.CheckReminders();
+        UpdateTrayStatus();
 
         if (_settings.IsGoogleDriveEnabled)
         {
@@ -2192,6 +2250,14 @@ public class MainViewModel : INotifyPropertyChanged
         await _pendingSaveTask;
     }
 
+    public void UpdateTrayStatus()
+    {
+        var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
+        var today = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today);
+        var overdue = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date < DateTime.Today);
+        _tray.UpdateTrayTooltip(open, today, overdue);
+    }
+
     public void OnTaskChanged()
     {
         Save();
@@ -2213,6 +2279,7 @@ public class MainViewModel : INotifyPropertyChanged
             RefreshViews();
         }));
         FilteredTasksView.Refresh();
+        UpdateTrayStatus();
     }
 
     // Diffs TagItems in place instead of Clear()-then-rebuild. Clear() raises a Reset

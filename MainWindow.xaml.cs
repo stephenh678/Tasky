@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private HwndSource? _hwndSource;
     private bool _readyToClose;
     private bool _flushInProgress;
+    private bool _isExplicitExit;
 
     public MainWindow()
     {
@@ -147,10 +148,16 @@ public partial class MainWindow : Window
         _viewModel.Tray.ShowRequested += () => Dispatcher.Invoke(() =>
         {
             Show();
-            WindowState = WindowState.Normal;
+            if (WindowState == WindowState.Minimized)
+                WindowState = WindowState.Normal;
             Activate();
+            Focus();
         });
-        _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(Close);
+        _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(() =>
+        {
+            _isExplicitExit = true;
+            Close();
+        });
         _viewModel.Tray.TaskCompleteRequested += id => Dispatcher.Invoke(() => _viewModel.CompleteTaskById(id));
         _viewModel.Tray.TaskSnoozeRequested += (id, duration) => Dispatcher.Invoke(() => _viewModel.SnoozeTaskById(id, duration));
 
@@ -169,6 +176,40 @@ public partial class MainWindow : Window
         Closing += async (_, e) =>
         {
             if (_readyToClose) return;
+
+            // If user closed window (X or Alt+F4) and CloseToTray is enabled, minimize to tray instead of quitting
+            if (!_isExplicitExit && _viewModel.CloseToTray)
+            {
+                e.Cancel = true;
+
+                var wasMax = WindowState == WindowState.Maximized;
+                var isMin = WindowState == WindowState.Minimized;
+                var b = (wasMax || isMin) ? RestoreBounds : new Rect(Left, Top, Width, Height);
+                if (b.Width > 100 && b.Height > 100 && !double.IsNaN(b.Left) && !double.IsNaN(b.Top) && b.Left > -10000 && b.Top > -10000)
+                {
+                    _viewModel.SaveWindowState(b.Left, b.Top, b.Width, b.Height, wasMax);
+                }
+
+                Hide();
+
+                if (!_viewModel.HasSeenCloseToTrayNotice)
+                {
+                    _viewModel.HasSeenCloseToTrayNotice = true;
+                    _viewModel.Tray.ShowCloseToTrayBalloon();
+                }
+
+                try
+                {
+                    await _viewModel.FlushPendingSaveAsync();
+                }
+                catch (Exception ex)
+                {
+                    App.LogException(ex);
+                }
+
+                return;
+            }
+
             e.Cancel = true;
 
             if (_flushInProgress) return;
@@ -841,7 +882,11 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+    private void Exit_Click(object sender, RoutedEventArgs e)
+    {
+        _isExplicitExit = true;
+        Close();
+    }
 
     private void About_Click(object sender, RoutedEventArgs e)
     {

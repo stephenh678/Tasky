@@ -50,6 +50,9 @@
                         <CheckBox Content="Automatically check for updates" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding AutoCheckForUpdates}"/>
+                        <CheckBox Content="Minimize to system tray when closed (X)" FontSize="13" Margin="0,0,0,12"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding CloseToTray}"/>
                         <CheckBox Content="Enable reminders" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding RemindersEnabled}"/>

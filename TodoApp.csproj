@@ -1,14 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- Windows-SDK-versioned TFM (rather than plain net9.0-windows) so NuGet resolves the
+    <!-- Windows-SDK-versioned TFM (rather than plain net10.0-windows) so NuGet resolves the
          Windows10-specific asset of CommunityToolkit.WinUI.Notifications, which is the one that
          actually has the WinRT-backed toast activation APIs (DesktopNotificationManagerCompat,
          ToastNotificationActivatedEventArgsCompat) - the plain net5.0 asset lacks them entirely.
          SupportedOSPlatformVersion keeps the app launchable on Windows 10 1809+ (the minimum for
          unpackaged desktop toast notifications) while compiling against the 19041 API surface. -->
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -53,7 +53,6 @@
   <ItemGroup>
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.75.0.4218" />
     <PackageReference Include="CommunityToolkit.WinUI.Notifications" Version="7.1.2" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
   </ItemGroup>
 
 </Project>

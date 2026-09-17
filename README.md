@@ -1,6 +1,6 @@
 # Tasky
 
-A Windows desktop task manager built with WPF (.NET 9). Tasky is a single-window, three-pane app
+A Windows desktop task manager built with WPF (.NET 10). Tasky is a single-window, three-pane app
 (sidebar / task list / editor) built around one idea: each task isn't just a title, it's a small
 document — mix in notes, photos, links, files, and checklists, tag it, give it a due date, and
 let the app take care of not losing your work.
@@ -118,7 +118,7 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 ## Requirements
 
 - Windows 10/11
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ## Run it
 

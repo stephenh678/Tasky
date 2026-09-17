@@ -438,3 +438,116 @@ function addDays(d, n) {
   r.setDate(r.getDate() + n);
   return r;
 }
+
+export function escapeXml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+export function xamlToHtml(xaml) {
+  if (!xaml || typeof xaml !== 'string' || !xaml.trim()) return '';
+  if (xaml.startsWith('{\\rtf')) {
+    return xaml.replace(/\\[a-z0-9-]+ ?/gi, '').replace(/[{}]/g, '').trim();
+  }
+
+  // Remove XML declaration and FlowDocument namespaces
+  let clean = xaml.replace(/<\?[^>]*\?>/g, '').replace(/xmlns="[^"]*"/g, '');
+
+  // Strip complex embedded UI containers that are handled as separate attachments
+  clean = clean.replace(/<BlockUIContainer>[\s\S]*?<\/BlockUIContainer>/gi, '');
+  clean = clean.replace(/<InlineUIContainer>[\s\S]*?<\/InlineUIContainer>/gi, '');
+
+  // Map FlowDocument structural tags to HTML
+  clean = clean
+    .replace(/<FlowDocument[^>]*>/gi, '')
+    .replace(/<\/FlowDocument>/gi, '')
+    .replace(/<Paragraph[^>]*>/gi, '<p>')
+    .replace(/<\/Paragraph>/gi, '</p>')
+    .replace(/<Bold[^>]*>/gi, '<strong>')
+    .replace(/<\/Bold>/gi, '</strong>')
+    .replace(/<Italic[^>]*>/gi, '<em>')
+    .replace(/<\/Italic>/gi, '</em>')
+    .replace(/<Underline[^>]*>/gi, '<u>')
+    .replace(/<\/Underline>/gi, '</u>')
+    .replace(/<LineBreak\s*\/?>/gi, '<br>')
+    .replace(/<Hyperlink[^>]*NavigateUri="([^"]*)"[^>]*>([\s\S]*?)<\/Hyperlink>/gi, '<a href="$1" target="_blank" rel="noopener">$2</a>')
+    .replace(/<List MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
+    .replace(/<List[^>]*>/gi, '<ul>')
+    .replace(/<\/List>/gi, '</ul>')
+    .replace(/<ListItem[^>]*>/gi, '<li>')
+    .replace(/<\/ListItem>/gi, '</li>')
+    .replace(/<Table[^>]*>/gi, '<table class="note-table">')
+    .replace(/<\/Table>/gi, '</table>')
+    .replace(/<TableRowGroup[^>]*>/gi, '<tbody>')
+    .replace(/<\/TableRowGroup>/gi, '</tbody>')
+    .replace(/<TableRow[^>]*>/gi, '<tr>')
+    .replace(/<\/TableRow>/gi, '</tr>')
+    .replace(/<TableCell[^>]*>/gi, '<td>')
+    .replace(/<\/TableCell>/gi, '</td>');
+
+  // Convert Run elements: <Run Text="..." FontWeight="..." /> and <Run ...>content</Run>
+  clean = clean.replace(/<Run\s+([^>]*?)\s*\/>/gi, (_, attrs) => {
+    const textMatch = /Text="([^"]*)"/i.exec(attrs);
+    let res = textMatch ? textMatch[1] : '';
+    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
+    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
+    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
+    return res;
+  });
+  clean = clean.replace(/<Run\s+([^>]*?)>([\s\S]*?)<\/Run>/gi, (_, attrs, content) => {
+    let res = content;
+    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
+    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
+    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
+    return res;
+  });
+
+  // Strip any remaining structural wrapper tags like Section, Span
+  clean = clean.replace(/<\/?(Section|Span)[^>]*>/gi, '');
+
+  return clean.trim();
+}
+
+export function htmlToXaml(html, fallbackText = '') {
+  if (!html || !html.trim()) {
+    if (!fallbackText || !fallbackText.trim()) return '';
+    return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left"><Paragraph>${escapeXml(fallbackText)}</Paragraph></FlowDocument>`;
+  }
+
+  let xaml = html
+    .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '<Bold>$1</Bold>')
+    .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '<Bold>$1</Bold>')
+    .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '<Italic>$1</Italic>')
+    .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '<Italic>$1</Italic>')
+    .replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, '<Underline>$1</Underline>')
+    .replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '<Hyperlink NavigateUri="$1"><Run Text="$2"/></Hyperlink>')
+    .replace(/<br\s*\/?>/gi, '<LineBreak/>')
+    .replace(/<ol[^>]*>/gi, '<List MarkerStyle="Decimal">')
+    .replace(/<\/ol>/gi, '</List>')
+    .replace(/<ul[^>]*>/gi, '<List>')
+    .replace(/<\/ul>/gi, '</List>')
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '<ListItem><Paragraph>$1</Paragraph></ListItem>')
+    .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '<Paragraph>$1</Paragraph>')
+    .replace(/<div[^>]*>([\s\S]*?)<\/div>/gi, '<Paragraph>$1</Paragraph>')
+    .replace(/<table[^>]*>/gi, '<Table><TableRowGroup>')
+    .replace(/<\/table>/gi, '</TableRowGroup></Table>')
+    .replace(/<tbody[^>]*>|<\/tbody>/gi, '')
+    .replace(/<tr[^>]*>/gi, '<TableRow>')
+    .replace(/<\/tr>/gi, '</TableRow>')
+    .replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '<TableCell><Paragraph>$1</Paragraph></TableCell>');
+
+  // Ensure content is wrapped in Paragraph if needed
+  if (!xaml.includes('<Paragraph') && !xaml.includes('<List') && !xaml.includes('<Table')) {
+    xaml = `<Paragraph>${xaml}</Paragraph>`;
+  }
+
+  // Clean empty paragraphs
+  xaml = xaml.replace(/<Paragraph>\s*<\/Paragraph>/gi, '<Paragraph><LineBreak/></Paragraph>');
+
+  return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left">${xaml}</FlowDocument>`;
+}

@@ -31,6 +31,9 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
+  escapeXml,
+  xamlToHtml,
+  htmlToXaml,
 } from '../model.js';
 import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from '../sync.js';
 
@@ -904,5 +907,49 @@ describe('reconcileLocalSnapshot', () => {
     const snapshot = newAppState();
     reconcileLocalSnapshot(snapshot, remote, null);
     assert.deepEqual(snapshot.SavedViews.map((v) => v.Id), ['v1']);
+  });
+});
+
+// --- xamlToHtml / htmlToXaml (Note formatting parity between Desktop and Web) --------------------
+
+describe('xamlToHtml / htmlToXaml', () => {
+  test('escapeXml escapes dangerous characters', () => {
+    assert.equal(escapeXml('Foo & "Bar" <Baz> \'Quux\''), 'Foo &amp; &quot;Bar&quot; &lt;Baz&gt; &apos;Quux&apos;');
+    assert.equal(escapeXml(null), '');
+  });
+
+  test('xamlToHtml converts paragraphs, bold, italic, and links', () => {
+    const xaml = '<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">' +
+      '<Paragraph><Bold>Bold text</Bold> and <Italic>italic text</Italic></Paragraph>' +
+      '<Paragraph><Hyperlink NavigateUri="https://example.com">Example</Hyperlink></Paragraph>' +
+      '</FlowDocument>';
+    const html = xamlToHtml(xaml);
+    assert.ok(html.includes('<p><strong>Bold text</strong> and <em>italic text</em></p>'));
+    assert.ok(html.includes('<p><a href="https://example.com" target="_blank" rel="noopener">Example</a></p>'));
+  });
+
+  test('xamlToHtml converts lists', () => {
+    const xaml = '<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">' +
+      '<List><ListItem><Paragraph>Item 1</Paragraph></ListItem><ListItem><Paragraph>Item 2</Paragraph></ListItem></List>' +
+      '</FlowDocument>';
+    const html = xamlToHtml(xaml);
+    assert.ok(html.includes('<ul>'));
+    assert.ok(html.includes('<li><p>Item 1</p></li>'));
+    assert.ok(html.includes('<li><p>Item 2</p></li>'));
+  });
+
+  test('htmlToXaml converts HTML paragraphs, formatting, and hyperlinks to valid FlowDocument XAML', () => {
+    const html = '<p><strong>Bold</strong> and <em>italic</em></p><p><a href="https://example.com">Link</a></p>';
+    const xaml = htmlToXaml(html, 'fallback');
+    assert.ok(xaml.startsWith('<FlowDocument'));
+    assert.ok(xaml.endsWith('</FlowDocument>'));
+    assert.ok(xaml.includes('<Bold>Bold</Bold>'));
+    assert.ok(xaml.includes('<Italic>italic</Italic>'));
+    assert.ok(xaml.includes('<Hyperlink NavigateUri="https://example.com">Link</Hyperlink>'));
+  });
+
+  test('htmlToXaml with empty html returns empty or fallback', () => {
+    assert.equal(htmlToXaml(''), '');
+    assert.ok(htmlToXaml('', 'Fallback').includes('<Paragraph>Fallback</Paragraph>'));
   });
 });

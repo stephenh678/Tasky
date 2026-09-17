@@ -1354,6 +1354,15 @@ kbd {
   padding: 4px 0;
   white-space: pre-wrap;
 }
+.block-text p { margin: 0 0 0.5em 0; }
+.block-text p:last-child { margin-bottom: 0; }
+.block-text strong { font-weight: 600; }
+.block-text em { font-style: italic; }
+.block-text u { text-decoration: underline; }
+.block-text a { color: var(--accent); text-decoration: underline; }
+.block-text ul, .block-text ol { margin: 0.25em 0 0.5em 1.5em; padding: 0; }
+.block-text table.note-table { border-collapse: collapse; margin: 0.5em 0; width: 100%; }
+.block-text table.note-table th, .block-text table.note-table td { border: 1px solid var(--border); padding: 4px 8px; }
 /* outline:none above drops the browser default with nothing replacing it - a keyboard/external-
    keyboard user editing text had no visual cue which block currently had focus. Outline doesn't
    take layout space, so this can't shift anything else on focus. */

@@ -3,7 +3,7 @@ bin/
 obj/
 publish/
 *.zip
-roadmap-artifact/out.html
+
 
 # Visual Studio / Rider / VS Code
 .vs/

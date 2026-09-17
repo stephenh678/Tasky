@@ -230,10 +230,44 @@ public class TodoStore
             var tempPath = path + ".tmp";
             await File.WriteAllTextAsync(tempPath, json);
 
-            if (File.Exists(path))
-                File.Replace(tempPath, path, null);
-            else
-                File.Move(tempPath, path);
+            try
+            {
+                const int maxAttempts = 3;
+                const int retryDelayMs = 300;
+                for (var attempt = 1; attempt <= maxAttempts; attempt++)
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                            File.Replace(tempPath, path, null);
+                        else
+                            File.Move(tempPath, path);
+                        break;
+                    }
+                    catch (IOException ex) when (attempt < maxAttempts)
+                    {
+                        AppLogger.Warn("TodoStore", $"Transient lock during atomic save to '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                        await Task.Delay(retryDelayMs);
+                    }
+                    catch (UnauthorizedAccessException ex) when (attempt < maxAttempts)
+                    {
+                        AppLogger.Warn("TodoStore", $"Access denied during atomic save to '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
+                        await Task.Delay(retryDelayMs);
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                        File.Delete(tempPath);
+                }
+                catch (Exception cleanupEx)
+                {
+                    AppLogger.Warn("TodoStore", $"Failed to delete temp file '{tempPath}': {cleanupEx.Message}");
+                }
+            }
 
             sw.Stop();
             var fi = new FileInfo(path);

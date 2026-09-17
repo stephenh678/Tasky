@@ -591,9 +591,9 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand NextMonthCommand { get; private set; } = null!;
     public RelayCommand TodayCommand { get; private set; } = null!;
     public RelayCommand SelectCalendarTaskCommand { get; private set; } = null!;
-    public RelayCommand NewFileCommand { get; private set; } = null!;
+    public AsyncRelayCommand NewFileCommand { get; private set; } = null!;
     public RelayCommand OpenFileCommand { get; private set; } = null!;
-    public RelayCommand SaveFileAsCommand { get; private set; } = null!;
+    public AsyncRelayCommand SaveFileAsCommand { get; private set; } = null!;
     public RelayCommand UndoCommand { get; private set; } = null!;
     public RelayCommand BulkMarkDoneCommand { get; private set; } = null!;
     public RelayCommand BulkTrashCommand { get; private set; } = null!;
@@ -602,16 +602,16 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand BulkSetDueDateCommand { get; private set; } = null!;
     public RelayCommand BulkAddTagCommand { get; private set; } = null!;
-    public RelayCommand RestoreBackupCommand { get; private set; } = null!;
-    public RelayCommand ExportBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand RestoreBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand ExportBackupCommand { get; private set; } = null!;
     public RelayCommand ExportCalendarCommand { get; private set; } = null!;
     public RelayCommand ExportAllTasksCommand { get; private set; } = null!;
-    public RelayCommand ImportBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand ImportBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
     public RelayCommand OpenDebugLogCommand { get; private set; } = null!;
     public RelayCommand GoogleDriveCommand { get; private set; } = null!;
     public RelayCommand SettingsCommand { get; private set; } = null!;
-    public RelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
+    public AsyncRelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
 
     public bool IsGoogleDriveConnected => _googleDrive.IsAuthenticated;
 
@@ -1018,7 +1018,7 @@ public class MainViewModel : INotifyPropertyChanged
     // touch the file on disk directly, rather than mutating in-memory task state.
     private void InitializeFileCommands()
     {
-        NewFileCommand = new RelayCommand(async _ => await CreateNewLocalFileForSyncAsync());
+        NewFileCommand = new AsyncRelayCommand(async _ => await CreateNewLocalFileForSyncAsync());
 
         OpenFileCommand = new RelayCommand(_ =>
         {
@@ -1045,7 +1045,7 @@ public class MainViewModel : INotifyPropertyChanged
             }
         });
 
-        SaveFileAsCommand = new RelayCommand(async _ =>
+        SaveFileAsCommand = new AsyncRelayCommand(async _ =>
         {
             FlushPendingSave();
             var dialog = new SaveFileDialog
@@ -1067,11 +1067,8 @@ public class MainViewModel : INotifyPropertyChanged
             _settingsStore.Save(_settings);
         });
 
-        RestoreBackupCommand = new RelayCommand(async _ =>
+        RestoreBackupCommand = new AsyncRelayCommand(async _ =>
         {
-            // Wrapping an async lambda in RelayCommand's Action<object?> makes this effectively
-            // async void - CanExecute below is what actually stops a second invocation from
-            // re-entering RestoreBackup/LoadFile while the first is still awaiting.
             _isRestoringBackup = true;
             try
             {
@@ -1110,7 +1107,7 @@ public class MainViewModel : INotifyPropertyChanged
         // references, for moving everything to a new machine or just keeping an offline copy.
         // Distinct from Save As (data only, no attachments) and Restore from Backup (data only,
         // and only ever from this same machine's own Backups\ history).
-        ExportBackupCommand = new RelayCommand(async _ =>
+        ExportBackupCommand = new AsyncRelayCommand(async _ =>
         {
             await FlushPendingSaveAsync();
             var dialog = new SaveFileDialog
@@ -1191,7 +1188,7 @@ public class MainViewModel : INotifyPropertyChanged
             }
         });
 
-        ImportBackupCommand = new RelayCommand(async _ =>
+        ImportBackupCommand = new AsyncRelayCommand(async _ =>
         {
             var dialog = new OpenFileDialog
             {
@@ -1200,18 +1197,10 @@ public class MainViewModel : INotifyPropertyChanged
             };
             if (dialog.ShowDialog() != true) return;
 
-            string extractedDataFile;
-            IReadOnlyList<string> attachmentFiles;
-            int backupTaskCount;
+            ExtractedBackupPackage package;
             try
             {
-                (extractedDataFile, attachmentFiles) = BackupService.ExtractToTemp(dialog.FileName);
-                // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
-                // the backup's - reading the extracted backup itself is the only way to show its
-                // real count here, same as how the Drive sync merge peeks at a downloaded remote
-                // file. Kept in this same try/catch since a corrupt backup can fail either step.
-                // ROADMAP.md #124: awaited directly instead of the blocking Load()/GetResult() bridge - safe here since ImportBackupCommand's handler is already async.
-                backupTaskCount = (await _store.LoadAsync(extractedDataFile)).Tasks.Count;
+                package = BackupService.ExtractToTemp(dialog.FileName);
             }
             catch (Exception ex)
             {
@@ -1219,33 +1208,54 @@ public class MainViewModel : INotifyPropertyChanged
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            var confirm = ThemedMessageBox.Show(
-                $"This will replace your currently open task list with the backup's {backupTaskCount} " +
-                $"task(s) and restore its {attachmentFiles.Count} attachment(s).\n\n" +
-                "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
-                "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.Yes) return;
 
-            _isRestoringBackup = true;
-            try
+            using (package)
             {
-                await FlushPendingSaveAsync();
-                BackupService.RestoreAttachments(attachmentFiles);
-                _store.RestoreBackup(extractedDataFile, _currentFilePath);
-                LoadFile(_currentFilePath);
-                MarkAllTasksRestoredAndSave();
+                int backupTaskCount;
+                try
+                {
+                    // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
+                    // the backup's - reading the extracted backup itself is the only way to show its
+                    // real count here, same as how the Drive sync merge peeks at a downloaded remote
+                    // file. Kept in this same try/catch since a corrupt backup can fail either step.
+                    // ROADMAP.md #124: awaited directly instead of the blocking Load()/GetResult() bridge - safe here since ImportBackupCommand's handler is already async.
+                    backupTaskCount = (await _store.LoadAsync(package.DataFilePath)).Tasks.Count;
+                }
+                catch (Exception ex)
+                {
+                    ThemedMessageBox.Show($"Couldn't read this backup:\n{ex.Message}", "Import Full Backup",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
 
-                ThemedMessageBox.Show($"Imported {attachmentFiles.Count} attachment(s) and restored your tasks.",
-                    "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                App.LogException(ex);
-                ThemedMessageBox.Show($"Couldn't import: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                _isRestoringBackup = false;
+                var confirm = ThemedMessageBox.Show(
+                    $"This will replace your currently open task list with the backup's {backupTaskCount} " +
+                    $"task(s) and restore its {package.AttachmentFiles.Count} attachment(s).\n\n" +
+                    "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
+                    "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes) return;
+
+                _isRestoringBackup = true;
+                try
+                {
+                    await FlushPendingSaveAsync();
+                    BackupService.RestoreAttachments(package.AttachmentFiles);
+                    _store.RestoreBackup(package.DataFilePath, _currentFilePath);
+                    LoadFile(_currentFilePath);
+                    MarkAllTasksRestoredAndSave();
+
+                    ThemedMessageBox.Show($"Imported {package.AttachmentFiles.Count} attachment(s) and restored your tasks.",
+                        "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    App.LogException(ex);
+                    ThemedMessageBox.Show($"Couldn't import: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    _isRestoringBackup = false;
+                }
             }
         }, _ => !_isRestoringBackup);
 
@@ -1279,7 +1289,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         GoogleDriveCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.GoogleDrive));
 
-        SyncGoogleDriveNowCommand = new RelayCommand(async _ => await PerformGoogleDriveSyncAsync());
+        SyncGoogleDriveNowCommand = new AsyncRelayCommand(async _ => await PerformGoogleDriveSyncAsync());
 
         SettingsCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.General));
     }

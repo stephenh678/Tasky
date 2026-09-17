@@ -310,4 +310,31 @@ public class TodoStoreTests : IDisposable
         var backup = Assert.Single(store.ListBackups(_dataFile));
         Assert.Equal(0, backup.TaskCount);
     }
+
+    [Fact]
+    public async Task SaveAsync_WhenDestinationIsPermanentlyLocked_CleansUpTempFileAndThrows()
+    {
+        var store = new TodoStore { AutoBackupEnabled = false };
+        var state = new AppState();
+        state.Tasks.Add(new TaskItem { Text = "Test task" });
+
+        // Save initial file so it exists
+        await store.SaveAsync(state, _dataFile);
+
+        var tempPath = _dataFile + ".tmp";
+        Assert.False(File.Exists(tempPath));
+
+        // Open destination file with FileShare.None to hold an exclusive lock
+        using (var lockStream = new FileStream(_dataFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var ex = await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                await store.SaveAsync(state, _dataFile);
+            });
+            Assert.NotNull(ex);
+        }
+
+        // Temp file must have been cleaned up by the finally block
+        Assert.False(File.Exists(tempPath), "The temporary file was not cleaned up after save failure.");
+    }
 }

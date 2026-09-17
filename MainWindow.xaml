@@ -1270,7 +1270,7 @@
                                                    Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <ProgressBar Grid.Column="1" Height="4" Margin="14,0" VerticalAlignment="Center"
-                                                 Minimum="0" Maximum="100" Value="{Binding SubtaskProgressPercent}"
+                                                 Minimum="0" Maximum="100" Value="{Binding SubtaskProgressPercent, Mode=OneWay}"
                                                  Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
                                     <TextBlock Grid.Column="2" Text="{Binding SubtaskProgressText}" FontSize="11"
                                                Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"

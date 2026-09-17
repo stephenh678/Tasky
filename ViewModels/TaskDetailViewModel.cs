@@ -241,7 +241,11 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     public bool HasSubtasks => Subtasks.Count > 0;
     public int SubtasksTotal => Subtasks.Count;
     public int SubtasksCompleted => Subtasks.Count(s => s.IsChecked);
-    public double SubtaskProgressPercent => SubtasksTotal > 0 ? (double)SubtasksCompleted / SubtasksTotal * 100.0 : 0.0;
+    public double SubtaskProgressPercent
+    {
+        get => SubtasksTotal > 0 ? (double)SubtasksCompleted / SubtasksTotal * 100.0 : 0.0;
+        set { }
+    }
     public string SubtaskProgressText => $"{SubtasksCompleted} of {SubtasksTotal} completed";
 
     public RelayCommand AddSubtaskCommand { get; }

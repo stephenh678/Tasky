@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=34';
-import * as drive from './drive.js?v=34';
+﻿import * as auth from './auth.js?v=35';
+import * as drive from './drive.js?v=35';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -29,14 +29,14 @@ import {
   AGENDA_GROUP_LABELS,
   isReminderDue,
   taskToICalendar,
-} from './model.js?v=34';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=34';
-import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=34';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=34';
-import { icon } from './icons.js?v=34';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=34';
-import { storage } from './storage.js?v=34';
-import { openDialog, trapFocus } from './dialog.js?v=34';
+} from './model.js?v=35';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=35';
+import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=35';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=35';
+import { icon } from './icons.js?v=35';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=35';
+import { storage } from './storage.js?v=35';
+import { openDialog, trapFocus } from './dialog.js?v=35';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -676,6 +676,13 @@ async function boot() {
   if (isRedirectReturn) {
     signinBtn.disabled = true;
     signinBtn.textContent = 'Completing sign-in…';
+  } else if (auth.hasStoredSession()) {
+    // The silent refresh below is a ~1-2s round trip whenever the cached token has lapsed (i.e.
+    // the first open of the day). A live "Sign in with Google" button during that window read as
+    // "you've been signed out" and got tapped - a full consent round trip for a session that was
+    // about to restore itself (Cloud Run logs: a 200 refresh seconds before nearly every sign-in).
+    signinBtn.disabled = true;
+    signinBtn.textContent = 'Restoring your session…';
   } else {
     signinBtn.disabled = false;
     signinBtn.textContent = 'Sign in with Google';
@@ -703,6 +710,9 @@ async function boot() {
     // the first successful sync brings everything back to normal.
     await onSignedIn();
     if (quickAddRequested) openQuickAddFromShortcut();
+  } else {
+    signinBtn.disabled = false;
+    signinBtn.textContent = 'Sign in with Google';
   }
 }
 

@@ -26,8 +26,8 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=34';
-import { storage, sessionStore } from './storage.js?v=34';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=35';
+import { storage, sessionStore } from './storage.js?v=35';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';
@@ -396,6 +396,14 @@ export function isSignedIn() {
  */
 export function hasRefreshSession() {
   return !!sessionId;
+}
+
+/**
+ * True if restoreFromCache() has anything to work with at all - readable before it runs, so boot
+ * can tell "restoring a session" apart from "nobody has signed in on this device".
+ */
+export function hasStoredSession() {
+  return !!loadSessionId() || !!storage.get(TOKEN_CACHE_KEY);
 }
 
 export function getAccountEmail() {

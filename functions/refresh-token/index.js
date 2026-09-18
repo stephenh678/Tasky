@@ -135,10 +135,16 @@ exports.refreshToken = async (req, res) => {
     if (!tokenRes.ok) {
       // invalid_grant (revoked/expired refresh token) is the expected way this eventually dies -
       // clean up the dead session so future attempts fail fast instead of retrying forever.
+      console.warn('Google refused refresh', tokenRes.status, data.error, data.error_description, `session age ${Math.round(ageMs / 3600000)}h`);
       if (data.error === 'invalid_grant') {
         await docRef.delete().catch(() => {});
+        res.status(401).json({ error: data.error_description || data.error });
+        return;
       }
-      res.status(401).json({ error: data.error_description || data.error || 'Refresh failed' });
+      // Anything else (a Google 5xx, invalid_client from a misconfigured secret) says nothing about
+      // the refresh token itself. auth.js wipes the session on a 401, so answering 401 here turned
+      // a transient Google error into a forced re-consent - 502 makes it retry instead.
+      res.status(502).json({ error: data.error_description || data.error || 'Refresh failed' });
       return;
     }
 

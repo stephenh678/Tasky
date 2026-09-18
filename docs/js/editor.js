@@ -15,11 +15,11 @@ import {
   extractInlineFileNames,
   xamlToHtml,
   htmlToXaml,
-} from './model.js?v=29';
-import { icon } from './icons.js?v=29';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=29';
-import { storage } from './storage.js?v=29';
-import { openDialog, trapFocus } from './dialog.js?v=29';
+} from './model.js?v=30';
+import { icon } from './icons.js?v=30';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=30';
+import { storage } from './storage.js?v=30';
+import { openDialog, trapFocus } from './dialog.js?v=30';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.
@@ -343,6 +343,47 @@ function renderChecklistBlock(block, onChange, readOnly) {
   const div = document.createElement('div');
   div.className = 'block-checklist';
 
+  // Mirrors desktop's Subtasks header (MainWindow.xaml: label + ProgressBar bound to
+  // SubtaskProgressPercent + "N of M completed"). Desktop shows it for the task's subtask block;
+  // here every checklist block is a subtask list, so each one carries its own. Hidden while the
+  // block is empty, matching desktop's `Visibility="{Binding HasSubtasks...}"` on the same two.
+  let refreshProgress = () => {};
+  if (block.ChecklistItems.length > 0) {
+    const header = document.createElement('div');
+    header.className = 'block-checklist-progress';
+
+    const bar = document.createElement('div');
+    bar.className = 'block-checklist-progress-bar';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-valuemin', '0');
+
+    const fill = document.createElement('span');
+    fill.className = 'block-checklist-progress-fill';
+    bar.appendChild(fill);
+
+    const label = document.createElement('span');
+    label.className = 'block-checklist-progress-label';
+
+    // Ticking an item deliberately re-renders nothing (rerenderBody: false keeps the caret and the
+    // input's own state), so the bar has to be patched in place or it would sit stale until some
+    // unrelated edit forced a body re-render.
+    refreshProgress = () => {
+      const total = block.ChecklistItems.length;
+      const done = block.ChecklistItems.filter((it) => it.IsChecked).length;
+      const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+      fill.style.width = `${percent}%`;
+      label.textContent = `${done} of ${total} completed`;
+      bar.setAttribute('aria-valuemax', String(total));
+      bar.setAttribute('aria-valuenow', String(done));
+      bar.setAttribute('aria-label', `${done} of ${total} completed`);
+      header.classList.toggle('complete', total > 0 && done === total);
+    };
+    refreshProgress();
+
+    header.append(bar, label);
+    div.appendChild(header);
+  }
+
   block.ChecklistItems.forEach((item, i) => {
     const row = document.createElement('div');
     row.className = 'block-checklist-item editable';
@@ -353,6 +394,7 @@ function renderChecklistBlock(block, onChange, readOnly) {
     checkbox.disabled = readOnly;
     checkbox.addEventListener('change', () => {
       item.IsChecked = checkbox.checked;
+      refreshProgress();
       onChange({ rerenderBody: false });
     });
     // See the matching comment in app.js's task-list checkbox: a <label> wrapper is the

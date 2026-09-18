@@ -149,6 +149,37 @@ export function nextSortOrder(tasks) {
   return max + 1;
 }
 
+/**
+ * The index a dragged task should land on, given its current index, the drop target's index and
+ * which half of the target row was dropped on. Split out of app.js's reorderTask so the arithmetic
+ * - the piece most likely to drift from MainViewModel.ReorderTask - is reachable from the parity
+ * tests; app.js still owns the DOM and appState side of the drag.
+ *
+ * The returned index is interpreted AFTER the source has been removed from the list, matching
+ * ObservableCollection.Move's contract on the desktop side.
+ */
+export function reorderTargetIndex(sourceIndex, targetIndex, insertAfter, length) {
+  let newIndex = targetIndex;
+  if (insertAfter) {
+    if (sourceIndex > targetIndex) newIndex = targetIndex + 1;
+  } else if (sourceIndex < targetIndex) {
+    newIndex = targetIndex - 1;
+  }
+  return Math.max(0, Math.min(newIndex, length - 1));
+}
+
+/**
+ * Pin changes implied by dropping `source` onto `target` - pinned tasks always sort first, so
+ * dropping above the pinned block's floor has to mean "pin me" and dropping below it "unpin me",
+ * or the task visibly snaps back to where it was. Mirrors the two branches at the top of
+ * MainViewModel.ReorderTask. Returns the pin state the source should end up with.
+ */
+export function pinStateAfterReorder(sourcePinned, targetPinned, insertAfter) {
+  if (targetPinned && !sourcePinned && !insertAfter) return true;
+  if (!targetPinned && sourcePinned && insertAfter) return false;
+  return sourcePinned;
+}
+
 export function newTaskSyncRecord(taskId, timestamp = nowDotNet()) {
   return { TaskId: taskId, Timestamp: timestamp };
 }
@@ -252,6 +283,27 @@ export function taskHasChecklist(task) {
     if (Array.isArray(block.ChecklistItems) && block.ChecklistItems.length > 0) return true;
     return !!block.Rtf && /<CheckBox/i.test(block.Rtf);
   });
+}
+
+// Port of TaskMediaHelper.GetChecklistProgress - {completed, total} across every checklist in the
+// task, counting both real Checklist blocks and the <CheckBox .../> runs desktop embeds inline in
+// a Text block's Rtf, so a task authored either way reports the same numbers on both platforms.
+export function checklistProgress(task) {
+  if (!task) return { completed: 0, total: 0 };
+  let completed = 0;
+  let total = 0;
+  for (const block of task.Body ?? []) {
+    if (Array.isArray(block.ChecklistItems) && block.ChecklistItems.length > 0) {
+      total += block.ChecklistItems.length;
+      completed += block.ChecklistItems.filter((ci) => ci.IsChecked).length;
+    } else if (block.Rtf && /<CheckBox/i.test(block.Rtf)) {
+      for (const match of block.Rtf.matchAll(/<CheckBox\b([^>]*)>/gi)) {
+        total++;
+        if (/IsChecked\s*=\s*"True"/i.test(match[1])) completed++;
+      }
+    }
+  }
+  return { completed, total };
 }
 
 // Fills in whatever a task read from a .tasky file might be missing, in place, and returns it.

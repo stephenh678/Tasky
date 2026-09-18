@@ -30,6 +30,9 @@ import {
   collectTaskFileNames,
   normalizeTask,
   nextSortOrder,
+  reorderTargetIndex,
+  pinStateAfterReorder,
+  checklistProgress,
   taskHasLink,
   taskHasChecklist,
   escapeXml,
@@ -959,6 +962,7 @@ describe('xamlToHtml / htmlToXaml', () => {
   });
 });
 
+
 // --- SortOrder / manual ordering parity (TaskSyncMerge.MergeTaskOrder, AppState.TasksOrderModifiedAt)
 // Manual ordering is list-level state: a drag renumbers every task, so it can't ride on a task's
 // ModifiedAt without spraying conflicted copies, and desktop's Task_PropertyChanged therefore
@@ -1045,5 +1049,87 @@ describe('manual ordering (SortOrder)', () => {
 
     assert.equal(shared.SortOrder, 2);
     assert.equal(localOnly.SortOrder, 7);
+  });
+});
+
+// --- checklistProgress (TaskMediaHelper.GetChecklistProgress) -----------------------------------
+describe('checklistProgress', () => {
+  test('counts real Checklist blocks', () => {
+    const task = newTaskItem({ text: 'x' });
+    task.Body.push(newNoteBlock(NoteBlockType.Checklist, {
+      checklistItems: [{ Text: 'a', IsChecked: true }, { Text: 'b', IsChecked: false }],
+    }));
+    assert.deepEqual(checklistProgress(task), { completed: 1, total: 2 });
+  });
+
+  // Desktop's "Insert Checklist" embeds <CheckBox/> runs inside a Text block's Rtf rather than
+  // creating a Checklist block, so a task authored that way has to count the same on both sides.
+  test('counts inline <CheckBox> runs in a desktop-authored Rtf', () => {
+    const task = newTaskItem({ text: 'x' });
+    task.Body[0].Rtf = '<Paragraph><CheckBox IsChecked="True"/>done<CheckBox IsChecked="False"/>todo</Paragraph>';
+    assert.deepEqual(checklistProgress(task), { completed: 1, total: 2 });
+  });
+
+  test('no checklist anywhere reports zeroes', () => {
+    assert.deepEqual(checklistProgress(newTaskItem({ text: 'x' })), { completed: 0, total: 0 });
+    assert.deepEqual(checklistProgress(null), { completed: 0, total: 0 });
+  });
+});
+
+// --- reorder index math (MainViewModel.ReorderTask) ---------------------------------------------
+// The returned index is interpreted after the source is spliced out, matching
+// ObservableCollection.Move. These mirror MainViewModel_ReorderTask_MovesTaskAndSetsSortOrder.
+describe('reorderTargetIndex', () => {
+  const move = (list, sourceIndex, targetIndex, insertAfter) => {
+    const out = [...list];
+    const newIndex = reorderTargetIndex(sourceIndex, targetIndex, insertAfter, out.length);
+    const [moved] = out.splice(sourceIndex, 1);
+    out.splice(newIndex, 0, moved);
+    return out;
+  };
+
+  test('dragging down onto the lower half lands after the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 2, true), ['b', 'c', 'a']);
+  });
+
+  test('dragging down onto the upper half lands before the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 2, false), ['b', 'a', 'c']);
+  });
+
+  test('dragging up onto the upper half lands before the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 2, 0, false), ['c', 'a', 'b']);
+  });
+
+  test('dragging up onto the lower half lands after the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 2, 0, true), ['a', 'c', 'b']);
+  });
+
+  test('an adjacent no-op drag leaves the order unchanged', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 1, false), ['a', 'b', 'c']);
+    assert.deepEqual(move(['a', 'b', 'c'], 1, 0, true), ['a', 'b', 'c']);
+  });
+
+  test('clamps into range rather than producing a hole', () => {
+    assert.equal(reorderTargetIndex(0, 5, true, 3), 2);
+    assert.equal(reorderTargetIndex(5, 0, false, 3), 0);
+  });
+});
+
+// Pinned tasks always sort first, so a drop across the pinned boundary has to change the pin or
+// the task snaps back to where it started.
+describe('pinStateAfterReorder', () => {
+  test('dropping above a pinned task pins the source', () => {
+    assert.equal(pinStateAfterReorder(false, true, false), true);
+  });
+
+  test('dropping below an unpinned task unpins the source', () => {
+    assert.equal(pinStateAfterReorder(true, false, true), false);
+  });
+
+  test('a drop that does not cross the boundary leaves the pin alone', () => {
+    assert.equal(pinStateAfterReorder(false, false, true), false);
+    assert.equal(pinStateAfterReorder(true, true, false), true);
+    assert.equal(pinStateAfterReorder(false, true, true), false);
+    assert.equal(pinStateAfterReorder(true, false, false), true);
   });
 });

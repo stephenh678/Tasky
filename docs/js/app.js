@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=29';
-import * as drive from './drive.js?v=29';
+﻿import * as auth from './auth.js?v=30';
+import * as drive from './drive.js?v=30';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -10,6 +10,8 @@ import {
   newTaskItem,
   newTaskSyncRecord,
   nextSortOrder,
+  reorderTargetIndex,
+  pinStateAfterReorder,
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
@@ -18,14 +20,15 @@ import {
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
-} from './model.js?v=29';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=29';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=29';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=29';
-import { icon } from './icons.js?v=29';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=29';
-import { storage } from './storage.js?v=29';
-import { openDialog, trapFocus } from './dialog.js?v=29';
+  checklistProgress,
+} from './model.js?v=30';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=30';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=30';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=30';
+import { icon } from './icons.js?v=30';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=30';
+import { storage } from './storage.js?v=30';
+import { openDialog, trapFocus } from './dialog.js?v=30';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -277,7 +280,7 @@ function friendlyErrorMessage(prefix, err) {
   return `${prefix}: ${describeError(err)}`;
 }
 
-const SECTION_ICONS = { today: 'calendar', all: 'list', recurring: 'repeat', done: 'check', trash: 'trash' };
+const SECTION_ICONS = { today: 'calendar', tomorrow: 'sun', all: 'list', someday: 'clock', recurring: 'repeat', done: 'check', trash: 'trash' };
 navBack.innerHTML = icon('back');
 sidebarDrawerBtn.innerHTML = icon('menu');
 menuBtn.innerHTML = icon('menu');
@@ -337,9 +340,18 @@ let selectedTaskId = null;
 let searchQuery = '';
 // Desktop keeps the sort order in Settings; the web app reset to Modified on every load.
 const SORT_KEY = 'tasky-sort';
-const SORT_KEYS = ['modified', 'created', 'name', 'due'];
+// One key per SortOption.cs member, same order, so the two platforms offer the same choices:
+// manual = Manual, modified = ModifiedNewest, created = CreatedNewest, name = NameAZ,
+// nameDesc = NameZA, due = DueDateSoonest, priority = PriorityHighest.
+const SORT_KEYS = ['manual', 'modified', 'created', 'name', 'nameDesc', 'due', 'priority'];
 let sortKey = SORT_KEYS.includes(storage.get(SORT_KEY)) ? storage.get(SORT_KEY) : 'modified';
-let quickFilter = '';
+// Desktop AND-combines as many quick filters as you tick (MainViewModel's QuickFilters list, one
+// removable chip each); this was a single string, so Web could only ever have one on at a time.
+const quickFilters = new Set();
+// Id of the row currently being dragged for a manual reorder, or null. Module state rather than
+// dataTransfer because dragover needs it on every frame and dataTransfer.getData() is blocked
+// outside the drop event in every browser.
+let draggingTaskId = null;
 // taskId -> row refs for renderList()'s keyed diff - lets a row already on screen be patched in
 // place (classes/text/checkbox swapped) instead of torn down and rebuilt, which previously
 // happened on every render including every single keystroke in the title field or search box
@@ -494,9 +506,13 @@ function hideUndoToast() {
 undoToastBtn.addEventListener('click', popUndo);
 // Ctrl+Z is bound in the SHORTCUTS table (see the keyboard-shortcuts section).
 
+// Same set, same order as desktop's sidebar (SidebarFilterKind / MainViewModel's _todayItem,
+// _tomorrowItem, _allItem, _somedayItem, ...).
 const SECTIONS = [
   { kind: 'today', label: 'Today' },
+  { kind: 'tomorrow', label: 'Tomorrow' },
   { kind: 'all', label: 'All Tasks' },
+  { kind: 'someday', label: 'Someday' },
   { kind: 'recurring', label: 'Recurring' },
   { kind: 'done', label: 'Completed' },
   { kind: 'trash', label: 'Trash' },
@@ -1281,6 +1297,20 @@ function tasksForSection(section) {
         return isSameDate(due, today) || isTaskOverdue(t);
       });
     }
+    // Mirrors SidebarFilterKind.Tomorrow: due exactly tomorrow. Unlike Today it does NOT pull in
+    // pinned tasks - a pin means "keep this in front of me now", which Today already honours.
+    case 'tomorrow': {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return appState.Tasks.filter((t) => {
+        if (t.IsClosed || t.IsDone || !t.DueDate) return false;
+        return isSameDate(parseDotNetDate(t.DueDate), tomorrow);
+      });
+    }
+    // Mirrors SidebarFilterKind.Someday: open tasks with no due date at all - the backlog you
+    // haven't committed to a day yet.
+    case 'someday':
+      return appState.Tasks.filter((t) => !t.IsClosed && !t.IsDone && !t.DueDate);
     case 'all':
       return appState.Tasks.filter((t) => !t.IsClosed && !t.IsDone);
     case 'recurring':
@@ -1311,28 +1341,36 @@ function isTaskOverdue(task) {
   return due < today && !isSameDate(due, today);
 }
 
+function matchesQuickFilter(task, filter, today) {
+  const due = task.DueDate ? parseDotNetDate(task.DueDate) : null;
+  switch (filter) {
+    case 'overdue':
+      return isTaskOverdue(task);
+    case 'dueToday':
+      return due && isSameDate(due, today);
+    case 'noDueDate':
+      return !due;
+    case 'recurring':
+      return task.Recurrence !== RecurrenceRule.None;
+    case 'hasLink':
+      return taskHasLink(task);
+    case 'hasAttachment':
+      return task.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b) || blockHasInlineFile(b));
+    case 'highPriority':
+      return Number(task.Priority) === TaskPriority.High;
+    default:
+      return true;
+  }
+}
+
+// AND-combined across every active filter, matching desktop's MatchesQuickFilters - "Overdue" plus
+// "High Priority" narrows to tasks that are both, it doesn't widen to either.
 function applyQuickFilter(tasks) {
-  if (!quickFilter) return tasks;
+  if (quickFilters.size === 0) return tasks;
   const today = new Date();
-  return tasks.filter((t) => {
-    const due = t.DueDate ? parseDotNetDate(t.DueDate) : null;
-    switch (quickFilter) {
-      case 'overdue':
-        return isTaskOverdue(t);
-      case 'dueToday':
-        return due && isSameDate(due, today);
-      case 'noDueDate':
-        return !due;
-      case 'recurring':
-        return t.Recurrence !== RecurrenceRule.None;
-      case 'hasLink':
-        return taskHasLink(t);
-      case 'hasAttachment':
-        return t.Body.some((b) => b.Type === NoteBlockType.Photo || b.Type === NoteBlockType.File || blockHasInlineImage(b) || blockHasInlineFile(b));
-      default:
-        return true;
-    }
-  });
+  // Hoisted: this runs once per task on a path renderList takes on every keystroke.
+  const active = [...quickFilters];
+  return tasks.filter((t) => active.every((f) => matchesQuickFilter(t, f, today)));
 }
 
 // Operator tokens (tag:x, is:overdue, has:link, due:today) are pulled out of the query first and
@@ -1419,14 +1457,27 @@ function endOfDay(date) {
 function sortTasks(tasks) {
   return [...tasks].sort((a, b) => {
     if (a.IsPinned !== b.IsPinned) return a.IsPinned ? -1 : 1;
+    // Mirrors TaskComparer.cs's switch, including its tiebreaks.
     switch (sortKey) {
+      case 'manual': {
+        const ao = Number(a.SortOrder) || 0;
+        const bo = Number(b.SortOrder) || 0;
+        // Newest-first on a tie, matching TaskComparer's `b.CreatedAt.CompareTo(a.CreatedAt)` -
+        // without it two tasks sharing a SortOrder (old data, or a file from a client that never
+        // set one) would order arbitrarily and jitter between renders.
+        return ao !== bo ? ao - bo : parseDotNetDate(b.CreatedAt) - parseDotNetDate(a.CreatedAt);
+      }
       case 'name':
         return a.Text.localeCompare(b.Text);
+      case 'nameDesc':
+        return b.Text.localeCompare(a.Text);
       case 'due': {
         const ad = a.DueDate ? parseDotNetDate(a.DueDate).getTime() : Infinity;
         const bd = b.DueDate ? parseDotNetDate(b.DueDate).getTime() : Infinity;
         return ad - bd;
       }
+      case 'priority':
+        return (Number(b.Priority) || 0) - (Number(a.Priority) || 0);
       case 'created':
         return parseDotNetDate(b.CreatedAt) - parseDotNetDate(a.CreatedAt);
       case 'modified':
@@ -1496,14 +1547,17 @@ const QUICK_FILTER_OPERATORS = {
   recurring: 'is:recurring',
   hasLink: 'has:link',
   hasAttachment: 'has:attachment',
+  highPriority: 'is:highpriority',
 };
 
 function buildEffectiveSearchQuery() {
   const parts = [];
   const hasToken = (token) => parts.some((p) => p.toLowerCase().includes(token.toLowerCase()));
   if (searchQuery.trim()) parts.push(searchQuery.trim());
-  const filterToken = QUICK_FILTER_OPERATORS[quickFilter];
-  if (filterToken && !hasToken(filterToken)) parts.push(filterToken);
+  for (const filter of quickFilters) {
+    const filterToken = QUICK_FILTER_OPERATORS[filter];
+    if (filterToken && !hasToken(filterToken)) parts.push(filterToken);
+  }
   if (currentSection.kind === 'tag') {
     const tagToken = `tag:${currentSection.tag}`;
     if (!hasToken(tagToken)) parts.push(tagToken);
@@ -1648,7 +1702,7 @@ function taskIdFromHash() {
 function sectionIsAvailable(section) {
   if (!section || typeof section.kind !== 'string') return false;
   switch (section.kind) {
-    case 'today': case 'all': case 'recurring': case 'done': case 'trash':
+    case 'today': case 'tomorrow': case 'all': case 'someday': case 'recurring': case 'done': case 'trash':
       return true;
     case 'tag':
       return typeof section.tag === 'string' && allTags().includes(section.tag.toLowerCase());
@@ -2055,7 +2109,10 @@ function adoptSectionScope(task) {
     if (!task.Tags.includes(lower)) task.Tags.push(lower);
   } else if (currentSection.kind === 'today' && !task.DueDate) {
     task.DueDate = parseQuickAdd('!due:today').dueDate;
+  } else if (currentSection.kind === 'tomorrow' && !task.DueDate) {
+    task.DueDate = parseQuickAdd('!due:tomorrow').dueDate;
   }
+  // 'someday' needs nothing: its whole predicate is "no due date", which is already the default.
 }
 
 function settleSectionAfterCreate(task) {
@@ -2535,9 +2592,13 @@ function selectSection(section, { preserveFilter = false } = {}) {
 // appState.Tasks, mirroring tasksForSection()'s own per-kind predicates - calling
 // tasksForSection() once per section like renderSidebar() used to do costs O(sections x tasks)
 // on every render just to produce a badge count (#67).
+// One key per SECTIONS entry - a section missing from this object renders its badge as the string
+// "undefined" rather than a number, so the two lists have to stay in step.
 function sectionCounts() {
   const today = new Date();
-  const counts = { today: 0, all: 0, recurring: 0, done: 0, trash: 0 };
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const counts = { today: 0, tomorrow: 0, all: 0, someday: 0, recurring: 0, done: 0, trash: 0 };
   for (const t of appState.Tasks) {
     if (t.IsClosed) {
       counts.trash++;
@@ -2549,11 +2610,13 @@ function sectionCounts() {
     }
     counts.all++;
     if (t.Recurrence !== RecurrenceRule.None) counts.recurring++;
+    const due = t.DueDate ? parseDotNetDate(t.DueDate) : null;
     if (t.IsPinned) counts.today++;
-    else if (t.DueDate) {
-      const due = parseDotNetDate(t.DueDate);
-      if (isSameDate(due, today) || isTaskOverdue(t)) counts.today++;
-    }
+    else if (due && (isSameDate(due, today) || isTaskOverdue(t))) counts.today++;
+    // Deliberately outside the pinned/else chain above: Tomorrow and Someday key off the due date
+    // alone (matching their tasksForSection predicates), where Today also sweeps in pinned tasks.
+    if (!due) counts.someday++;
+    else if (isSameDate(due, tomorrow)) counts.tomorrow++;
   }
   return counts;
 }
@@ -2733,7 +2796,17 @@ function buildTaskRow(task) {
   const info = document.createElement('div');
   info.className = 'task-row-info';
 
-  content.append(selectCheckboxWrap, checkboxWrap, info);
+  // Reordering is driven from a dedicated handle rather than the whole row: the row itself already
+  // owns swipe-to-complete/trash and a 500 ms long-press for selection mode on touch, and a
+  // press-drag anywhere on it would be ambiguous between all three. updateTaskRow shows the handle
+  // only under the Manual sort.
+  const dragHandle = document.createElement('div');
+  dragHandle.className = 'task-drag-handle';
+  dragHandle.innerHTML = icon('grip');
+  dragHandle.title = 'Drag to reorder';
+  dragHandle.setAttribute('aria-hidden', 'true');
+
+  content.append(dragHandle, selectCheckboxWrap, checkboxWrap, info);
   li.append(completeAction, trashAction, content);
   // The keyboard / screen-reader affordance is the title+meta block, not the <li>: a role="button"
   // <li> wrapping two real checkboxes is invalid ARIA (interactive content inside a button) and
@@ -2800,9 +2873,123 @@ function buildTaskRow(task) {
     },
   });
 
+  bindReorderDrag(li, dragHandle, task);
+
   const refs = { li, completeAction, trashAction, checkbox, selectCheckbox, info };
   taskRowRefs.set(task.Id, refs);
   return refs;
+}
+
+// Drag-to-reorder, the Web half of desktop's MainViewModel.ReorderTask.
+//
+// Pointer Events, not the HTML5 drag-and-drop API: HTML5 DnD fires no events at all on touch
+// browsers, so an earlier draft of this shipped a Manual sort that simply did nothing on the
+// phone half of "Tasky Web / Mobile". Pointer events cover mouse, touch and pen with one code
+// path. The handle carries `touch-action: none` (styles.css) so a drag on it scrolls nothing.
+function bindReorderDrag(li, handle, task) {
+  handle.addEventListener('pointerdown', (e) => {
+    // Left button / primary contact only, and only when reordering is actually on.
+    if (e.button !== 0 || !li.draggable) return;
+    e.preventDefault();
+    e.stopPropagation(); // keep the row's own swipe/long-press handlers out of it
+
+    draggingTaskId = task.Id;
+    li.classList.add('dragging');
+    handle.setPointerCapture(e.pointerId);
+
+    const clearIndicators = () => {
+      for (const refs of taskRowRefs.values()) refs.li.classList.remove('drop-before', 'drop-after');
+    };
+
+    // Pointer capture means every move is delivered to the handle regardless of what is under the
+    // finger, so the row being hovered has to be resolved by hit-testing the point itself.
+    const rowUnder = (clientX, clientY) => {
+      const el = document.elementFromPoint(clientX, clientY);
+      const row = el?.closest?.('#task-list li');
+      return row && row !== li ? row : null;
+    };
+
+    let dropTargetId = null;
+    let dropAfter = false;
+
+    const onMove = (moveEvent) => {
+      clearIndicators();
+      dropTargetId = null;
+      const row = rowUnder(moveEvent.clientX, moveEvent.clientY);
+      if (!row) return;
+      const rect = row.getBoundingClientRect();
+      dropAfter = moveEvent.clientY > rect.top + rect.height / 2;
+      row.classList.toggle('drop-before', !dropAfter);
+      row.classList.toggle('drop-after', dropAfter);
+      for (const [id, refs] of taskRowRefs) if (refs.li === row) dropTargetId = id;
+    };
+
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      clearIndicators();
+      li.classList.remove('dragging');
+      draggingTaskId = null;
+      const target = dropTargetId ? findTask(dropTargetId) : null;
+      if (target) reorderTask(task, target, dropAfter);
+    };
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+
+  // The handle is not a focus stop (the row's title block is - see buildTaskRow), so keyboard
+  // reordering rides on the row itself: Alt+Arrow moves the focused task one place, mirroring the
+  // checklist item reordering already bound in editor.js.
+  li.addEventListener('keydown', (e) => {
+    if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    if (!li.draggable) return;
+    const visible = currentTasks();
+    const index = visible.indexOf(task);
+    const neighbourIndex = e.key === 'ArrowUp' ? index - 1 : index + 1;
+    const neighbour = visible[neighbourIndex];
+    if (index < 0 || !neighbour) return;
+    e.preventDefault();
+    reorderTask(task, neighbour, e.key === 'ArrowDown');
+    taskRowRefs.get(task.Id)?.info?.focus();
+  });
+}
+
+/**
+ * Port of MainViewModel.ReorderTask. Renumbers SortOrder across the whole list (0..n-1) rather
+ * than nudging one value, so the arrangement stays dense and comparable on both platforms, and
+ * carries the pin across when a task is dropped into or out of the pinned block - pinned tasks
+ * always sort first, so dropping below the last pinned row has to mean "unpin me" or the task
+ * would visibly snap back.
+ */
+function reorderTask(sourceTask, targetTask, insertAfter) {
+  if (!sourceTask || !targetTask || sourceTask === targetTask) return;
+
+  // Ordered by SortOrder alone, NOT through sortTasks(): sortTasks floats pinned tasks to the top,
+  // and renumbering over that ordering would bake pin state into SortOrder - unpinning a task
+  // would then teleport it to wherever its "pinned block" index happened to fall. Desktop
+  // renumbers its raw AllTasks collection for the same reason.
+  const ordered = [...appState.Tasks].sort((a, b) => (Number(a.SortOrder) || 0) - (Number(b.SortOrder) || 0));
+  const sourceIndex = ordered.indexOf(sourceTask);
+  const targetIndex = ordered.indexOf(targetTask);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  sourceTask.IsPinned = pinStateAfterReorder(sourceTask.IsPinned, targetTask.IsPinned, insertAfter);
+
+  const newIndex = reorderTargetIndex(sourceIndex, targetIndex, insertAfter, ordered.length);
+  ordered.splice(sourceIndex, 1);
+  ordered.splice(newIndex, 0, sourceTask);
+  ordered.forEach((t, i) => { t.SortOrder = i; });
+
+  // Ordering is list-level state with its own timestamp - see mergeTaskOrder in sync.js for why
+  // bumping each task's ModifiedAt instead would be actively harmful.
+  appState.TasksOrderModifiedAt = nowDotNet();
+  sourceTask.ModifiedAt = nowDotNet();
+
+  markDirty();
+  renderList();
 }
 
 // Refreshes a row's visible content/classes to match `task` - shared by both the first render of a
@@ -2812,6 +2999,12 @@ function updateTaskRow(refs, task, sectionKind) {
   li.classList.toggle('selected', task.Id === selectedTaskId);
   li.classList.toggle('pinned', task.IsPinned);
   li.classList.toggle('row-selected', selectedIds.has(task.Id));
+  // Gates both the pointer drag and Alt+Arrow (see bindReorderDrag), and shows the grip handle.
+  // Only under the Manual sort, and never while multi-selecting (where a press-drag is already the
+  // range gesture). Trash/Completed keep their own ordering concerns out of it.
+  li.draggable = sortKey === 'manual' && !selectionMode
+    && sectionKind !== 'trash' && sectionKind !== 'done';
+  li.classList.toggle('reorderable', li.draggable);
 
   // Left slot = right-swipe, right slot = left-swipe - see the onCommit direction mapping above,
   // which this always matches. Today/All/Recurring keep the plain default colors (left=green/
@@ -2847,7 +3040,15 @@ function updateTaskRow(refs, task, sectionKind) {
   if (taskHasLink(task)) indicators.push(icon('link'));
   if (task.Body.some((b) => b.Type === NoteBlockType.Photo || blockHasInlineImage(b))) indicators.push(icon('image'));
   if (task.Body.some((b) => b.Type === NoteBlockType.File || blockHasInlineFile(b))) indicators.push(icon('paperclip'));
-  if (taskHasChecklist(task)) indicators.push(icon('checklist'));
+  // Desktop pairs the checklist glyph with a live "completed/total" count (ChecklistProgressText
+  // Converter) and an "N of M subtasks completed" tooltip - a bare icon here said only "this task
+  // has subtasks somewhere", never how far along they were.
+  if (taskHasChecklist(task)) {
+    const { completed, total } = checklistProgress(task);
+    indicators.push(total > 0
+      ? `<span class="task-subtask-progress${completed === total ? ' complete' : ''}" title="${completed} of ${total} subtasks completed">${icon('checklist')}${completed}/${total}</span>`
+      : icon('checklist'));
+  }
   const tagChips = (task.Tags || []).map((t) => `<span class="task-tag-chip">#${escapeHtml(t)}</span>`).join('');
   // Mirrors desktop's row-level priority Ellipse (MainWindow.xaml + PriorityColorConverter) -
   // hidden entirely at None, same as there.
@@ -2995,20 +3196,38 @@ function updateEmptyDashboard() {
 // Tasks are real sections, so those two explicitly clear any lingering quick filter first (e.g. if
 // you'd previously filtered to Overdue, clicking Completed should show every completed task, not
 // an empty list from "Overdue AND Completed").
+// `value` is a filter key to turn on (replacing the current set), or '' to clear them all - the
+// "All" chip and every caller that wants a clean slate pass ''. toggleQuickFilterChip below is the
+// multi-select path the chips themselves use.
 function setQuickFilterChip(value) {
-  quickFilter = value;
+  quickFilters.clear();
+  if (value) quickFilters.add(value);
+  syncQuickFilterChips();
+}
+
+// One chip click: add or remove that filter, leaving the others alone, so several AND-combine the
+// way desktop's checkable filter list does.
+function toggleQuickFilterChip(value) {
+  if (!value) quickFilters.clear();
+  else if (quickFilters.has(value)) quickFilters.delete(value);
+  else quickFilters.add(value);
+  syncQuickFilterChips();
+}
+
+function syncQuickFilterChips() {
   for (const chip of filterChipGroup.querySelectorAll('.chip')) {
-    chip.classList.toggle('active', chip.dataset.filter === value);
+    const key = chip.dataset.filter;
+    // The "All" chip (data-filter="") is the unfiltered default, lit only when nothing is on.
+    chip.classList.toggle('active', key ? quickFilters.has(key) : quickFilters.size === 0);
+    chip.setAttribute('aria-pressed', String(key ? quickFilters.has(key) : quickFilters.size === 0));
   }
   updateFilterBadge();
   updateSaveViewButton();
 }
 // Only the quick-filter chips count here, not Sort (that's an ordering preference, not a filter)
-// and not "All" (that's the unfiltered default, not a filter someone turned on) - so today this is
-// always 0 or 1 since the chips are single-select, but it's written as a count rather than a
-// boolean so it keeps working if the chip group ever grows multi-select.
+// and not "All" (that's the unfiltered default, not a filter someone turned on).
 function updateFilterBadge() {
-  const count = quickFilter ? 1 : 0;
+  const count = quickFilters.size;
   filterBadge.textContent = String(count);
   filterBadge.classList.toggle('hidden', count === 0);
 }
@@ -3713,10 +3932,11 @@ sortChipGroup.addEventListener('click', (e) => {
   renderList();
 });
 applySortChips(); // the remembered sort, not index.html's static "Modified" chip
+syncQuickFilterChips(); // sets aria-pressed on the chips, which index.html ships without
 filterChipGroup.addEventListener('click', (e) => {
   const btn = e.target.closest('.chip');
   if (!btn) return;
-  setQuickFilterChip(btn.dataset.filter);
+  toggleQuickFilterChip(btn.dataset.filter);
   renderList();
 });
 
@@ -3913,6 +4133,9 @@ const SHORTCUTS = [
   // Handled by the checklist inputs themselves (editor.js renderChecklistBlock).
   { label: 'In a checklist: new item below / remove an empty item', bindings: [{ keys: 'Enter' }, { keys: 'Backspace' }], displayOnly: true },
   { label: 'In a checklist: move the item up or down', bindings: [{ keys: 'alt+ArrowUp' }, { keys: 'alt+ArrowDown' }], displayOnly: true },
+  // Handled per row in bindReorderDrag - the keyboard route to a reorder, since the grip handle is
+  // a pointer affordance with no focus stop of its own.
+  { label: 'Under the Manual sort: move the focused task up or down', bindings: [{ keys: 'alt+ArrowUp' }, { keys: 'alt+ArrowDown' }], displayOnly: true },
 ];
 const KEY_DISPLAY_NAMES = { mod: 'Ctrl', alt: 'Alt', Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓' };
 

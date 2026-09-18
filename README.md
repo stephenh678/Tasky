@@ -5,11 +5,34 @@ A Windows desktop task manager built with WPF (.NET 10). Tasky is a single-windo
 document — mix in notes, photos, links, files, and checklists, tag it, give it a due date, and
 let the app take care of not losing your work.
 
-**Current release: v1.2.0** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
-**Help → Check for Updates** from an installed copy). v1.2.0 is a Tasky Web / Mobile release — offline
-launch with a local copy, a phone-first UX pass, sign-in robustness and a set of data-safety fixes,
-all detailed under [Tasky Web](#tasky-web) below. The desktop app is unchanged from v1.1.9 apart from
-its version number; it ships in the release so Desktop, Web and the shared version stay in step.
+**Current release: v1.3.0** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
+**Help → Check for Updates** from an installed copy).
+
+v1.3.0 is the release where Tasky gets a real installer, and where Tasky Web stops trailing the
+desktop app.
+
+- **A proper installer.** `Tasky-Setup-1.3.0.exe` replaces "unzip the folder somewhere". It installs
+  per-user with no administrator prompt, adds Start Menu and Desktop shortcuts, and registers in
+  **Settings → Apps** like any other program. Updating is the same installer run silently, so an
+  upgrade and a fresh install are the same code path — which also fixes updated copies reporting a
+  stale version to Windows forever. See [Installing, updating and
+  uninstalling](#installing-updating-and-uninstalling).
+- **Manual task ordering now syncs.** Dragging tasks into a custom order was previously discarded by
+  the next merge on *every* device, desktop included: ordering is a property of the list rather than
+  of any one task, so it had nothing to carry it across a sync. It now travels with its own
+  timestamp, whole-arrangement newer-wins.
+- **Tasky Web catches up with the desktop app.** Drag-to-reorder (with a grip handle that works on
+  touch, not just a mouse), the Manual/Name Z–A/Priority sorts, the **Tomorrow** and **Someday**
+  sections, quick filters that AND-combine instead of one-at-a-time, the High Priority filter, and
+  subtask progress — an `x/y` badge on each row and a live progress bar in the editor.
+- **Subtasks are opt-in on the desktop.** The Subtasks box no longer occupies every task's editor
+  whether or not it has any; it sits behind a one-line "Add subtasks", with **Settings → General →
+  Always show the Subtasks section** to pin it open. Tasks that already have subtasks always show
+  them. The editor's due date / priority / repeat / tags fields now flow on one row that reflows as
+  the pane narrows, instead of each claiming a row of its own.
+- **Fixes.** Lists authored on the desktop no longer render as a broken nested bullet on the web
+  (every list item was being turned into a second `<ul>`), and Tasky Web's Local Test Mode is
+  rebuilt on the real data model — every sample task previously showed as "(untitled)".
 
 ## Features
 
@@ -245,8 +268,9 @@ per-task-merge sync and `.tasky` file the desktop app uses (no separate data sto
 your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
 Needs a current browser: Safari / iOS 16.4 or newer, or a recent Chrome, Edge or Firefox — older
 browsers get a plain "Tasky couldn't start" message on the sign-in screen instead of a blank page.
-Everything below is live as of **v1.2.0** (10 Sep 2026), the first release where Tasky Web works
-offline; the review it came out of is in `review_web_mobile.md`.
+Everything below is live as of **v1.3.0** (17 Sep 2026), the release that closed the remaining
+feature gaps with the desktop app; offline support landed in v1.2.0, whose review is in
+`review_web_mobile.md`.
 
 It works offline the same way the desktop app does: the app shell is cached by a service worker and
 a local copy of your tasks lives in the browser's IndexedDB, so an installed PWA launches with no

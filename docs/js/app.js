@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=30';
-import * as drive from './drive.js?v=30';
+﻿import * as auth from './auth.js?v=31';
+import * as drive from './drive.js?v=31';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -24,14 +24,14 @@ import {
   taskHasLink,
   taskHasChecklist,
   checklistProgress,
-} from './model.js?v=30';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=30';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=30';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=30';
-import { icon } from './icons.js?v=30';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=30';
-import { storage } from './storage.js?v=30';
-import { openDialog, trapFocus } from './dialog.js?v=30';
+} from './model.js?v=31';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=31';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=31';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=31';
+import { icon } from './icons.js?v=31';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=31';
+import { storage } from './storage.js?v=31';
+import { openDialog, trapFocus } from './dialog.js?v=31';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');

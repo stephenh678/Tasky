@@ -18,11 +18,11 @@
     <AssemblyTitle>Tasky</AssemblyTitle>
     <Product>Tasky</Product>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <!-- Baked in rather than left as CLI-only flags in README.md's publish command - a publish
          that forgets `-p:SelfContained=true -p:PublishSingleFile=true` silently produces a
          framework-dependent build with every dependency loose alongside Tasky.exe instead of
-         bundled into it, which Uninstall-Tasky.ps1's known-files list doesn't expect. -->
+         bundled into it, which the installer would then happily package and ship. -->
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <!-- Symbols go INSIDE Tasky.dll (which PublishSingleFile then bundles into Tasky.exe) rather

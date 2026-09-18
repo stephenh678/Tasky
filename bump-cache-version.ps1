@@ -27,7 +27,16 @@ foreach ($file in $files) {
     $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
     $updated = [regex]::Replace($text, $bumpPattern, "?v=$newVer")
     if ($updated -ne $text) {
-        [System.IO.File]::WriteAllText($file.FullName, $updated, [System.Text.Encoding]::UTF8)
+        # Preserve each file's existing BOM state instead of imposing one. docs/ is a mix: index.html,
+        # app.js, auth.js, drive.js, sync.js and sw.js carry a BOM, editor.js and model.js do not.
+        # [System.Text.Encoding]::UTF8's encoder always EMITS a BOM, so using it here added one to
+        # every file that lacked it (a review caught the bump doing exactly that to editor.js) - while
+        # hardcoding UTF8Encoding($false) instead would strip the six that legitimately have one.
+        # Either way a routine version bump produces a diff full of unrelated encoding churn.
+        # Reading with ::UTF8 is fine and stays: its DECODER strips a BOM when present.
+        $firstBytes = [System.IO.File]::ReadAllBytes($file.FullName) | Select-Object -First 3
+        $hadBom = $firstBytes.Count -eq 3 -and $firstBytes[0] -eq 0xEF -and $firstBytes[1] -eq 0xBB -and $firstBytes[2] -eq 0xBF
+        [System.IO.File]::WriteAllText($file.FullName, $updated, (New-Object System.Text.UTF8Encoding($hadBom)))
         $count++
     }
 }

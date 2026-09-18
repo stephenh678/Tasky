@@ -68,5 +68,9 @@ $updated = [regex]::Replace($css, $forcedPattern, {
     return $m.Groups[1].Value + $regenerated + $m.Groups[3].Value
 })
 
-[System.IO.File]::WriteAllText($cssPath, $updated, [System.Text.Encoding]::UTF8)
+# UTF8Encoding($false), not [System.Text.Encoding]::UTF8: the latter's encoder emits a BOM, so
+# every rewrite silently prepended one to any file that didn't already have it (caught by a code
+# review after a bump added a BOM to docs/js/editor.js). Reading with ::UTF8 stays correct - the
+# reader strips a BOM when one is present.
+[System.IO.File]::WriteAllText($cssPath, $updated, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Rewrote :root[data-theme='dark'] from the media block ($($source.Count) custom properties)." -ForegroundColor Green

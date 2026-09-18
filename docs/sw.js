@@ -22,7 +22,7 @@
 // already-open page only ever asks for its own version's assets: those are served cache-first from
 // whichever cache still has them, or from the network - never silently swapped for newer bytes.
 
-const SHELL_VERSION = '?v=34';
+const SHELL_VERSION = '?v=35';
 const CACHE_NAME = `tasky-shell-${SHELL_VERSION.replace('?v=', '')}`;
 
 const SHELL_FILES = [

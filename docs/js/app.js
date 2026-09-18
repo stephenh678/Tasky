@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=33';
-import * as drive from './drive.js?v=33';
+﻿import * as auth from './auth.js?v=34';
+import * as drive from './drive.js?v=34';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -29,14 +29,14 @@ import {
   AGENDA_GROUP_LABELS,
   isReminderDue,
   taskToICalendar,
-} from './model.js?v=33';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=33';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=33';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=33';
-import { icon } from './icons.js?v=33';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=33';
-import { storage } from './storage.js?v=33';
-import { openDialog, trapFocus } from './dialog.js?v=33';
+} from './model.js?v=34';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=34';
+import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=34';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=34';
+import { icon } from './icons.js?v=34';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=34';
+import { storage } from './storage.js?v=34';
+import { openDialog, trapFocus } from './dialog.js?v=34';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -384,6 +384,7 @@ let lastPullAt = 0;
 // True while the app is running on the local IndexedDB copy (snapshot.js) because Drive couldn't
 // be reached at boot - cleared by the first successful sync. See loadFromDrive.
 let bootedFromSnapshot = false;
+let stateSerializedAt = null; // set by saveToDrive, consumed by performSave - see saveToDrive
 let snapshotTimer = null;
 let saveTimer = null;
 const SAVE_DEBOUNCE_MS = 4000;
@@ -590,6 +591,17 @@ function initGuestSampleTasks() {
   for (const task of [welcome, plan, groceries, released]) addNewTask(task);
 }
 
+// Guest data lives under its own snapshot key, never the signed-in account's. The fallback reads a
+// guest snapshot written by a build that still shared the one key - and only that: anything else
+// stored there belongs to a real account.
+const GUEST_ACCOUNT_EMAIL = 'guest@local';
+async function readGuestSnapshot() {
+  const snap = await readSnapshot(GUEST_SNAPSHOT_KEY);
+  if (snap) return snap;
+  const legacy = await readSnapshot();
+  return legacy?.accountEmail === GUEST_ACCOUNT_EMAIL ? legacy : null;
+}
+
 async function startGuestMode() {
   isGuestMode = true;
   signinScreen.classList.add('hidden');
@@ -602,7 +614,7 @@ async function startGuestMode() {
   accountNameEl.textContent = 'Local Guest';
   accountEmailEl.textContent = 'local.guest@tasky';
 
-  const snap = await readSnapshot();
+  const snap = await readGuestSnapshot();
   if (snap?.appState?.Tasks && snap.appState.Tasks.length > 0) {
     appState = snap.appState;
     appState.Tasks.forEach(normalizeTask);
@@ -768,10 +780,18 @@ accountSignoutBtn.addEventListener('click', async () => {
       { title: 'Unsaved Changes', confirmLabel: 'Sign out', danger: true });
     if (!confirmed) return;
   }
+  // The reload below fires visibilitychange:hidden, whose handler flushes the snapshot and saves
+  // anything dirty - which rewrote this account's tasks right after clearSnapshot() removed them,
+  // now with no accountEmail, so the next account to sign in adopted them. Make both no-ops.
+  dirty = false;
+  clearTimeout(saveTimer);
+  taskyFolderId = null;
+  bootedFromSnapshot = false;
   if (isGuestMode) {
     isGuestMode = false;
     clearTimeout(snapshotTimer);
-    await clearSnapshot();
+    await clearSnapshot(GUEST_SNAPSHOT_KEY);
+    if ((await readSnapshot())?.accountEmail === GUEST_ACCOUNT_EMAIL) await clearSnapshot(); // pre-split guest copy
     storage.remove(PLACE_KEY);
     location.href = location.pathname;
     return;
@@ -1161,7 +1181,7 @@ async function onSignedIn() {
 
 async function loadFromDrive() {
   if (isGuestMode) {
-    const snap = await readSnapshot();
+    const snap = await readGuestSnapshot();
     if (snap?.appState?.Tasks && snap.appState.Tasks.length > 0) {
       appState = snap.appState;
       appState.Tasks.forEach(normalizeTask);
@@ -1648,6 +1668,7 @@ function flushSnapshot() {
 
 function snapshotBelongsToThisAccount(snap) {
   const email = auth.getAccountEmail();
+  if (snap.accountEmail === GUEST_ACCOUNT_EMAIL) return false; // a pre-split guest copy is nobody's account
   // Either side unknown (offline boot with an expired token cache has no email yet) - trust it;
   // signOut() clears the snapshot, so a mismatch can only mean a different account signed in.
   return !email || !snap.accountEmail || email === snap.accountEmail;
@@ -1810,7 +1831,8 @@ async function performSave({ force, statusVerb }) {
       setStatus('Saved', { autoHide: true });
     }
     saveStatus.classList.remove('save-status-action');
-    setLastSynced(new Date());
+    setLastSynced(stateSerializedAt ?? new Date());
+    stateSerializedAt = null;
     bootedFromSnapshot = false; // the local copy has been reconciled with Drive - back to normal
     scheduleSnapshot();
     setSyncState(isGuestMode ? 'local' : (dirty ? 'pending' : 'synced'));
@@ -1908,33 +1930,38 @@ saveStatus.addEventListener('click', () => {
 // upload - falls through so the caller uploads local state as-is, same fallback the desktop app
 // uses).
 async function mergeFromRemote() {
+  setSyncProgress(15);
+  // Deliberately outside the try below: a download that FAILED (offline, 5xx, rate limit, auth) is
+  // not an unreadable remote file. Treating it as one made saveToDrive upload local state straight
+  // over whatever other devices had written - the caller fails the sync and retries instead.
+  const [text, meta] = await Promise.all([
+    drive.downloadFileText(currentFileId),
+    drive.getFileMetadata(currentFileId),
+  ]);
+  setSyncProgress(45);
+  let remoteState;
   try {
-    setSyncProgress(15);
-    const [text, meta] = await Promise.all([
-      drive.downloadFileText(currentFileId),
-      drive.getFileMetadata(currentFileId),
-    ]);
-    setSyncProgress(45);
-    const remoteState = JSON.parse(text);
+    remoteState = JSON.parse(text);
+    if (!remoteState || typeof remoteState !== 'object') throw new Error('not a Tasky state object');
     remoteState.Tasks ??= [];
     remoteState.Tasks.forEach(normalizeTask); // remote-only tasks are pushed into appState as-is by the merge
     remoteState.DeletedTasks = deduplicateTombstones(remoteState.DeletedTasks ?? []);
     remoteState.SavedViews ??= [];
     remoteState.DeletedSavedViewIds ??= [];
     remoteState.TasksOrderModifiedAt ??= null;
-    const storedLastSync = storage.get(LAST_SYNCED_KEY);
-    lastKnownRemoteModifiedTime = meta?.modifiedTime ?? null;
-    const { conflicted, updatedIds, removedIds } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
-    mergeSavedViews(appState, remoteState);
-    autoEmptyTrashIfNeeded();
-    renderSidebar();
-    renderList();
-    refreshEditorAfterMerge(updatedIds, removedIds);
-    return { modifiedTime: meta?.modifiedTime ?? null, conflicted };
   } catch (err) {
     console.warn('Could not read remote file for merge, uploading local state as-is.', err);
     return { modifiedTime: null, conflicted: 0 };
   }
+  const storedLastSync = storage.get(LAST_SYNCED_KEY);
+  lastKnownRemoteModifiedTime = meta?.modifiedTime ?? null;
+  const { conflicted, updatedIds, removedIds } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
+  mergeSavedViews(appState, remoteState);
+  autoEmptyTrashIfNeeded();
+  renderSidebar();
+  renderList();
+  refreshEditorAfterMerge(updatedIds, removedIds);
+  return { modifiedTime: meta?.modifiedTime ?? null, conflicted };
 }
 
 // A merge can change the task currently open in the editor pane - a body edit made on another
@@ -2061,8 +2088,8 @@ async function saveToDrive() {
       taskyFolderId: 'local-folder',
       noRemoteFileYet: false,
       dirty: false,
-      accountEmail: 'guest@local',
-    });
+      accountEmail: GUEST_ACCOUNT_EMAIL,
+    }, GUEST_SNAPSHOT_KEY);
     setSyncState('local');
     return 0;
   }
@@ -2109,6 +2136,10 @@ async function saveToDrive() {
   }
 
   setSyncProgress(75);
+  // What "last synced" has to mean for the merge's conflict check: the moment this device's state
+  // was captured. Stamping it after the upload returned made an edit typed DURING the upload look
+  // already-synced, so a later remote change overwrote it without a "(conflicted copy)".
+  stateSerializedAt = new Date();
   const json = JSON.stringify(appState, null, 2);
   const uploaded = await drive.uploadFileText(currentFileId, currentFileName, taskyFolderId, json);
   currentFileId = uploaded.id;
@@ -2162,6 +2193,10 @@ async function pullRemoteChanges({ force = false } = {}) {
       setStatus(mergeNotice);
       mergeNotice = null;
     }
+  } catch (err) {
+    // The download failed; lastKnownRemoteModifiedTime is untouched, so the next pull tries again.
+    console.warn('Tasky: background pull failed', err);
+    return false;
   } finally {
     saving = false;
     setSyncState(dirty ? 'pending' : 'synced');
@@ -2405,7 +2440,12 @@ function toggleDone(task) {
   pushUndo(description, () => {
     task.IsDone = wasDone;
     touch(task);
-    if (spawned) appState.Tasks = appState.Tasks.filter((t) => t.Id !== spawned.Id);
+    if (spawned) {
+      appState.Tasks = appState.Tasks.filter((t) => t.Id !== spawned.Id);
+      // An autosave may already have uploaded it - without a tombstone the next merge would see a
+      // remote-only task and bring the undone occurrence straight back.
+      recordTombstone(spawned.Id);
+    }
   });
 }
 
@@ -2497,7 +2537,9 @@ function autoEmptyTrashIfNeeded() {
   if (storage.get(AUTO_EMPTY_TRASH_ENABLED_KEY) !== 'true') return;
   const days = Number(storage.get(AUTO_EMPTY_TRASH_DAYS_KEY)) || DEFAULT_AUTO_EMPTY_TRASH_DAYS;
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const expired = appState.Tasks.filter((t) => t.IsClosed && parseDotNetDate(t.ModifiedAt).getTime() < cutoffMs);
+  // A missing/unparseable ModifiedAt parses to null - never "expired", and never a TypeError that
+  // fails the whole load this runs inside.
+  const expired = appState.Tasks.filter((t) => t.IsClosed && parseDotNetDate(t.ModifiedAt)?.getTime() < cutoffMs);
   permanentlyRemoveTasks(expired);
 }
 
@@ -2543,7 +2585,9 @@ async function moveAllDoneToTrash() {
 }
 
 function normalizeTagName(rawTag) {
-  return rawTag.trim().replace(/^#+/, '').replace(/[^\w-]/g, '').toLowerCase();
+  // Same character class as model.js's QUICK_ADD_TAG_RE (.NET's Unicode \w), so "münchen" isn't
+  // stored as "mnchen".
+  return rawTag.trim().replace(/^#+/, '').replace(/[^\p{L}\p{Mn}\p{Nd}\p{Pc}-]/gu, '').toLowerCase();
 }
 
 function addTag(task, rawTag) {
@@ -3943,6 +3987,7 @@ bulkDoneBtn.addEventListener('click', async () => {
       if (spawned.length > 0) {
         const spawnedIds = new Set(spawned.map((s) => s.Id));
         appState.Tasks = appState.Tasks.filter((t) => !spawnedIds.has(t.Id));
+        for (const id of spawnedIds) recordTombstone(id); // same reason as toggleDone's undo
       }
     });
 });
@@ -4676,13 +4721,16 @@ function exportAllToMarkdown() {
   const lines = ['# Tasky Export', '', `Exported ${new Date().toLocaleString()}`, ''];
   for (const task of exportedTasksInOrder()) {
     lines.push('---', '', `## ${task.IsDone ? '[x] ' : ''}${escapeMarkdown(task.Text)}`, '');
-    if (task.DueDate) lines.push(`**Due Date:** ${parseDotNetDate(task.DueDate).toISOString().slice(0, 10)}  `);
+    // toDateInputValue, not toISOString: DueDate is local wall-clock time, and the UTC conversion
+    // moved it to the previous/next day depending on the time zone.
+    const due = parseDotNetDate(task.DueDate);
+    if (due) lines.push(`**Due Date:** ${toDateInputValue(due)}  `);
     if (task.Tags.length > 0) lines.push(`**Tags:** ${task.Tags.map((t) => `\`${t}\``).join(', ')}  `);
     lines.push(`**Status:** ${task.IsDone ? 'Completed' : 'Open'}  `, '');
     appendBodyAsMarkdown(lines, task);
     lines.push('');
   }
-  shareOrDownloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.md`, lines.join('\n'), 'text/markdown');
+  shareOrDownloadTextFile(`Tasky Export ${toDateInputValue(new Date())}.md`, lines.join('\n'), 'text/markdown');
 }
 
 function appendBodyAsHtml(lines, task) {
@@ -4698,7 +4746,12 @@ function appendBodyAsHtml(lines, task) {
         break;
       case NoteBlockType.Link: {
         const label = block.LinkLabel || block.Url;
-        lines.push(`<p><a href="${escapeHtml(block.Url)}">${escapeHtml(label)}</a></p>`);
+        // Same scheme allow-list the editor applies (model.js SAFE_HREF_RE): a javascript:/data:
+        // Url in a synced file must not become a live link in the exported page.
+        const safeUrl = /^(https?:|mailto:)/i.test((block.Url ?? '').trim());
+        lines.push(safeUrl
+          ? `<p><a href="${escapeHtml(block.Url.trim())}">${escapeHtml(label)}</a></p>`
+          : `<p>${escapeHtml(label)}</p>`);
         break;
       }
       case NoteBlockType.Photo:
@@ -4730,7 +4783,8 @@ function exportAllToHtml() {
   ];
   for (const task of exportedTasksInOrder()) {
     lines.push(`<h2 class="${task.IsDone ? 'done' : ''}">${escapeHtml(task.Text)}</h2>`, '<div class="meta">');
-    if (task.DueDate) lines.push(`<div><strong>Due Date:</strong> ${parseDotNetDate(task.DueDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</div>`);
+    const due = parseDotNetDate(task.DueDate);
+    if (due) lines.push(`<div><strong>Due Date:</strong> ${due.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</div>`);
     if (task.Tags.length > 0) {
       lines.push(`<div style="margin-top:4px;"><strong>Tags:</strong> ${task.Tags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>`);
     }
@@ -4739,7 +4793,7 @@ function exportAllToHtml() {
     lines.push('</div>');
   }
   lines.push('</body>', '</html>');
-  shareOrDownloadTextFile(`Tasky Export ${new Date().toISOString().slice(0, 10)}.html`, lines.join('\n'), 'text/html');
+  shareOrDownloadTextFile(`Tasky Export ${toDateInputValue(new Date())}.html`, lines.join('\n'), 'text/html');
 }
 
 function downloadTextFile(filename, text, mimeType) {

@@ -196,14 +196,24 @@ export function nextDueDate(from, rule, interval = 1) {
       d.setDate(d.getDate() + 7 * interval);
       return d;
     case RecurrenceRule.Monthly:
-      d.setMonth(d.getMonth() + interval);
-      return d;
+      return addMonthsClamped(d, interval);
     case RecurrenceRule.Yearly:
-      d.setFullYear(d.getFullYear() + interval);
-      return d;
+      return addMonthsClamped(d, 12 * interval);
     default:
       return d;
   }
+}
+
+// DateTime.AddMonths/AddYears clamp to the target month's last day (Jan 31 + 1 month = Feb 28);
+// Date.setMonth/setFullYear roll over instead (Mar 3), which skipped a month and shifted the
+// series' day-of-month for good.
+function addMonthsClamped(date, months) {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return d;
 }
 
 // Mirrors MainViewModel.cs's RecurrenceAnchor exactly (ROADMAP.md #31): advancing straight from a
@@ -399,7 +409,9 @@ export function collectTaskFileNames(task, into = new Set()) {
 // A captured `(^|\s)` prefix is the same test in universally-supported syntax; the replace
 // callbacks below hand that captured prefix back so consuming a token never eats the space that
 // separated it from the previous word (a lookbehind never included it in the match to begin with).
-const QUICK_ADD_TAG_RE = /(^|\s)#([\w-]+)/g;
+// The class below is what .NET's \w means (Unicode letters, marks, digits, connectors); JS's \w is
+// ASCII-only, which split "#café" into the tag "caf" and a stray "é" left in the title.
+const QUICK_ADD_TAG_RE = /(^|\s)#([\p{L}\p{Mn}\p{Nd}\p{Pc}-]+)/gu;
 const QUICK_ADD_DUE_RE = /(^|\s)!due:(\S+)/gi;
 const QUICK_ADD_TIME_RE = /(^|\s)@(\S+)/g;
 const QUICK_ADD_TIME_TOKEN_RE = /^(\d{1,2})(?::(\d{2}))?(am|pm)$|^(\d{1,2}):(\d{2})$/i;
@@ -738,9 +750,11 @@ function isWhitespaceText(node) {
 function xamlRuns(text) {
   // Run's Text attribute keeps spaces exactly (element content would be whitespace-normalised by
   // XamlReader, gluing "a <b>b</b>" into "ab"); a newline becomes a real LineBreak.
+  // An attribute value that starts with "{" is a markup extension to XamlReader ("{TODO} call"
+  // throws and desktop drops the whole block's formatting) - "{}" is XAML's escape for a literal.
   return text
     .split('\n')
-    .map((part) => (part ? `<Run Text="${escapeXml(part)}"/>` : ''))
+    .map((part) => (part ? `<Run Text="${part.startsWith('{') ? '{}' : ''}${escapeXml(part)}"/>` : ''))
     .join('<LineBreak/>');
 }
 
@@ -972,7 +986,8 @@ export function xamlToHtml(xaml) {
     if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
     return res;
   };
-  clean = clean.replace(/<Run\b([^>]*?)\s*\/>/gi, (_, attrs) => styleRun(attrs, /\bText="([^"]*)"/i.exec(attrs)?.[1] ?? ''));
+  // A leading "{}" is XAML's literal-brace escape (see xamlRuns), not part of the text.
+  clean = clean.replace(/<Run\b([^>]*?)\s*\/>/gi, (_, attrs) => styleRun(attrs, (/\bText="([^"]*)"/i.exec(attrs)?.[1] ?? '').replace(/^\{\}/, '')));
   clean = clean.replace(/<Run\b([^>]*)>([\s\S]*?)<\/Run>/gi, (_, attrs, content) => styleRun(attrs, content));
   // <Span FontWeight="Bold"> etc. carry formatting too; the sanitizer drops the Span tag itself.
   // Case-sensitive on purpose (XAML is): the inline-check <span> made above must survive.

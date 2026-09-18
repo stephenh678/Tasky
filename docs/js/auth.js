@@ -26,8 +26,8 @@
 // below that touches sessionId/refreshAccessToken() exists so getAccessToken() can silently mint
 // a new access token near/at expiry - via a plain background fetch, never a redirect - instead of
 // forcing the ~hourly reauth this app used to require.
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=33';
-import { storage, sessionStore } from './storage.js?v=33';
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, TOKEN_EXCHANGE_URL, TOKEN_REFRESH_URL } from './config.js?v=34';
+import { storage, sessionStore } from './storage.js?v=34';
 
 const TOKEN_CACHE_KEY = 'tasky-auth-token';
 const SESSION_ID_KEY = 'tasky-auth-session';
@@ -168,6 +168,7 @@ const REFRESH_RETRY_AFTER_CAP_MS = 10 * 1000;
 const REFRESH_UNATTENDED_RETRY_MS = 60 * 1000;
 
 async function doRefreshAccessToken(isRetry = false) {
+  const startedWith = sessionId;
   let res;
   let data;
   try {
@@ -178,8 +179,12 @@ async function doRefreshAccessToken(isRetry = false) {
     });
     if (res.ok) data = await res.json();
   } catch (err) {
+    if (sessionId !== startedWith) return false;
     return retryRefreshLater(isRetry, `request failed: ${err.message}`, REFRESH_RETRY_MS);
   }
+  // signOut() (or a fresh sign-in) happened while this was in flight - applying the response would
+  // put a token back in memory and in the localStorage cache for a user who just signed out.
+  if (sessionId !== startedWith) return false;
   if (res.status === 401) {
     console.warn('Tasky: silent token refresh rejected, session cleared');
     sessionId = null;
@@ -202,6 +207,12 @@ async function doRefreshAccessToken(isRetry = false) {
   // (reported live: the "?" read as "signed out" when the account was fine and tasks loaded
   // normally). persistToken() below would otherwise also bake those nulls back into the cache.
   if (!accountEmail) await fetchAccountInfo();
+  if (sessionId !== startedWith) {
+    // Signed out during the userinfo request above - undo the token this call just set.
+    accessToken = null;
+    tokenExpiresAt = 0;
+    return false;
+  }
   persistToken();
   scheduleRefresh();
   return true;

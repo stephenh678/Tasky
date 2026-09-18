@@ -125,6 +125,9 @@ export function openDialog({
       if (e.key === 'Escape') {
         close(dismissValue);
       } else if (e.key === 'Enter' && submitAction) {
+        // Enter on a focused button activates THAT button (natively, via its click) - hijacking it
+        // here made Enter on "Cancel" submit the form instead.
+        if (document.activeElement?.tagName === 'BUTTON' && card.contains(document.activeElement)) return;
         e.preventDefault();
         run(submitAction);
       }

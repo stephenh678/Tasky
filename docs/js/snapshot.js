@@ -18,6 +18,9 @@ const DB_NAME = 'tasky-local';
 const DB_VERSION = 1;
 const STORE = 'snapshot';
 const KEY = 'current';
+// Guest (local test) mode keeps its own record. It used to share KEY, so opening ./?guest=1 adopted
+// the signed-in account's tasks as guest data and then overwrote that account's dirty snapshot.
+export const GUEST_SNAPSHOT_KEY = 'guest';
 
 let dbPromise = null;
 
@@ -47,12 +50,12 @@ function openDb() {
  * Persists { appState, currentFileId, currentFileName, taskyFolderId, noRemoteFileYet, dirty,
  * accountEmail } plus a savedAt timestamp. Resolves either way; returns true only if it landed.
  */
-export async function writeSnapshot(data) {
+export async function writeSnapshot(data, key = KEY) {
   try {
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ ...data, savedAt: Date.now() }, KEY);
+      tx.objectStore(STORE).put({ ...data, savedAt: Date.now() }, key);
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
@@ -65,11 +68,11 @@ export async function writeSnapshot(data) {
 }
 
 /** The stored snapshot, or null if there is none / storage is unavailable. */
-export async function readSnapshot() {
+export async function readSnapshot(key = KEY) {
   try {
     const db = await openDb();
     return await new Promise((resolve, reject) => {
-      const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(KEY);
+      const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
       req.onsuccess = () => resolve(req.result ?? null);
       req.onerror = () => reject(req.error);
     });
@@ -80,14 +83,15 @@ export async function readSnapshot() {
 }
 
 /** Sign-out: the next account to sign in on this device must never see the previous one's tasks. */
-export async function clearSnapshot() {
+export async function clearSnapshot(key = KEY) {
   try {
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).delete(KEY);
+      tx.objectStore(STORE).delete(key);
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
     });
   } catch (err) {
     console.warn('Tasky: local snapshot clear failed', err);

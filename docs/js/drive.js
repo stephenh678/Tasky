@@ -1,7 +1,7 @@
 ﻿// Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken, invalidateAccessToken } from './auth.js?v=33';
-import { TASKY_FOLDER_NAME } from './config.js?v=33';
+import { getAccessToken, invalidateAccessToken } from './auth.js?v=34';
+import { TASKY_FOLDER_NAME } from './config.js?v=34';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -151,7 +151,7 @@ async function ensureCandidateFolderIds() {
   const { taskyFolderId, dataFileName } = syncContext;
   if (!taskyFolderId || !dataFileName) return [];
   if (!candidateFolderIdsPromise) {
-    candidateFolderIdsPromise = (async () => {
+    const pending = (async () => {
       // ResolveMediaContainerFolderIdAsync derives the container name from
       // Path.GetFileName(path).ToLowerInvariant() - the container for the default "Tasky.tasky"
       // is literally "tasky Attachments" (lowercase), and Drive's name= query is case-sensitive,
@@ -168,6 +168,12 @@ async function ensureCandidateFolderIds() {
       console.info('Tasky: attachment search folders resolved', { taskyFolderId, dataFileName, containerId, candidateFolderIds: ids });
       return ids;
     })();
+    candidateFolderIdsPromise = pending;
+    // A transient failure must not be cached for the rest of the session (same rule as
+    // snapshot.js's openDb) - let the next attachment lookup try again.
+    pending.catch(() => {
+      if (candidateFolderIdsPromise === pending) candidateFolderIdsPromise = null;
+    });
   }
   return candidateFolderIdsPromise;
 }
@@ -223,7 +229,7 @@ async function ensureAttachmentsWriteFolderId() {
   const { taskyFolderId, dataFileName } = syncContext;
   if (!taskyFolderId || !dataFileName) throw new Error('Not signed in yet.');
   if (!uploadFolderIdPromise) {
-    uploadFolderIdPromise = (async () => {
+    const pending = (async () => {
       // Prefer an existing legacy flat "Attachments" folder if this account already has one, so
       // a web-added photo lands wherever desktop already expects this file's attachments (see
       // ensureCandidateFolderIds above - there's no way to know which layout an account uses
@@ -232,8 +238,16 @@ async function ensureAttachmentsWriteFolderId() {
       const legacy = await findFolderByName('Attachments', taskyFolderId);
       if (legacy) return legacy;
       const containerId = await getOrCreateFolder(`${fileStem(dataFileName.toLowerCase())} Attachments`, taskyFolderId);
-      return getOrCreateFolder('Attachments', containerId);
+      const folderId = await getOrCreateFolder('Attachments', containerId);
+      // These folders may have just been created - a candidate list resolved before they existed
+      // (empty, on a new account) would never find what's about to be uploaded into them.
+      candidateFolderIdsPromise = null;
+      return folderId;
     })();
+    uploadFolderIdPromise = pending;
+    pending.catch(() => {
+      if (uploadFolderIdPromise === pending) uploadFolderIdPromise = null;
+    });
   }
   return uploadFolderIdPromise;
 }

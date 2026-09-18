@@ -897,6 +897,40 @@ describe('deduplicateTombstones with malformed records', () => {
     const result = deduplicateTombstones([null, {}, { TaskId: 't2' }, { Timestamp: good.Timestamp }, good]);
     assert.deepEqual(result.map((t) => t.TaskId), ['t1']);
   });
+
+  test('skips a record whose Timestamp is present but unparseable', () => {
+    const good = newTaskSyncRecord('t1');
+    const result = deduplicateTombstones([{ TaskId: 't2', Timestamp: 'garbage' }, good]);
+    assert.deepEqual(result.map((t) => t.TaskId), ['t1']);
+  });
+});
+
+// --- Desktop parity regressions found in review --------------------------------------------------
+
+describe('nextDueDate month-end clamping (DateTime.AddMonths / AddYears)', () => {
+  test('Jan 31 + 1 month is the last day of February, not March 3', () => {
+    assert.deepEqual(nextDueDate(new Date(2026, 0, 31, 17, 0), RecurrenceRule.Monthly, 1), new Date(2026, 1, 28, 17, 0));
+  });
+
+  test('Feb 29 + 1 year is Feb 28', () => {
+    assert.deepEqual(nextDueDate(new Date(2028, 1, 29), RecurrenceRule.Yearly, 1), new Date(2029, 1, 28));
+  });
+});
+
+describe('parseQuickAdd non-ASCII tags (.NET \\w is Unicode)', () => {
+  test('#café is one tag and leaves nothing behind in the title', () => {
+    const parsed = parseQuickAdd('Buy milk #café');
+    assert.deepEqual(parsed.tags, ['café']);
+    assert.equal(parsed.text, 'Buy milk');
+  });
+});
+
+describe('htmlToXaml literal braces', () => {
+  test('a run starting with "{" gets the XAML "{}" escape and round-trips', () => {
+    const xaml = htmlToXaml('<p>{TODO} call</p>');
+    assert.ok(xaml.includes('<Run Text="{}{TODO} call"/>'), xaml);
+    assert.equal(xamlToHtml(xaml), '<p>{TODO} call</p>');
+  });
 });
 
 // --- taskHasLink / taskHasChecklist (mirror Models/TaskMediaHelper.cs) ---------------------------

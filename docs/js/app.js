@@ -8,6 +8,9 @@ import {
   formatDotNetDate,
   nowDotNet,
   newTaskItem,
+  newAppState,
+  newNoteBlock,
+  newChecklistItem,
   newTaskSyncRecord,
   nextSortOrder,
   reorderTargetIndex,
@@ -520,77 +523,59 @@ const SECTIONS = [
 
 let isGuestMode = false;
 
+// Sample data for Local Test Mode. Built with the real model factories (newTaskItem /
+// newNoteBlock / formatDotNetDate) rather than hand-written object literals: the literals this
+// replaced used a schema that does not exist anywhere else in Tasky - Title/IsCompleted/DueTime/
+// CreatedDate/ModifiedDate, string block Types, and Content/Checked on the blocks, where the real
+// model has Text/IsDone/IsClosed/CreatedAt/ModifiedAt, numeric NoteBlockType and ChecklistItems.
+// Every seeded task therefore rendered as "(untitled)" in the list and literally "undefined" in
+// the editor title, which made guest mode useless for exactly the local testing it exists for.
+// Going through the factories also means this data can never drift from the schema again.
 function initGuestSampleTasks() {
-  const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
-  const tomorrow = new Date(now.getTime() + 86400000);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-
-  appState = {
-    Tasks: [
-      {
-        Id: crypto.randomUUID(),
-        Title: 'Welcome to Tasky! Tap this task to explore the modern UI',
-        IsCompleted: false,
-        Priority: 2,
-        DueDate: todayStr,
-        DueTime: '10:00',
-        Tags: ['welcome', 'ui-modern'],
-        CreatedDate: new Date().toISOString(),
-        ModifiedDate: new Date().toISOString(),
-        Body: [
-          { Id: crypto.randomUUID(), Type: 'Text', Content: 'Tasky Desktop and Web/Mobile have been modernized with frosted glass headers, elevated task cards, and modern theme palettes.' },
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Test task creation with + button', Checked: true },
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Test mobile responsive tab bar', Checked: false },
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Switch between Light and Dark themes', Checked: false }
-        ]
-      },
-      {
-        Id: crypto.randomUUID(),
-        Title: 'Quarterly Project Plan & Review',
-        IsCompleted: false,
-        Priority: 1,
-        DueDate: tomorrowStr,
-        DueTime: '14:30',
-        Tags: ['work', 'planning'],
-        CreatedDate: new Date().toISOString(),
-        ModifiedDate: new Date().toISOString(),
-        Body: [
-          { Id: crypto.randomUUID(), Type: 'Text', Content: 'Draft design spec and coordinate with team members.' }
-        ]
-      },
-      {
-        Id: crypto.randomUUID(),
-        Title: 'Weekly grocery list',
-        IsCompleted: false,
-        Priority: 0,
-        DueDate: null,
-        DueTime: null,
-        Tags: ['personal'],
-        CreatedDate: new Date().toISOString(),
-        ModifiedDate: new Date().toISOString(),
-        Body: [
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Almond milk', Checked: true },
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Fresh fruit & berries', Checked: false },
-          { Id: crypto.randomUUID(), Type: 'Checklist', Content: 'Coffee beans', Checked: false }
-        ]
-      },
-      {
-        Id: crypto.randomUUID(),
-        Title: 'Reviewed Tasky v1.2 release notes',
-        IsCompleted: true,
-        Priority: 0,
-        DueDate: todayStr,
-        Tags: ['release'],
-        CreatedDate: new Date().toISOString(),
-        ModifiedDate: new Date().toISOString(),
-        Body: []
-      }
-    ],
-    DeletedTasks: [],
-    SavedViews: [],
-    DeletedSavedViewIds: []
+  const today = new Date();
+  const tomorrow = new Date(today.getTime() + 86400000);
+  const at = (date, hours, minutes) => {
+    const d = new Date(date);
+    d.setHours(hours, minutes, 0, 0);
+    return formatDotNetDate(d);
   };
+
+  const welcome = newTaskItem({ text: 'Welcome to Tasky! Open this task to explore the modern UI' });
+  welcome.Priority = TaskPriority.High;
+  welcome.DueDate = at(today, 10, 0);
+  welcome.Tags = ['welcome', 'ui-modern'];
+  welcome.Body[0].Text = 'Tasky Desktop and Web/Mobile share one file format, one merge and one feature set.';
+  welcome.Body.push(newNoteBlock(NoteBlockType.Checklist, {
+    checklistItems: [
+      newChecklistItem({ text: 'Create a task with the + button', isChecked: true }),
+      newChecklistItem({ text: 'Try the mobile tab bar' }),
+      newChecklistItem({ text: 'Switch between Light and Dark themes' }),
+    ],
+  }));
+
+  const plan = newTaskItem({ text: 'Quarterly project plan & review' });
+  plan.Priority = TaskPriority.Medium;
+  plan.DueDate = at(tomorrow, 14, 30);
+  plan.Tags = ['work', 'planning'];
+  plan.Body[0].Text = 'Draft the design spec and coordinate with the team.';
+
+  const groceries = newTaskItem({ text: 'Weekly grocery list' });
+  groceries.Tags = ['personal'];
+  groceries.Body.push(newNoteBlock(NoteBlockType.Checklist, {
+    checklistItems: [
+      newChecklistItem({ text: 'Almond milk', isChecked: true }),
+      newChecklistItem({ text: 'Fresh fruit & berries' }),
+      newChecklistItem({ text: 'Coffee beans' }),
+    ],
+  }));
+
+  const released = newTaskItem({ text: 'Read the Tasky v1.2 release notes' });
+  released.IsDone = true;
+  released.DueDate = at(today, 9, 0);
+  released.Tags = ['release'];
+
+  appState = newAppState();
+  for (const task of [welcome, plan, groceries, released]) addNewTask(task);
 }
 
 async function startGuestMode() {

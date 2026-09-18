@@ -180,3 +180,63 @@ Ordered by impact.
 4. **B9, B10, B11, B12, B14, B15, B18–B26** - one polish batch.
 5. **U1 + U2** - offline snapshot and place-restore; the biggest mobile experience change and the one that makes the PWA feel like an app.
 6. **U3–U8** - mobile navigation/date/photo/share improvements.
+
+
+---
+
+## 6. Follow-up pass (2026-09-18): recommendations and new features
+
+Reviewed live in guest mode at desktop and 375 px phone widths. Everything below is implemented
+(cache-bust v31 → v32; 172 parity tests and 350 desktop tests passing).
+
+**Bugs**
+- Web never pulled other devices' changes unless it had its own edit to save → `pullRemoteChanges`
+  (app.js): every 3 min while visible, on returning to the app, and on pull-to-refresh. One
+  `files.get?fields=modifiedTime` request; downloads + merges only when the file changed since this
+  device last read or wrote it (`uploadFileText` now returns `modifiedTime`).
+- Long checklist items were cut off on phones (single-line `<input>`) → auto-growing `<textarea>`,
+  re-fitted by a ResizeObserver.
+- "Loaded N task(s) (Local Mode)" / "Saved locally" were missing from `QUIET_STATUS_RE`, so they
+  showed in the phone's bottom bar.
+- Search placeholder was truncated on phones → "Search tasks" (operators stay in the tooltip / F1).
+- Status text had no live region → `role="status" aria-live="polite"`.
+- **Web-edited notes lost their formatting on desktop.** The regex `htmlToXaml` emitted bare text
+  directly inside `<FlowDocument>` (Chrome's "line<div>line</div>" after Enter), passed `&nbsp;`
+  through and kept unknown tags - all rejected by `XamlReader.Parse`. Replaced by a small tolerant
+  HTML tree parser (model.js `parseHtmlFragment`) that always emits well-formed XAML (escaped
+  `<Run Text=…/>` runs, every inline inside a Paragraph). `xamlToHtml` output is now allow-list
+  sanitised. Desktop tests (`NoteFormattingTests.WebEditorXaml_*`) parse the exact shapes the web
+  emits.
+
+**UI**
+- Phone task view: metadata pills are one horizontally scrolling row; tags moved to their own row.
+- Remove (×) buttons hidden until hover/focus with a mouse; on touch only while editing that text
+  or checklist item (photos/files/links keep theirs).
+- "+ Text / + Checklist / …" row replaced by one labelled **Insert** menu; `/` in a Text block opens
+  the same menu (with type-to-filter) and inserts at that spot.
+- Phone list: section title + count header that shrinks on scroll; the duplicate inline add row is
+  hidden (the floating + remains).
+- Empty Views sidebar shows a hint instead of a bare heading.
+- Command palette (`Ctrl+K`).
+
+**Features**
+- Plain-language quick add on both platforms (model.js `parseNaturalTail` / QuickEntryParser.cs
+  `ParseNaturalTail`, shared test vectors): trailing `tomorrow 3pm`, `next fri`, `in 2 weeks`,
+  `tonight`, `every monday`, `every 2 weeks`, `daily` … Only the end of the title is read.
+- Rich text on the web: formatting bar (B/I/U, lists, link, clear), always-rich text blocks, and
+  desktop's inline checklist boxes round-trip as tappable ☐/☑ tokens.
+- **Upcoming** section (sidebar + tab bar: Today · Upcoming · All · More): Overdue / Today /
+  Tomorrow / Next 7 days / Later (`agendaGroup`).
+- Quick reschedule: "Move all to today" (Today banner, Upcoming's Overdue heading) and
+  "Move to Tomorrow" (task ⋮), each one undo step.
+- Reminders (Settings → Reminders): notifications while open, same due rule as desktop
+  (`isReminderDue`), once per due date; tapping one opens the task (sw.js `notificationclick`).
+- **Add to Calendar** (task ⋮): single-task .ics with RRULE and an alarm (`taskToICalendar`).
+- Android share target (manifest `share_target` + sw.js `receiveShare`): shared text/links/photos
+  become a task. App-icon badge (overdue + due today) and Today/Upcoming home-screen shortcuts.
+- Checklist drag-to-reorder by grip handle; short vibration on tick (Android).
+
+**Not done, by design**
+- True push reminders when Tasky isn't running need a server (Web Push + a scheduled Cloud
+  Function); Add to Calendar covers that case for now.
+- Indented checklist sub-items would need a new field in the shared `.tasky` format.

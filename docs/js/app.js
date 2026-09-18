@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=31';
-import * as drive from './drive.js?v=31';
+﻿import * as auth from './auth.js?v=33';
+import * as drive from './drive.js?v=33';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -20,18 +20,23 @@ import {
   blockHasInlineFile,
   collectTaskFileNames,
   parseQuickAdd,
+  describeRecurrence,
   normalizeTask,
   taskHasLink,
   taskHasChecklist,
   checklistProgress,
-} from './model.js?v=31';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=31';
-import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=31';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles } from './editor.js?v=31';
-import { icon } from './icons.js?v=31';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=31';
-import { storage } from './storage.js?v=31';
-import { openDialog, trapFocus } from './dialog.js?v=31';
+  agendaGroup,
+  AGENDA_GROUP_LABELS,
+  isReminderDue,
+  taskToICalendar,
+} from './model.js?v=33';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=33';
+import { readSnapshot, writeSnapshot, clearSnapshot } from './snapshot.js?v=33';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=33';
+import { icon } from './icons.js?v=33';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=33';
+import { storage } from './storage.js?v=33';
+import { openDialog, trapFocus } from './dialog.js?v=33';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -283,7 +288,7 @@ function friendlyErrorMessage(prefix, err) {
   return `${prefix}: ${describeError(err)}`;
 }
 
-const SECTION_ICONS = { today: 'calendar', tomorrow: 'sun', all: 'list', someday: 'clock', recurring: 'repeat', done: 'check', trash: 'trash' };
+const SECTION_ICONS = { today: 'calendar', tomorrow: 'sun', upcoming: 'agenda', all: 'list', someday: 'clock', recurring: 'repeat', done: 'check', trash: 'trash' };
 navBack.innerHTML = icon('back');
 sidebarDrawerBtn.innerHTML = icon('menu');
 menuBtn.innerHTML = icon('menu');
@@ -372,6 +377,10 @@ let selectedIds = new Set();
 
 let dirty = false;
 let saving = false;
+// Drive modifiedTime of the data file as of this device's last download or upload - see
+// pullRemoteChanges, which skips the download entirely while it still matches.
+let lastKnownRemoteModifiedTime = null;
+let lastPullAt = 0;
 // True while the app is running on the local IndexedDB copy (snapshot.js) because Drive couldn't
 // be reached at boot - cleared by the first successful sync. See loadFromDrive.
 let bootedFromSnapshot = false;
@@ -402,7 +411,7 @@ let statusHideTimer = null;
 // state as an icon, so on phones - where the status text lives in a fixed bottom bar - these
 // stay hidden (styles.css .save-status-quiet) instead of flipping on every keystroke; errors
 // and reconnect prompts still show there in full.
-const QUIET_STATUS_RE = /^(Unsaved changes…|Saving…|Syncing…|Saved|Loaded \d+ task\(s\))$/;
+const QUIET_STATUS_RE = /^(Unsaved changes…|Saving…|Syncing…|Saved|Saved locally|Loaded \d+ task\(s\)( \(Local Mode\))?)$/;
 
 function setStatus(text, { autoHide = false } = {}) {
   clearTimeout(statusHideTimer);
@@ -514,6 +523,9 @@ undoToastBtn.addEventListener('click', popUndo);
 const SECTIONS = [
   { kind: 'today', label: 'Today' },
   { kind: 'tomorrow', label: 'Tomorrow' },
+  // Web/mobile only (desktop's month grid is its calendar): every open task with a due date,
+  // soonest first, grouped Overdue / Today / Tomorrow / Next 7 days / Later.
+  { kind: 'upcoming', label: 'Upcoming' },
   { kind: 'all', label: 'All Tasks' },
   { kind: 'someday', label: 'Someday' },
   { kind: 'recurring', label: 'Recurring' },
@@ -607,6 +619,9 @@ async function startGuestMode() {
   renderList();
   scheduleSnapshot();
   restorePlace();
+  handleLaunchSection();
+  await handleIncomingShare();
+  checkReminders();
 }
 
 // --- Boot: first check whether this load is Google redirecting back from sign-in, then fall
@@ -836,6 +851,7 @@ function closeOpenPopups() {
   closeTagSuggest();
   quickAddPopup.classList.add('hidden');
   if (!onboardingModal.classList.contains('hidden')) closeOnboarding();
+  if (!paletteEl.classList.contains('hidden')) closeCommandPalette();
 }
 function closeDropdowns({ except }) {
   for (const d of [menuDropdown, accountDropdown, settingsDropdown, aboutDropdown, editorMoreDropdown]) {
@@ -1138,6 +1154,9 @@ async function onSignedIn() {
   }
 
   await loadFromDrive();
+  handleLaunchSection();
+  await handleIncomingShare();
+  checkReminders();
 }
 
 async function loadFromDrive() {
@@ -1182,6 +1201,7 @@ async function loadFromDrive() {
     if (match) {
       currentFileId = match.id;
       currentFileName = match.name;
+      lastKnownRemoteModifiedTime = match.modifiedTime ?? null;
       drive.setSyncContext(taskyFolderId, match.name);
       const text = await drive.downloadFileText(match.id);
       appState = JSON.parse(text);
@@ -1292,6 +1312,8 @@ function tasksForSection(section) {
         return isSameDate(parseDotNetDate(t.DueDate), tomorrow);
       });
     }
+    case 'upcoming':
+      return appState.Tasks.filter((t) => !t.IsClosed && !t.IsDone && t.DueDate);
     // Mirrors SidebarFilterKind.Someday: open tasks with no due date at all - the backlog you
     // haven't committed to a day yet.
     case 'someday':
@@ -1482,7 +1504,12 @@ function allTags() {
 }
 
 function currentTasks() {
-  return sortTasks(applySearch(applyQuickFilter(tasksForSection(currentSection))));
+  const tasks = applySearch(applyQuickFilter(tasksForSection(currentSection)));
+  if (currentSection.kind === 'upcoming') {
+    // An agenda reads top to bottom in time, whatever the list's own sort setting is.
+    return [...tasks].sort((a, b) => parseDotNetDate(a.DueDate) - parseDotNetDate(b.DueDate));
+  }
+  return sortTasks(tasks);
 }
 
 // --- Saved smart filters (ROADMAP.md #82, synced via Drive as of #148) ------
@@ -1687,7 +1714,7 @@ function taskIdFromHash() {
 function sectionIsAvailable(section) {
   if (!section || typeof section.kind !== 'string') return false;
   switch (section.kind) {
-    case 'today': case 'tomorrow': case 'all': case 'someday': case 'recurring': case 'done': case 'trash':
+    case 'today': case 'tomorrow': case 'upcoming': case 'all': case 'someday': case 'recurring': case 'done': case 'trash':
       return true;
     case 'tag':
       return typeof section.tag === 'string' && allTags().includes(section.tag.toLowerCase());
@@ -1843,10 +1870,15 @@ function scheduleSaveRetry() {
 document.addEventListener('visibilitychange', () => {
   // The local copy first, unconditionally: a hidden PWA can be killed at any moment, and a
   // snapshot write is cheap, local and far more likely to complete than the Drive round-trip.
-  if (document.visibilityState === 'hidden') flushSnapshot();
-  if (!dirty) return;
-  clearTimeout(saveTimer);
-  triggerSave();
+  if (document.visibilityState === 'hidden') {
+    flushSnapshot();
+    if (!dirty) return;
+    clearTimeout(saveTimer);
+    triggerSave();
+    return;
+  }
+  // Back in the foreground: flush anything still dirty, otherwise catch up with other devices.
+  pullRemoteChanges();
 });
 
 // Desktop-browser backstop for the same problem visibilitychange covers on mobile: closing or
@@ -1891,6 +1923,7 @@ async function mergeFromRemote() {
     remoteState.DeletedSavedViewIds ??= [];
     remoteState.TasksOrderModifiedAt ??= null;
     const storedLastSync = storage.get(LAST_SYNCED_KEY);
+    lastKnownRemoteModifiedTime = meta?.modifiedTime ?? null;
     const { conflicted, updatedIds, removedIds } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
     mergeSavedViews(appState, remoteState);
     autoEmptyTrashIfNeeded();
@@ -2077,11 +2110,115 @@ async function saveToDrive() {
 
   setSyncProgress(75);
   const json = JSON.stringify(appState, null, 2);
-  const newId = await drive.uploadFileText(currentFileId, currentFileName, taskyFolderId, json);
-  currentFileId = newId;
+  const uploaded = await drive.uploadFileText(currentFileId, currentFileName, taskyFolderId, json);
+  currentFileId = uploaded.id;
+  lastKnownRemoteModifiedTime = uploaded.modifiedTime;
   noRemoteFileYet = false;
   return conflicted;
 }
+
+// --- Background pull -----------------------------------------------------------
+// Everything above only runs when this device has something to save (or Sync Now is tapped), so
+// a phone left open on the Today list never saw what another device did until the user edited
+// something. Desktop polls every 3 minutes (MainViewModel._idleSyncTimer); this is the web
+// counterpart, plus the two moments a phone most needs it: coming back to the app, and
+// pull-to-refresh. It's a pull, not a save: one cheap metadata request, and a download+merge only
+// when the file actually changed since this device last saw it - never an upload of an unchanged
+// file, which would just stack up Drive revisions.
+const IDLE_PULL_INTERVAL_MS = 3 * 60 * 1000;
+// Returning to the app fires visibilitychange; switching away and back within a few seconds
+// shouldn't cost a Drive round-trip every time.
+const MIN_PULL_GAP_MS = 20 * 1000;
+
+async function pullRemoteChanges({ force = false } = {}) {
+  if (isGuestMode || saving || !navigator.onLine || loadError) return false;
+  if (!force && Date.now() - lastPullAt < MIN_PULL_GAP_MS) return false;
+  // Local edits waiting to go up: a normal save already downloads and merges first.
+  if (dirty) {
+    clearTimeout(saveTimer);
+    await triggerSave();
+    return true;
+  }
+  if (!currentFileId) return false;
+  lastPullAt = Date.now();
+  let meta;
+  try {
+    meta = await drive.getFileMetadata(currentFileId);
+  } catch {
+    return false; // offline/expired token - the normal save path reports those when it matters
+  }
+  if (meta?.modifiedTime && meta.modifiedTime === lastKnownRemoteModifiedTime) {
+    setLastSynced(new Date());
+    return false;
+  }
+  saving = true;
+  setSyncState('saving');
+  try {
+    const { modifiedTime } = await mergeFromRemote();
+    lastKnownRemoteModifiedTime = modifiedTime ?? meta?.modifiedTime ?? null;
+    setLastSynced(new Date());
+    scheduleSnapshot();
+    if (mergeNotice) {
+      setStatus(mergeNotice);
+      mergeNotice = null;
+    }
+  } finally {
+    saving = false;
+    setSyncState(dirty ? 'pending' : 'synced');
+    // autoEmptyTrashIfNeeded inside the merge can mark the state dirty - let that go up normally.
+    if (dirty) scheduleSaveRetry();
+  }
+  return true;
+}
+
+setInterval(() => {
+  if (document.visibilityState === 'visible') pullRemoteChanges();
+}, IDLE_PULL_INTERVAL_MS);
+
+// Pull-to-refresh on the task list (touch only) - the gesture every phone user already tries when
+// they suspect a list is stale. Only arms when the list is scrolled to the very top, so it never
+// fights a normal scroll, and hands off to pullRemoteChanges({ force: true }) so it always checks.
+const PULL_TRIGGER_PX = 70;
+const pullIndicator = document.createElement('div');
+pullIndicator.className = 'pull-indicator';
+pullIndicator.setAttribute('aria-hidden', 'true');
+pullIndicator.innerHTML = icon('sync');
+taskListEl.before(pullIndicator);
+let pullStartY = null;
+let pullDistance = 0;
+taskListEl.addEventListener('touchstart', (e) => {
+  if (taskListEl.scrollTop > 0 || selectionMode || e.touches.length !== 1) return;
+  pullStartY = e.touches[0].clientY;
+  pullDistance = 0;
+}, { passive: true });
+taskListEl.addEventListener('touchmove', (e) => {
+  if (pullStartY === null) return;
+  pullDistance = Math.max(0, e.touches[0].clientY - pullStartY);
+  if (taskListEl.scrollTop > 0) pullDistance = 0;
+  const shown = Math.min(pullDistance, PULL_TRIGGER_PX * 1.4);
+  pullIndicator.style.setProperty('--pull', `${shown}px`);
+  pullIndicator.classList.toggle('visible', shown > 8);
+  pullIndicator.classList.toggle('armed', pullDistance >= PULL_TRIGGER_PX);
+}, { passive: true });
+taskListEl.addEventListener('touchend', async () => {
+  if (pullStartY === null) return;
+  const armed = pullDistance >= PULL_TRIGGER_PX;
+  pullStartY = null;
+  pullDistance = 0;
+  if (!armed) {
+    pullIndicator.classList.remove('visible', 'armed');
+    return;
+  }
+  pullIndicator.classList.add('refreshing');
+  haptic(10);
+  try {
+    if (isGuestMode) renderList();
+    else await pullRemoteChanges({ force: true });
+  } finally {
+    pullIndicator.classList.remove('visible', 'armed', 'refreshing');
+    pullIndicator.style.removeProperty('--pull');
+  }
+});
 
 // A task created while looking at a tag section or Today used to bounce the list straight to
 // All Tasks. Instead it now inherits the section's own scope - the tag, or a due date of today
@@ -2188,6 +2325,8 @@ function createQuickTask(raw) {
   const parsed = parseQuickAdd(raw);
   const task = newTaskItem({ text: parsed.text || raw.trim() });
   task.DueDate = parsed.dueDate;
+  task.Recurrence = parsed.recurrence;
+  task.RecurrenceInterval = parsed.recurrenceInterval;
   for (const tag of parsed.tags) {
     const lower = tag.toLowerCase(); // matches addTag()'s own normalization - tags are always lowercase
     if (!task.Tags.includes(lower)) task.Tags.push(lower);
@@ -2214,6 +2353,8 @@ function createDemoTask(title, quickAddTokens) {
   if (quickAddTokens) {
     const parsed = parseQuickAdd(quickAddTokens);
     task.DueDate = parsed.dueDate;
+    task.Recurrence = parsed.recurrence;
+    task.RecurrenceInterval = parsed.recurrenceInterval;
     for (const tag of parsed.tags) {
       const lower = tag.toLowerCase();
       if (!task.Tags.includes(lower)) task.Tags.push(lower);
@@ -2583,7 +2724,7 @@ function sectionCounts() {
   const today = new Date();
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const counts = { today: 0, tomorrow: 0, all: 0, someday: 0, recurring: 0, done: 0, trash: 0 };
+  const counts = { today: 0, tomorrow: 0, upcoming: 0, all: 0, someday: 0, recurring: 0, done: 0, trash: 0 };
   for (const t of appState.Tasks) {
     if (t.IsClosed) {
       counts.trash++;
@@ -2601,7 +2742,8 @@ function sectionCounts() {
     // Deliberately outside the pinned/else chain above: Tomorrow and Someday key off the due date
     // alone (matching their tasksForSection predicates), where Today also sweeps in pinned tasks.
     if (!due) counts.someday++;
-    else if (isSameDate(due, tomorrow)) counts.tomorrow++;
+    else counts.upcoming++;
+    if (due && isSameDate(due, tomorrow)) counts.tomorrow++;
   }
   return counts;
 }
@@ -2645,6 +2787,12 @@ function renderSidebar() {
   }
 
   savedViewsList.innerHTML = '';
+  if (appState.SavedViews.length === 0) {
+    const hint = document.createElement('li');
+    hint.className = 'saved-views-hint';
+    hint.textContent = 'Search or filter, then "Save current search as view" under Sort & Filter.';
+    savedViewsList.appendChild(hint);
+  }
   for (const view of appState.SavedViews) {
     const li = document.createElement('li');
     // Same split as the task rows: the label is the button and the delete control its sibling -
@@ -2677,9 +2825,10 @@ function renderMobileTabbar() {
   mobileTabbar.innerHTML = '';
   const onSidebarView = appEl.dataset.view === 'sidebar';
 
-  // Today · All · Completed · More. Today is what a phone opens most; Recurring and Trash are
-  // rare enough to live under More (with Sections & Tags, Dashboard, Settings) instead.
-  const TABBAR_KINDS = ['today', 'all', 'done'];
+  // Today · Upcoming · All · More. Today is what a phone opens most and Upcoming is the phone's
+  // calendar; Completed, Recurring and Trash live under More (with Sections & Tags, Dashboard,
+  // Settings) instead.
+  const TABBAR_KINDS = ['today', 'upcoming', 'all'];
   for (const section of SECTIONS.filter((s) => TABBAR_KINDS.includes(s.kind))) {
     const btn = document.createElement('button');
     btn.className = 'mobile-tab';
@@ -2890,7 +3039,7 @@ function bindReorderDrag(li, handle, task) {
     // finger, so the row being hovered has to be resolved by hit-testing the point itself.
     const rowUnder = (clientX, clientY) => {
       const el = document.elementFromPoint(clientX, clientY);
-      const row = el?.closest?.('#task-list li');
+      const row = el?.closest?.('#task-list li:not(.agenda-heading)');
       return row && row !== li ? row : null;
     };
 
@@ -3134,7 +3283,18 @@ function renderList() {
   // the last render and has each still-wanted task's ID removed below the loop; whatever's left in
   // it afterward is a row no longer in view and gets torn down.
   const remainingIds = new Set(taskRowRefs.keys());
+  for (const heading of taskListEl.querySelectorAll('.agenda-heading')) heading.remove();
+  const agenda = currentSection.kind === 'upcoming';
+  const now = new Date();
+  let lastGroup = null;
   for (const task of tasks) {
+    if (agenda) {
+      const group = agendaGroup(parseDotNetDate(task.DueDate), now);
+      if (group !== lastGroup) {
+        taskListEl.appendChild(buildAgendaHeading(group));
+        lastGroup = group;
+      }
+    }
     let refs = taskRowRefs.get(task.Id);
     if (!refs) refs = buildTaskRow(task);
     updateTaskRow(refs, task, currentSection.kind);
@@ -3146,7 +3306,107 @@ function renderList() {
     taskRowRefs.delete(staleId);
   }
 
+  updateListTitle(tasks.length);
+  updateRescheduleBar();
   updateEmptyDashboard();
+  updateAppBadge();
+}
+
+function buildAgendaHeading(group) {
+  const li = document.createElement('li');
+  li.className = `agenda-heading ${group}`;
+  li.setAttribute('role', 'presentation');
+  const label = document.createElement('span');
+  label.textContent = AGENDA_GROUP_LABELS[group];
+  li.appendChild(label);
+  if (group === 'overdue') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-ghost small';
+    btn.textContent = 'Move to today';
+    btn.addEventListener('click', () => rescheduleOverdueToToday());
+    li.appendChild(btn);
+  }
+  return li;
+}
+
+// The section's name and count above the list on phones (see .list-title in styles.css).
+const listTitleEl = el('list-title');
+const listTitleText = el('list-title-text');
+const listTitleCount = el('list-title-count');
+function sectionLabel(section) {
+  if (section.kind === 'tag') return `#${section.tag}`;
+  if (section.kind === 'view') return appState.SavedViews.find((v) => v.Id === section.viewId)?.Label ?? 'View';
+  return SECTIONS.find((s) => s.kind === section.kind)?.label ?? '';
+}
+function updateListTitle(count) {
+  listTitleText.textContent = sectionLabel(currentSection);
+  listTitleCount.textContent = String(count);
+}
+taskListEl.addEventListener('scroll', () => {
+  listTitleEl.classList.toggle('scrolled', taskListEl.scrollTop > 8);
+}, { passive: true });
+
+// --- Quick reschedule ---------------------------------------------------------------------------
+// Overdue tasks pile up, and moving them one at a time is the chore that gets skipped. Today and
+// Upcoming offer "Move all to today" (keeping each task's time of day), and the editor's More
+// menu has "Move to Tomorrow" for a single task. Each is one undo step.
+const rescheduleBar = el('reschedule-bar');
+const rescheduleBarText = el('reschedule-bar-text');
+el('reschedule-overdue-btn').addEventListener('click', () => rescheduleOverdueToToday());
+
+function openOverdueTasks() {
+  return appState.Tasks.filter((t) => !t.IsClosed && !t.IsDone && isTaskOverdue(t));
+}
+
+function updateRescheduleBar() {
+  const overdue = currentSection.kind === 'today' && !selectionMode ? openOverdueTasks().length : 0;
+  rescheduleBar.classList.toggle('hidden', overdue === 0);
+  if (overdue) rescheduleBarText.textContent = `${overdue} overdue task${overdue === 1 ? '' : 's'}`;
+}
+
+function moveDueDate(task, dayOffset) {
+  const due = task.DueDate ? parseDotNetDate(task.DueDate) : null;
+  const target = new Date();
+  target.setDate(target.getDate() + dayOffset);
+  // Keep the task's own time of day; a task that had no due date gets the usual 9 AM.
+  target.setHours(due ? due.getHours() : 9, due ? due.getMinutes() : 0, 0, 0);
+  task.DueDate = formatDotNetDate(target);
+  touch(task);
+}
+
+function rescheduleTasks(tasks, dayOffset, description) {
+  if (tasks.length === 0) return;
+  const previous = tasks.map((t) => ({ task: t, due: t.DueDate }));
+  for (const t of tasks) moveDueDate(t, dayOffset);
+  pushUndo(description, () => {
+    for (const { task, due } of previous) {
+      task.DueDate = due;
+      touch(task);
+    }
+  });
+  haptic(10);
+  markDirty();
+  renderSidebar();
+  renderList();
+  const open = selectedTaskId ? findTask(selectedTaskId) : null;
+  if (open && tasks.includes(open)) renderEditor(open);
+}
+
+function rescheduleOverdueToToday() {
+  const overdue = openOverdueTasks();
+  rescheduleTasks(overdue, 0, `Moved ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} to today`);
+}
+
+// --- App icon badge -----------------------------------------------------------------------------
+// The installed app's icon shows how many tasks are overdue or due today (Badging API: Android,
+// installed PWAs on ChromeOS/Windows/macOS, iOS 16.4+ home-screen apps). Absent elsewhere.
+function updateAppBadge() {
+  if (!('setAppBadge' in navigator)) return;
+  const today = new Date();
+  const count = appState.Tasks.filter((t) => !t.IsClosed && !t.IsDone && t.DueDate
+    && (isSameDate(parseDotNetDate(t.DueDate), today) || isTaskOverdue(t))).length;
+  (count > 0 ? navigator.setAppBadge(count) : navigator.clearAppBadge()).catch(() => {});
 }
 
 // Backs the editor pane's welcome dashboard (shown whenever no task is selected) - refreshed
@@ -3967,6 +4227,8 @@ function updateQuickAddPreview(inputEl, previewEl) {
       : due.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     parts.push(`due ${dueLabel}`);
   }
+  const repeat = describeRecurrence(parsed.recurrence, parsed.recurrenceInterval);
+  if (repeat) parts.push(repeat);
   if (parsed.tags.length > 0) {
     parts.push(parsed.tags.map((t) => `<span class="qa-tag">#${escapeHtml(t)}</span>`).join(' '));
   }
@@ -4115,6 +4377,10 @@ const SHORTCUTS = [
   // picker closing both still need to see it.
   { label: 'Close dialogs and menus', bindings: [{ keys: 'Escape' }], run: () => closeOpenPopups(), allowDefault: true },
   { label: 'Show this help', bindings: [{ keys: 'F1' }, { keys: 'mod+/' }], run: () => openShortcuts() },
+  { label: 'Command palette: jump to a task or run a command', bindings: [{ keys: 'mod+k' }], run: () => openCommandPalette() },
+  // Native contentEditable commands - the formatting bar above the note does the same.
+  { label: 'In a note: bold / italic / underline', bindings: [{ keys: 'mod+b' }, { keys: 'mod+i' }, { keys: 'mod+u' }], displayOnly: true },
+  { label: 'In a note: type / to insert a checklist, photo, link or file', bindings: [{ keys: '/' }], displayOnly: true },
   // Handled by the checklist inputs themselves (editor.js renderChecklistBlock).
   { label: 'In a checklist: new item below / remove an empty item', bindings: [{ keys: 'Enter' }, { keys: 'Backspace' }], displayOnly: true },
   { label: 'In a checklist: move the item up or down', bindings: [{ keys: 'alt+ArrowUp' }, { keys: 'alt+ArrowDown' }], displayOnly: true },
@@ -4664,6 +4930,350 @@ if ('serviceWorker' in navigator) {
 // Every module in the import graph has parsed and evaluated by this point, so whatever
 // js/boot-guard.js (a classic script loaded ahead of this module) was waiting for has happened -
 // tell it, or its "this browser is too old" fallback fires on a perfectly good boot.
+
+// =================================================================================================
+// 2026-09 web/mobile pass: open-a-task helper, reminders, calendar export, command palette, and
+// the Android share target.
+// =================================================================================================
+
+// Opens a task from outside the list (a notification, the command palette, a share): makes sure the
+// current section can show it (same fallback restorePlace uses), then selects it.
+function openTaskById(taskId) {
+  const task = findTask(taskId);
+  if (!task) return false;
+  if (!tasksForSection(currentSection).some((t) => t.Id === task.Id)) {
+    currentSection = task.IsClosed ? { kind: 'trash' } : task.IsDone ? { kind: 'done' } : { kind: 'all' };
+    renderSidebar();
+  }
+  discardUntouchedNewTasks({ keep: task.Id });
+  selectedTaskId = task.Id;
+  renderList();
+  renderEditor(task);
+  showMobileView('editor');
+  return true;
+}
+
+el('more-sheet-completed').addEventListener('click', () => {
+  closeMoreSheet();
+  selectSection({ kind: 'done' });
+});
+
+el('editor-tomorrow-btn').addEventListener('click', () => {
+  closeDropdowns({});
+  const task = findTask(selectedTaskId);
+  if (task) rescheduleTasks([task], 1, `Moved "${task.Text || 'task'}" to tomorrow`);
+});
+
+// "Add to Calendar": the task as an .ics event (with its repeat and, for a timed task, an alarm) via
+// the share sheet on a phone - which offers the Calendar app - or a download elsewhere. Until Tasky
+// has server-side push, this is how a reminder reaches a phone that isn't running Tasky.
+el('editor-calendar-btn').addEventListener('click', () => {
+  closeDropdowns({});
+  const task = findTask(selectedTaskId);
+  if (!task) return;
+  const ics = taskToICalendar(task);
+  if (!ics) {
+    setStatus('Set a due date first, then add it to your calendar', { autoHide: true });
+    return;
+  }
+  const safeName = (task.Text || 'Task').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Task';
+  shareOrDownloadTextFile(`${safeName}.ics`, ics, 'text/calendar');
+});
+
+// --- Reminders ----------------------------------------------------------------------------------
+// Same rule as desktop's ReminderScheduler (isReminderDue): a timed task notifies at its time, a
+// date-only one from the start of its day. Checked every 30 s while Tasky is open (an installed app
+// on Android keeps running briefly in the background too). Each task notifies once per due date - a
+// rescheduled task notifies again at its new time.
+const REMINDERS_KEY = 'tasky-reminders';
+const NOTIFIED_KEY = 'tasky-notified';
+const REMINDER_CHECK_MS = 30 * 1000;
+const settingReminders = el('setting-reminders');
+settingReminders.checked = storage.get(REMINDERS_KEY) === 'true';
+
+function notificationsAvailable() {
+  return 'Notification' in window;
+}
+function remindersOn() {
+  return storage.get(REMINDERS_KEY) === 'true' && notificationsAvailable() && Notification.permission === 'granted';
+}
+function readNotified() {
+  try {
+    return JSON.parse(storage.get(NOTIFIED_KEY) ?? '{}') ?? {};
+  } catch {
+    return {};
+  }
+}
+function writeNotified(map) {
+  const live = new Set(appState.Tasks.map((t) => t.Id));
+  for (const id of Object.keys(map)) if (!live.has(id)) delete map[id];
+  storage.set(NOTIFIED_KEY, JSON.stringify(map));
+}
+
+settingReminders.addEventListener('change', async () => {
+  if (settingReminders.checked) {
+    if (!notificationsAvailable()) {
+      settingReminders.checked = false;
+      setStatus("This browser can't show notifications", { autoHide: true });
+      return;
+    }
+    const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+    if (permission !== 'granted') {
+      settingReminders.checked = false;
+      setStatus("Notifications are blocked for Tasky - allow them in this browser's site settings", { autoHide: true });
+      return;
+    }
+    // Switching reminders on shouldn't fire a notification for every task that's already overdue.
+    const map = readNotified();
+    for (const t of appState.Tasks) if (isReminderDue(t)) map[t.Id] = t.DueDate;
+    writeNotified(map);
+  }
+  storage.set(REMINDERS_KEY, String(settingReminders.checked));
+});
+
+async function showReminder(title, body, taskId) {
+  const options = { body, tag: taskId ? `tasky-${taskId}` : 'tasky-due', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { taskId } };
+  // Android only shows notifications created through the service worker; desktop browsers accept
+  // either, and the page-level one is the fallback when no worker is registered.
+  const registration = await navigator.serviceWorker?.getRegistration?.().catch(() => null);
+  if (registration) {
+    await registration.showNotification(title, options);
+    return;
+  }
+  const n = new Notification(title, options);
+  n.onclick = () => {
+    window.focus();
+    if (taskId) openTaskById(taskId);
+    n.close();
+  };
+}
+
+function checkReminders() {
+  if (!remindersOn() || appState.Tasks.length === 0) return;
+  const notified = readNotified();
+  const due = appState.Tasks.filter((t) => isReminderDue(t) && notified[t.Id] !== t.DueDate);
+  if (due.length === 0) return;
+  for (const t of due) notified[t.Id] = t.DueDate;
+  writeNotified(notified);
+  if (due.length === 1) showReminder('Task due', due[0].Text || '(untitled)', due[0].Id).catch(() => {});
+  else showReminder('Tasks due', `${due.length} tasks are due or overdue.`, null).catch(() => {});
+}
+setInterval(checkReminders, REMINDER_CHECK_MS);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkReminders();
+});
+
+// A tapped notification (sw.js notificationclick) - or a shared item (sw.js share target) - asks the
+// page to act through a message.
+navigator.serviceWorker?.addEventListener?.('message', (e) => {
+  if (e.data?.type === 'open-task' && e.data.taskId) openTaskById(e.data.taskId);
+});
+
+// --- Command palette (Ctrl+K) -----------------------------------------------------------------
+// Type to jump to any task, section, tag or view, or to run an action - the fastest route around
+// the app with a keyboard. Tasks are matched on their title; everything else on its label.
+const paletteEl = el('command-palette');
+const paletteInput = el('command-palette-input');
+const paletteList = el('command-palette-list');
+let paletteItems = [];
+let paletteActive = 0;
+let paletteReturnFocus = null;
+
+function paletteCommands() {
+  const commands = [
+    { label: 'New task', icon: 'plus', hint: 'Ctrl+N', run: () => createTask() },
+    ...SECTIONS.map((s) => ({ label: `Go to ${s.label}`, icon: SECTION_ICONS[s.kind], run: () => selectSection({ kind: s.kind }) })),
+    ...allTags().map((tag) => ({ label: `Tag #${tag}`, icon: 'filter', run: () => selectSection({ kind: 'tag', tag }) })),
+    ...appState.SavedViews.map((v) => ({ label: `View: ${v.Label}`, icon: 'search', run: () => selectSection({ kind: 'view', viewId: v.Id }) })),
+    { label: 'Move overdue tasks to today', icon: 'forward', run: () => rescheduleOverdueToToday() },
+    { label: 'Sync now', icon: 'sync', run: () => syncNowBtn.click() },
+    { label: 'Search tasks', icon: 'search', hint: 'Ctrl+F', run: () => { searchBox.focus(); searchBox.select(); } },
+    { label: 'Switch to light theme', icon: 'sun', run: () => applyTheme('light') },
+    { label: 'Switch to dark theme', icon: 'moon', run: () => applyTheme('dark') },
+    { label: 'Export all tasks (Markdown)', icon: 'share', run: () => exportAllToMarkdown() },
+    { label: 'Keyboard shortcuts', icon: 'info', hint: 'F1', run: () => openShortcuts() },
+  ];
+  const open = selectedTaskId ? findTask(selectedTaskId) : null;
+  if (open) {
+    commands.push(
+      { label: 'Current task: move to tomorrow', icon: 'forward', run: () => rescheduleTasks([open], 1, `Moved "${open.Text || 'task'}" to tomorrow`) },
+      { label: 'Current task: add to calendar', icon: 'calendarPlus', run: () => el('editor-calendar-btn').click() },
+      { label: 'Current task: share', icon: 'share', run: () => shareTask(open) },
+    );
+  }
+  return commands;
+}
+
+function renderPalette() {
+  const q = paletteInput.value.trim().toLowerCase();
+  const commands = paletteCommands().filter((c) => !q || c.label.toLowerCase().includes(q));
+  const tasks = appState.Tasks
+    .filter((t) => !t.IsClosed && (q ? (t.Text || '').toLowerCase().includes(q) : true))
+    .sort((a, b) => (a.IsDone - b.IsDone) || (parseDotNetDate(b.ModifiedAt) - parseDotNetDate(a.ModifiedAt)))
+    .slice(0, q ? 8 : 5)
+    .map((t) => ({ label: t.Text || '(untitled)', icon: t.IsDone ? 'check' : 'list', hint: t.DueDate ? formatDueLabel(parseDotNetDate(t.DueDate)) : '', run: () => openTaskById(t.Id) }));
+  // Typing usually means "find a task"; an empty box usually means "go somewhere".
+  paletteItems = q ? [...tasks, ...commands] : [...commands.slice(0, 9), ...tasks];
+  paletteActive = Math.min(paletteActive, Math.max(0, paletteItems.length - 1));
+  paletteList.innerHTML = '';
+  if (paletteItems.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'command-palette-empty';
+    empty.textContent = 'Nothing matches.';
+    paletteList.appendChild(empty);
+    return;
+  }
+  paletteItems.forEach((item, i) => {
+    const li = document.createElement('li');
+    li.id = `cp-item-${i}`;
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', String(i === paletteActive));
+    li.classList.toggle('active', i === paletteActive);
+    li.innerHTML = icon(item.icon);
+    const label = document.createElement('span');
+    label.className = 'cp-label';
+    label.textContent = item.label;
+    li.appendChild(label);
+    if (item.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'cp-hint';
+      hint.textContent = item.hint;
+      li.appendChild(hint);
+    }
+    li.addEventListener('mousedown', (e) => e.preventDefault());
+    li.addEventListener('click', () => runPaletteItem(i));
+    paletteList.appendChild(li);
+  });
+  paletteInput.setAttribute('aria-activedescendant', `cp-item-${paletteActive}`);
+  document.getElementById(`cp-item-${paletteActive}`)?.scrollIntoView({ block: 'nearest' });
+}
+
+function openCommandPalette() {
+  closeOpenPopups();
+  paletteReturnFocus = document.activeElement;
+  paletteInput.value = '';
+  paletteActive = 0;
+  paletteEl.classList.remove('hidden');
+  renderPalette();
+  paletteInput.focus();
+}
+function closeCommandPalette({ restoreFocus = true } = {}) {
+  if (paletteEl.classList.contains('hidden')) return;
+  paletteEl.classList.add('hidden');
+  if (restoreFocus) paletteReturnFocus?.focus?.();
+}
+function runPaletteItem(i) {
+  const item = paletteItems[i];
+  if (!item) return;
+  closeCommandPalette({ restoreFocus: false });
+  item.run();
+}
+paletteInput.addEventListener('input', () => {
+  paletteActive = 0;
+  renderPalette();
+});
+paletteInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = paletteItems.length || 1;
+    paletteActive = (paletteActive + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    renderPalette();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    runPaletteItem(paletteActive);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeCommandPalette();
+  }
+});
+paletteEl.addEventListener('click', (e) => {
+  if (e.target === paletteEl) closeCommandPalette();
+});
+
+// Home-screen shortcuts (manifest.json) open straight into a section: ./?section=today.
+const launchSection = new URLSearchParams(location.search).get('section');
+function handleLaunchSection() {
+  if (!launchSection) return;
+  history.replaceState(history.state, '', location.pathname + location.hash);
+  if (sectionIsAvailable({ kind: launchSection })) selectSection({ kind: launchSection });
+}
+
+// --- Share target (Android: share a link, text or photo into Tasky) ----------------------------
+// manifest.json registers Tasky as a share target. Text and links arrive as ?share-title/-text/
+// -url on the launch URL; a photo is stashed by sw.js in the "tasky-share" cache and flagged with
+// ?share-files=N. Either way it becomes a new task (title from the shared title/text, the link and
+// any extra text as note blocks, photos as Photo blocks) and opens in the editor.
+const SHARE_CACHE = 'tasky-share';
+
+function takeShareParams() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('share-title') && !params.has('share-text') && !params.has('share-url') && !params.has('share-files')) return null;
+  const share = {
+    title: params.get('share-title') ?? '',
+    text: params.get('share-text') ?? '',
+    url: params.get('share-url') ?? '',
+    files: Number(params.get('share-files')) || 0,
+  };
+  history.replaceState(history.state, '', location.pathname + location.hash);
+  return share;
+}
+
+async function takeSharedFiles(count) {
+  if (!count || !('caches' in window)) return [];
+  try {
+    const cache = await caches.open(SHARE_CACHE);
+    const files = [];
+    for (const request of await cache.keys()) {
+      const response = await cache.match(request);
+      if (!response) continue;
+      const blob = await response.blob();
+      const name = decodeURIComponent(new URL(request.url).pathname.split('/').pop() || 'shared');
+      files.push(new File([blob], name, { type: blob.type }));
+      await cache.delete(request);
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+async function handleIncomingShare() {
+  const share = takeShareParams();
+  if (!share) return;
+  // Some apps put the link in "text" rather than "url".
+  let { title, text, url } = share;
+  if (!url) {
+    const m = /(https?:\/\/\S+)/.exec(text);
+    if (m) {
+      url = m[1];
+      text = text.replace(m[1], '').trim();
+    }
+  }
+  const files = await takeSharedFiles(share.files);
+  const firstLine = (title || text.split('\n')[0] || url || (files.length ? 'Shared photo' : 'Shared item')).trim();
+  const task = newTaskItem({ text: firstLine.slice(0, 200) });
+  const rest = title ? text : text.split('\n').slice(1).join('\n');
+  if (rest.trim()) task.Body[0].Text = rest.trim();
+  if (url) task.Body.push(newNoteBlock(NoteBlockType.Link, { url, linkLabel: title || url }));
+  adoptSectionScope(task);
+  addNewTask(task);
+  markDirty();
+  settleSectionAfterCreate(task);
+  renderSidebar();
+  openTaskById(task.Id);
+  const onChange = () => {
+    markDirty();
+    const open = findTask(selectedTaskId);
+    if (open) renderEditor(open);
+  };
+  for (const file of files) {
+    if (file.type.startsWith('image/')) await handlePhotoPick(task, file, onChange);
+    else await handleFilePick(task, file, onChange);
+  }
+  setStatus('Added from share', { autoHide: true });
+}
+
 window.__taskyBootGuard?.dismiss();
 
 boot();

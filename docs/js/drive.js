@@ -1,7 +1,7 @@
 ﻿// Thin Google Drive REST v3 layer, called directly via fetch (no client library) - mirrors what
 // Tasky/Services/GoogleDriveService.cs does for the desktop app, scoped to what the web app needs.
-import { getAccessToken, invalidateAccessToken } from './auth.js?v=31';
-import { TASKY_FOLDER_NAME } from './config.js?v=31';
+import { getAccessToken, invalidateAccessToken } from './auth.js?v=33';
+import { TASKY_FOLDER_NAME } from './config.js?v=33';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
@@ -255,12 +255,13 @@ export async function uploadAttachmentBlob(fileName, file) {
     body,
   });
   const result = await res.json();
-  return result.id;
+  return { id: result.id, modifiedTime: result.modifiedTime ?? null };
 }
 
 /**
  * Creates or updates a Drive file's content. Pass fileId to update in place, or null to create
- * a new file in folderId. Returns the resulting file ID.
+ * a new file in folderId. Returns { id, modifiedTime } for the resulting file - modifiedTime lets
+ * the background pull (app.js pullRemoteChanges) recognise its own upload and skip re-downloading it.
  */
 export async function uploadFileText(fileId, name, folderId, text) {
   const metadata = fileId ? { name } : { name, parents: [folderId] };
@@ -275,8 +276,8 @@ export async function uploadFileText(fileId, name, folderId, text) {
     `--${boundary}--`;
 
   const url = fileId
-    ? `${UPLOAD_API}/files/${fileId}?uploadType=multipart&fields=id`
-    : `${UPLOAD_API}/files?uploadType=multipart&fields=id`;
+    ? `${UPLOAD_API}/files/${fileId}?uploadType=multipart&fields=id,modifiedTime`
+    : `${UPLOAD_API}/files?uploadType=multipart&fields=id,modifiedTime`;
 
   const res = await driveFetch(url, {
     method: fileId ? 'PATCH' : 'POST',
@@ -284,5 +285,5 @@ export async function uploadFileText(fileId, name, folderId, text) {
     body,
   });
   const result = await res.json();
-  return result.id;
+  return { id: result.id, modifiedTime: result.modifiedTime ?? null };
 }

@@ -1,4 +1,4 @@
-﻿// Tasky Web service worker: precaches the app shell so an installed PWA launches with no
+// Tasky Web service worker: precaches the app shell so an installed PWA launches with no
 // connection (ROADMAP.md #6/#7 - previously a deliberate pass-through that existed only to satisfy
 // Chrome's installability check). Together with docs/js/snapshot.js (the local copy of the task
 // data) this gives the same launch-offline, sync-when-you-can model the desktop app has.
@@ -22,7 +22,7 @@
 // already-open page only ever asks for its own version's assets: those are served cache-first from
 // whichever cache still has them, or from the network - never silently swapped for newer bytes.
 
-const SHELL_VERSION = '?v=31';
+const SHELL_VERSION = '?v=33';
 const CACHE_NAME = `tasky-shell-${SHELL_VERSION.replace('?v=', '')}`;
 
 const SHELL_FILES = [
@@ -63,8 +63,55 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Android share target (manifest.json share_target): the OS POSTs what was shared here. Photos are
+// parked in the "tasky-share" cache (the page can't receive a POST body itself), and the page is
+// opened with the text fields and a file count in the query string - app.js handleIncomingShare
+// turns that into a task and clears the cache.
+const SHARE_CACHE = 'tasky-share';
+
+async function receiveShare(request) {
+  const form = await request.formData();
+  const files = form.getAll('media').filter((f) => f && typeof f === 'object' && f.size > 0);
+  const cache = await caches.open(SHARE_CACHE);
+  for (const old of await cache.keys()) await cache.delete(old);
+  let index = 0;
+  for (const file of files) {
+    const name = encodeURIComponent(file.name || `shared-${index}`);
+    await cache.put(new Request(`./shared/${index++}-${name}`), new Response(file, { headers: { 'Content-Type': file.type || 'application/octet-stream' } }));
+  }
+  const params = new URLSearchParams();
+  for (const key of ['title', 'text', 'url']) {
+    const value = form.get(key);
+    if (value) params.set(`share-${key}`, String(value));
+  }
+  if (files.length) params.set('share-files', String(files.length));
+  if ([...params.keys()].length === 0) params.set('share-text', '');
+  return Response.redirect(`./?${params}`, 303);
+}
+
+// A tapped reminder (app.js showReminder) focuses Tasky and opens that task - in the open tab if
+// there is one, otherwise a fresh window deep-linked with #task=.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const taskId = event.notification.data?.taskId ?? null;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const client = windows.find((c) => new URL(c.url).origin === self.location.origin);
+    if (client) {
+      await client.focus();
+      if (taskId) client.postMessage({ type: 'open-task', taskId });
+      return;
+    }
+    await self.clients.openWindow(taskId ? `./#task=${encodeURIComponent(taskId)}` : './');
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
+  if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/share-target')) {
+    event.respondWith(receiveShare(request));
+    return;
+  }
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;

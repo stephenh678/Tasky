@@ -263,7 +263,6 @@ a { color: var(--accent); }
 }
 .nav-back { display: none; margin-right: 4px; }
 .sidebar-drawer-btn { display: none; }
-.insert-toggle-btn { display: none; }
 
 /* Grouped icon buttons read as one toolbar control (Cloud Console style) instead of loose
    floating buttons - shared pill background, buttons themselves stay borderless inside it. */
@@ -1123,7 +1122,7 @@ kbd {
 .editor-body.read-only { background: color-mix(in srgb, var(--pane-bg) 60%, var(--bg)); }
 .editor-body.read-only .block-text { cursor: default; }
 .editor-body.read-only .block-text:empty::before { content: ''; }
-.editor-body.read-only .block-checklist-item.editable input[type="text"] { cursor: default; }
+.editor-body.read-only .block-checklist-item.editable textarea { cursor: default; }
 /* Trash section: the Done checkbox is meaningless on a trashed row (see renderList's in-trash
    toggle); swipe/bulk Restore and Delete are the row's actions there. */
 .task-list.in-trash .done-checkbox-wrap { display: none; }
@@ -1444,8 +1443,8 @@ kbd {
 .block-checklist-progress-fill { display: block; height: 100%; width: 0%; border-radius: 2px; background: var(--accent); transition: width 0.2s ease; }
 .block-checklist-progress-label { font-size: 11px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .block-checklist-progress.complete .block-checklist-progress-label { color: var(--accent); }
-.block-checklist-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-.block-checklist-item.editable input[type="text"] {
+.block-checklist-item { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; }
+.block-checklist-item.editable textarea {
   flex: 1;
   border: none;
   background: none;
@@ -1455,7 +1454,7 @@ kbd {
   border-radius: 4px;
   transition: background 0.15s ease;
 }
-.block-checklist-item.editable input[type="text"]:focus {
+.block-checklist-item.editable textarea:focus {
   outline: 2px solid var(--accent);
   background: var(--hover);
 }
@@ -1476,7 +1475,6 @@ kbd {
   color: var(--accent);
   background: var(--hover);
 }
-.insert-toolbar { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 
 /* Tablet: sidebar becomes an overlay drawer, list+editor share the width */
 @media (max-width: 1023px) {
@@ -1664,7 +1662,7 @@ kbd {
      field tap; the resulting mismatch with the text-size preference is deliberate and minor for
      these specific compact controls. */
   .search-box, .quick-add-input, .tag-input, .editor-field input, .editor-field select,
-  .block-checklist-item.editable input[type="text"], .checklist-add {
+  .block-checklist-item.editable textarea, .checklist-add {
     font-size: 16px;
   }
 
@@ -1714,40 +1712,8 @@ kbd {
   /* Same reasoning, for the hamburger menu's own "Keyboard Shortcuts" entry. */
   .shortcuts-menu-item { display: none; }
 
-  /* Insert-block toolbar (+ Text/Checklist/Link/Photo): four buttons that fit fine on desktop's
-     wider editor pane overflow a mobile-width one. Standard fix for 3+ actions that don't fit a
-     toolbar is one trigger with an overflow menu rather than letting them spill off-screen - same
-     idiom as the Sort/Filter popup above, reused here for consistency. */
-  .insert-toolbar-wrap { position: relative; display: inline-block; }
-  .insert-toggle-btn { display: flex; }
-  .insert-toolbar {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    margin: 0;
-    padding: 6px;
-    border-top: none;
-    background: var(--pane-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-lg);
-    z-index: 22;
-    min-width: 170px;
-  }
-  .insert-toolbar .btn { width: 100%; text-align: left; }
 }
 
-/* .insert-toolbar (the block editor's + Text/Checklist/Link/Photo row) always starts with a
-   "hidden" class in the markup - see renderInsertToolbar in editor.js - since only mobile needs it
-   collapsed behind .insert-toggle-btn (four buttons fit fine in desktop's wider editor pane). This
-   forces it visible on tablet/desktop regardless of that class, unlike .list-filter-row above which
-   now stays collapsed at every width. */
-@media (min-width: 768px) {
-  .insert-toolbar.hidden { display: flex !important; }
-}
 
 /* Roadmap #36: the About/Shortcuts (and Add-Link, which shares .modal-card) modals become bottom
    sheets under 640px - a deliberately narrower cutoff than the 767px single-pane breakpoint used
@@ -1786,4 +1752,211 @@ kbd {
     border-radius: 999px;
     margin: 0 auto 14px;
   }
+}
+
+/* ==========================================================================================
+   2026-09 web/mobile pass - editor tools, list header, agenda, pull-to-refresh, palette
+   ========================================================================================== */
+
+/* Insert menu: one labelled button under the note, and the same menu anchored under a Text
+   block when "/" is typed there (editor.js createInsertMenu). */
+.editor-body { position: relative; }
+.insert-toolbar-wrap { position: relative; margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.insert-toggle-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); }
+.insert-toggle-btn .icon { width: 16px; height: 16px; }
+.insert-toggle-btn:hover, .insert-toggle-btn[aria-expanded="true"] { color: var(--accent); }
+.insert-menu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 22;
+}
+.insert-menu.hidden { display: none; }
+.insert-menu.from-slash { position: fixed; bottom: auto; }
+.insert-menu-item { display: flex; align-items: center; gap: 8px; text-align: left; }
+.insert-menu-item .icon.inline-icon { width: 16px; height: 16px; }
+.insert-menu-item.hidden { display: none; }
+.insert-menu-item.highlighted { background: var(--hover); color: var(--accent); }
+
+/* Formatting bar - sticky at the top of the note while a Text block has focus. */
+.format-bar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  gap: 2px;
+  margin: -8px -8px 10px;
+  padding: 4px;
+  background: var(--pane-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.format-bar.visible { display: flex; }
+.format-btn { min-width: 34px; min-height: 34px; color: var(--text-dim); }
+.format-btn .icon { width: 17px; height: 17px; }
+.format-btn.active { color: var(--accent); background: var(--hover); }
+
+/* Desktop's inline checklist boxes inside a formatted note - tap to tick. */
+.inline-check { cursor: pointer; user-select: none; margin-right: 4px; color: var(--accent); font-size: 1.05em; }
+
+/* Checklist items wrap instead of being cut off, and can be dragged by their grip. */
+.block-checklist-item.editable textarea {
+  resize: none;
+  overflow: hidden;
+  field-sizing: content; /* Chrome/Edge 123+: grows with its text natively; editor.js autoGrow covers the rest */
+  line-height: 1.45;
+  min-height: 1.45em;
+  word-break: break-word;
+}
+.block-checklist-item .checkbox-tap-target { margin-top: 3px; }
+.checklist-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 4px;
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: grab;
+  touch-action: none;
+}
+.checklist-drag-handle .icon { width: 14px; height: 14px; }
+.checklist-drag-handle:hover { opacity: 1; }
+.block-checklist-item.dragging { opacity: 0.5; }
+.block-checklist-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.block-checklist-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* Remove (x) buttons stay out of sight until relevant. With a mouse they appear on hover or
+   focus; on touch, text and checklist rows show them only while being edited (photos, files and
+   links keep theirs visible, since they have no text to focus). */
+@media (hover: hover) {
+  .block-wrap > .block-remove, .block-checklist-item .block-remove { opacity: 0; transition: opacity 0.12s ease; }
+  .block-wrap:hover > .block-remove, .block-wrap:focus-within > .block-remove,
+  .block-checklist-item:hover .block-remove, .block-checklist-item:focus-within .block-remove,
+  .block-remove:focus-visible { opacity: 0.7; }
+  .checklist-drag-handle { opacity: 0; }
+  .block-checklist-item:hover .checklist-drag-handle { opacity: 0.6; }
+}
+@media (hover: none) {
+  .block-kind-text > .block-remove, .block-kind-checklist > .block-remove,
+  .block-checklist-item .block-remove { display: none; }
+  .block-kind-text:focus-within > .block-remove, .block-kind-checklist:focus-within > .block-remove,
+  .block-checklist-item:focus-within .block-remove { display: inline-flex; }
+}
+
+/* Tags get their own row under the metadata pills (so the pills can scroll on a phone). */
+.editor-tags-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -6px 0 16px; }
+
+/* List header (phones): which section this is and how many tasks. Shrinks once scrolled. */
+.list-title { display: none; }
+
+/* Views sidebar hint when nothing is saved yet. */
+.saved-views-hint { padding: 6px 14px; font-size: 0.8em; color: var(--text-dim); line-height: 1.4; cursor: default; list-style: none; }
+
+/* Agenda (Upcoming) group headers and quick reschedule. */
+.task-list li.agenda-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 4px;
+  font-size: 0.75em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border: none;
+  background: none;
+  cursor: default;
+  box-shadow: none;
+}
+.task-list li.agenda-heading.overdue { color: var(--danger-text); }
+.agenda-heading .btn { text-transform: none; letter-spacing: 0; font-weight: 600; }
+.reschedule-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 14px 8px; padding: 8px 10px; border-radius: var(--radius); background: color-mix(in srgb, var(--danger-text) 10%, transparent); font-size: 0.85em; }
+.reschedule-bar.hidden { display: none; }
+
+/* Pull-to-refresh indicator above the task list. */
+.pull-indicator {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.pull-indicator.visible { height: calc(var(--pull, 0px) * 0.55); }
+.pull-indicator .icon { width: 20px; height: 20px; margin-bottom: 6px; transition: transform 0.15s ease; }
+.pull-indicator.armed .icon { color: var(--accent); transform: rotate(180deg); }
+.pull-indicator.refreshing { height: 36px; }
+.pull-indicator.refreshing .icon { color: var(--accent); animation: sync-spin 1s linear infinite; }
+
+/* Command palette (Ctrl+K). */
+.modal-card.command-palette-card { width: min(560px, 94vw); max-width: none; padding: 0; overflow: hidden; }
+.command-palette-card::before { display: none; }
+.command-palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.05em;
+  padding: 14px 16px;
+  outline: none;
+}
+.command-palette-list { list-style: none; margin: 0; padding: 6px; max-height: min(60vh, 420px); overflow-y: auto; }
+.command-palette-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.command-palette-list li .icon { width: 16px; height: 16px; color: var(--text-dim); flex-shrink: 0; }
+.command-palette-list li .cp-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-list li .cp-hint { font-size: 0.78em; color: var(--text-dim); flex-shrink: 0; }
+.command-palette-list li.active { background: var(--hover); color: var(--accent); }
+.command-palette-list li.active .icon { color: var(--accent); }
+.command-palette-empty { padding: 14px 16px; color: var(--text-dim); font-size: 0.9em; }
+
+@media (max-width: 767px) {
+  /* One scrolling line of pills instead of two wrapped rows taking a third of the screen. */
+  .editor-meta-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .editor-meta-row::-webkit-scrollbar { display: none; }
+  .editor-meta-row > * { flex-shrink: 0; }
+
+  /* The floating + button is the add button on a phone; the inline row duplicated it. */
+  .quick-add-row { display: none; }
+
+  .list-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 16px 6px;
+    transition: padding 0.15s ease;
+  }
+  .list-title h2 { margin: 0; font-size: 1.6em; font-weight: 750; letter-spacing: -0.02em; transition: font-size 0.15s ease; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-title .list-title-count { color: var(--text-dim); font-size: 0.95em; font-variant-numeric: tabular-nums; }
+  .list-title.scrolled { padding-top: 0; padding-bottom: 2px; }
+  .list-title.scrolled h2 { font-size: 1.15em; }
+
+  .format-bar { margin: -4px -4px 10px; }
 }

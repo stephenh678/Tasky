@@ -5,34 +5,32 @@ A Windows desktop task manager built with WPF (.NET 10). Tasky is a single-windo
 document — mix in notes, photos, links, files, and checklists, tag it, give it a due date, and
 let the app take care of not losing your work.
 
-**Current release: v1.3.0** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
+**Current release: v1.3.1** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
 **Help → Check for Updates** from an installed copy).
 
-v1.3.0 is the release where Tasky gets a real installer, and where Tasky Web stops trailing the
-desktop app.
+v1.3.1 makes Tasky Web / Mobile feel like a phone app, and fixes a batch of desktop data-safety bugs.
 
-- **A proper installer.** `Tasky-Setup-1.3.0.exe` replaces "unzip the folder somewhere". It installs
-  per-user with no administrator prompt, adds Start Menu and Desktop shortcuts, and registers in
-  **Settings → Apps** like any other program. Updating is the same installer run silently, so an
-  upgrade and a fresh install are the same code path — which also fixes updated copies reporting a
-  stale version to Windows forever. See [Installing, updating and
-  uninstalling](#installing-updating-and-uninstalling).
-- **Manual task ordering now syncs.** Dragging tasks into a custom order was previously discarded by
-  the next merge on *every* device, desktop included: ordering is a property of the list rather than
-  of any one task, so it had nothing to carry it across a sync. It now travels with its own
-  timestamp, whole-arrangement newer-wins.
-- **Tasky Web catches up with the desktop app.** Drag-to-reorder (with a grip handle that works on
-  touch, not just a mouse), the Manual/Name Z–A/Priority sorts, the **Tomorrow** and **Someday**
-  sections, quick filters that AND-combine instead of one-at-a-time, the High Priority filter, and
-  subtask progress — an `x/y` badge on each row and a live progress bar in the editor.
-- **Subtasks are opt-in on the desktop.** The Subtasks box no longer occupies every task's editor
-  whether or not it has any; it sits behind a one-line "Add subtasks", with **Settings → General →
-  Always show the Subtasks section** to pin it open. Tasks that already have subtasks always show
-  them. The editor's due date / priority / repeat / tags fields now flow on one row that reflows as
-  the pane narrows, instead of each claiming a row of its own.
-- **Fixes.** Lists authored on the desktop no longer render as a broken nested bullet on the web
-  (every list item was being turned into a second `<ul>`), and Tasky Web's Local Test Mode is
-  rebuilt on the real data model — every sample task previously showed as "(untitled)".
+- **Plain-language quick add, on desktop and web.** End a title with `tomorrow 3pm`, `next fri`,
+  `in 2 weeks`, `tonight` or `every monday` and it's scheduled (and repeated) for you. Only the end
+  of the title is read, so "Call Tuesday about the budget" stays a plain title.
+- **Formatting on the web.** A formatting bar (bold, italic, underline, lists, links) while you type
+  a note, saved in the desktop editor's own format. Notes edited on the web used to lose all their
+  formatting on the desktop after a single Enter; they now round-trip in both directions.
+- **Tasky Web stays current by itself.** It checks Drive every few minutes, whenever you come back
+  to it, and on pull-to-refresh — before, it only noticed other devices' edits when it had one of
+  its own to save.
+- **New on the web/phone:** an **Upcoming** view (Overdue / Today / Tomorrow / Next 7 days / Later)
+  in the tab bar, "Move all overdue to today" and "Move to Tomorrow", reminders while Tasky is open,
+  **Add to Calendar** for any task, a `Ctrl+K` command palette, `/` in a note to insert a checklist,
+  photo, link or file, and — on Android — sharing a link or photo into Tasky and a due-count badge
+  on the app icon. Checklist items wrap instead of being cut off, can be dragged to reorder, and the
+  editor is tidier on a phone (one scrolling row of task details, a single labelled **Insert** menu).
+- **Desktop fixes.** Saved Views vanished on every restart (and the next save erased them from the
+  file); Save As to another folder left every image and file behind; a failed Google Drive download
+  could overwrite the remote file with the local one; a transient Drive error created a duplicate
+  `Tasky.tasky`; more than 100 attachments were re-uploaded on every sync; inserting an image,
+  table or file inside a bulleted list crashed; and a note with an unsaveable element was saved as
+  empty.
 
 ## Features
 
@@ -106,10 +104,12 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 - Global hotkey **Ctrl+Alt+T**, the system tray icon, a **Quick Add** button on the main
   toolbar, and **File → Quick Add...** all open the same small always-on-top box to jot down a
   task from anywhere, without switching to the main window
-- Type `#tag`, `!due:day`, and `@time` right into the quick-add box to set tags and a due
-  date/time as you type the title — e.g. `Submit report !due:tue @3pm #finance`. Unrecognized
-  tokens (like a stray `@` in an email address) are left alone in the title rather than silently
-  eaten
+- End the title with a plain-language date, time or repeat and it's scheduled for you —
+  `Call mom tomorrow 3pm`, `Dentist next fri`, `Renew passport in 3 weeks`, `Buy milk tonight`,
+  `Pay rent every month`, `Team sync every monday 10am`. Only the end of the title is read, so
+  "Call Tuesday about the budget" stays a plain title. `#tag`, `!due:day` and `@time` tokens work
+  anywhere in the title too (e.g. `Submit report !due:tue @3pm #finance`); anything unrecognized is
+  left alone rather than silently eaten, and the preview under the box shows what will be set
 - Ctrl+N / the toolbar "+" for a new task inline
 
 ### Multiple files
@@ -268,8 +268,8 @@ per-task-merge sync and `.tasky` file the desktop app uses (no separate data sto
 your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
 Needs a current browser: Safari / iOS 16.4 or newer, or a recent Chrome, Edge or Firefox — older
 browsers get a plain "Tasky couldn't start" message on the sign-in screen instead of a blank page.
-Everything below is live as of **v1.3.0** (17 Sep 2026), the release that closed the remaining
-feature gaps with the desktop app; offline support landed in v1.2.0, whose review is in
+Everything below is live as of **v1.3.1** (18 Sep 2026). v1.3.0 closed the remaining feature
+gaps with the desktop app; offline support landed in v1.2.0, whose review is in
 `review_web_mobile.md`.
 
 It works offline the same way the desktop app does: the app shell is cached by a service worker and
@@ -281,9 +281,25 @@ open, and a task's URL (`…/Tasky/#task=<id>`) is a deep link you can bookmark 
 
 It shares most of the desktop feature set — recurring tasks, tags, due dates, quick filters,
 photo/file attachments, inline rich note editing — plus:
-- **Quick-add syntax** — the list pane's "+ Add a task…" row parses `#tag`, `!due:day`, and
-  `@time` tokens exactly like the desktop quick-add box (e.g. `Submit report !due:tue @3pm
-  #finance`); unrecognized tokens are left alone in the title rather than silently eaten
+- **Quick add in plain words** — the same parser as the desktop quick-add box: `Call mom
+  tomorrow 3pm #family`, `Pay rent every month`, plus the `#tag` / `!due:` / `@time` tokens
+- **Stays current by itself** — besides syncing after every edit, it checks Drive every 3 minutes
+  while open, whenever you come back to the app, and on pull-to-refresh on a phone (a quick
+  metadata check; it only downloads when another device actually changed something)
+- **Rich notes** — a formatting bar (bold, italic, underline, bulleted/numbered lists, links) while
+  you type in a note, saved in the same format the desktop editor uses, so formatting survives in
+  both directions; desktop's inline checklist boxes can be ticked on the web too. Type `/` in a note
+  (or use **Insert**) to add a checklist, photo, link or file right where you are
+- **Upcoming** — every task with a due date, grouped Overdue / Today / Tomorrow / Next 7 days /
+  Later; overdue tasks can be moved to today in one tap (from Upcoming or the Today banner), and
+  **Move to Tomorrow** is in each task's ⋮ menu
+- **Reminders** — Settings → Reminders notifies you when a task with a time comes due while Tasky
+  is open; **Add to Calendar** (task ⋮ menu) exports the task — with its repeat and an alarm — to
+  your phone's calendar, which reminds you even when Tasky isn't running
+- **Command palette** — `Ctrl+K` to jump to any task, section, tag or view, or run a command
+- **Share into Tasky (Android)** — once installed, Tasky appears in the share sheet: sharing a link,
+  text or photo from another app creates a task from it. The installed app's icon also shows how
+  many tasks are due or overdue, and long-pressing it offers New Task, Today and Upcoming
 - **Quick-add popup** — long-press (or right-click) any **+ New Task**/**Add Task** button for a floating
   capture box reachable from anywhere in the app (Dashboard, Recurring, Done, Trash, even mid-edit
   on mobile), same quick-add syntax and live preview as above, without leaving whatever you're
@@ -295,7 +311,8 @@ photo/file attachments, inline rich note editing — plus:
   complete/incomplete, moving a task to/from Trash, pinning, tagging, or setting a due date —
   including bulk multi-select edits, not just single-task ones — and cleans up a recurring task's
   auto-spawned next occurrence
-- **Phone-first touches** — the tab bar leads with Today; due dates show as Today / Tomorrow /
+- **Phone-first touches** — the tab bar is Today · Upcoming · All · More, with the section's name
+  and count above the list; checklist items wrap and can be dragged to reorder; due dates show as Today / Tomorrow /
   Mon / Sep 24 with a separate time pill and a × to clear; photos open full-size on tap, can be
   taken straight from the camera, and are shrunk to 2048 px before upload (Settings → Photos, on by
   default on touch devices); exports, file attachments and a per-task **Share Task** go through

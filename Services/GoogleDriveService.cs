@@ -302,6 +302,10 @@ public class GoogleDriveService
         AppLogger.Warn("GoogleDriveService", $"Cached Tasky folder '{cachedId}' is trashed or gone - resolving a fresh one instead of restoring it.");
         var freshId = await GetOrCreateFolderAsync("Tasky");
         settings.GoogleDriveFolderId = freshId;
+        // Every cached per-file media container lives under (or, for the legacy file, IS) the old
+        // folder - left in place, attachments would keep syncing into the trashed tree nobody can
+        // see. ResolveMediaContainerFolderIdAsync re-resolves them under the fresh folder.
+        settings.GoogleDriveMediaContainerFolderIdsByFile.Clear();
         settingsStore.Save(settings);
         _knownGoodFolderIds.Add(freshId);
         return freshId;
@@ -362,6 +366,60 @@ public class GoogleDriveService
         }
 
         return null;
+    }
+
+    private const string DownloadTempSuffix = ".download.tmp";
+
+    /// <summary>
+    /// Downloads a Drive file to a temp file next to <paramref name="destinationPath"/> and moves it
+    /// into place only once the download really completed. Google.Apis' DownloadAsync doesn't throw
+    /// on a failed download (HTTP error, dropped connection) - it reports it through the returned
+    /// progress - so callers that just awaited it used to move an empty/partial file over a good
+    /// one. The progress's own exception is rethrown, so a 404 still reaches callers as a
+    /// GoogleApiException with HttpStatusCode.NotFound (SyncCoordinator's stale-ID handling).
+    /// </summary>
+    private async Task DownloadToFileAsync(string fileId, string destinationPath)
+    {
+        var tempPath = destinationPath + DownloadTempSuffix;
+        try
+        {
+            await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write))
+            {
+                var progress = await _driveService!.Files.Get(fileId).DownloadAsync(fileStream);
+                if (progress.Status != Google.Apis.Download.DownloadStatus.Completed)
+                    throw progress.Exception ?? new IOException($"Download of '{fileId}' did not complete (status {progress.Status}).");
+            }
+            File.Move(tempPath, destinationPath, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch (IOException) { }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Runs a files.list query across every result page. Drive returns at most one page (100
+    /// files by default) per call - reading only the first page made anything past it look
+    /// missing remotely, so SyncMediaDirectoryAsync re-uploaded those as duplicates on every sync.
+    /// </summary>
+    private async Task<List<Google.Apis.Drive.v3.Data.File>> ListAllFilesAsync(string query, string fileFields)
+    {
+        var all = new List<Google.Apis.Drive.v3.Data.File>();
+        string? pageToken = null;
+        do
+        {
+            var request = _driveService!.Files.List();
+            request.Q = query;
+            request.Fields = $"nextPageToken, files({fileFields})";
+            request.PageSize = 1000;
+            request.PageToken = pageToken;
+            var result = await request.ExecuteAsync();
+            if (result.Files is not null) all.AddRange(result.Files);
+            pageToken = result.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(pageToken));
+        return all;
     }
 
     /// <summary>
@@ -445,11 +503,15 @@ public class GoogleDriveService
                     return resolvedRemoteId;
                 }
 
-                if (progress.Exception is not null) throw progress.Exception;
+                throw progress.Exception ?? new IOException($"Updating remote file '{resolvedRemoteId}' did not complete (status {progress.Status}).");
             }
-            catch (Exception ex)
+            // Only a file that's really gone gets replaced with a new one. Any other failure
+            // (timeout, 5xx, rate limit) used to fall through to Create too, leaving a second
+            // same-named Tasky.tasky next to the real one on every transient error - devices whose
+            // by-name lookup landed on the other copy would then silently diverge.
+            catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                AppLogger.Warn("GoogleDriveService", $"Could not update existing file '{resolvedRemoteId}', creating new: {ex.Message}");
+                AppLogger.Warn("GoogleDriveService", $"Remote file '{resolvedRemoteId}' no longer exists, creating new: {ex.Message}");
             }
         }
 
@@ -587,14 +649,14 @@ public class GoogleDriveService
 
             var remoteFolderId = await GetOrCreateFolderAsync(dirName, containerFolderId);
 
-            // Fetch remote files on Google Drive under dirName
-            var listReq = _driveService.Files.List();
-            listReq.Q = $"'{remoteFolderId}' in parents and trashed = false";
-            listReq.Fields = "files(id, name, modifiedTime)";
-            var remoteFiles = (await listReq.ExecuteAsync()).Files ?? new List<Google.Apis.Drive.v3.Data.File>();
-            var remoteFileDict = remoteFiles
+            // Fetch remote files on Google Drive under dirName. A set rather than a name-keyed
+            // dictionary: Drive allows two files with the same name (two devices uploading the same
+            // attachment at once), and ToDictionary threw on that, failing this folder's sync forever.
+            var remoteFiles = await ListAllFilesAsync($"'{remoteFolderId}' in parents and trashed = false", "id, name, modifiedTime");
+            var remoteFileNames = remoteFiles
                 .Where(f => !string.IsNullOrEmpty(f.Name))
-                .ToDictionary(f => f.Name!, StringComparer.OrdinalIgnoreCase);
+                .Select(f => f.Name!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var currentLocalFiles = Directory.GetFiles(localDir)
                 .Select(f => Path.GetFileName(f)!)
@@ -636,9 +698,10 @@ public class GoogleDriveService
                     var localFilePath = Path.Combine(localDir, fileName);
                     try
                     {
-                        using var stream = new FileStream(localFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
-                        var getReq = _driveService.Files.Get(rFile.Id);
-                        await getReq.DownloadAsync(stream);
+                        // Temp-then-move like DownloadMediaDirectoryAsync: writing straight to the
+                        // final name left a truncated file behind on a failed download, which every
+                        // later sync then saw as "exists locally" and never fetched again.
+                        await DownloadToFileAsync(rFile.Id, localFilePath);
                         AppLogger.Info("GoogleDriveService", $"3-Way Diff: Downloaded remote {dirName} file '{fileName}' (added from another device)");
                         currentLocalFiles.Add(fileName);
                         lastSyncedSet.Add(fileName);
@@ -658,7 +721,9 @@ public class GoogleDriveService
             foreach (var localFile in Directory.GetFiles(localDir))
             {
                 var fileName = Path.GetFileName(localFile);
-                if (!remoteFileDict.ContainsKey(fileName))
+                // A download interrupted before its move leaves one of these behind - never sync it.
+                if (fileName.EndsWith(DownloadTempSuffix, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!remoteFileNames.Contains(fileName))
                 {
                     try
                     {
@@ -669,7 +734,11 @@ public class GoogleDriveService
                             Parents = new List<string> { remoteFolderId }
                         };
                         var uploadReq = _driveService.Files.Create(body, stream, "application/octet-stream");
-                        await uploadReq.UploadAsync();
+                        // UploadAsync reports failure through its result rather than throwing - without
+                        // this a failed upload was logged as done and recorded as synced.
+                        var progress = await uploadReq.UploadAsync();
+                        if (progress.Status != Google.Apis.Upload.UploadStatus.Completed)
+                            throw progress.Exception ?? new IOException($"Upload did not complete (status {progress.Status}).");
                         AppLogger.Info("GoogleDriveService", $"3-Way Diff: Uploaded local {dirName} file '{fileName}' to Google Drive");
                         lastSyncedSet.Add(fileName);
                     }
@@ -799,13 +868,7 @@ public class GoogleDriveService
         // copies; the temp-file-then-move keeps the same atomic-replace guarantee the old
         // buffer-then-write approach had for free (a failed/interrupted download can't leave a
         // half-written .tasky file in place of a good one).
-        var request = _driveService.Files.Get(remoteFileId);
-        var tempDownloadPath = destinationLocalPath + ".download.tmp";
-        await using (var fileStream = new FileStream(tempDownloadPath, FileMode.Create, FileAccess.Write))
-        {
-            await request.DownloadAsync(fileStream);
-        }
-        File.Move(tempDownloadPath, destinationLocalPath, overwrite: true);
+        await DownloadToFileAsync(remoteFileId, destinationLocalPath);
         AppLogger.Debug("GoogleDriveService", $"Download completed successfully for '{destinationLocalPath}'");
 
         if (!downloadAttachments) return;
@@ -872,28 +935,24 @@ public class GoogleDriveService
             var localDir = MediaPathResolver.DirectoryFor(dataFilePath, dirName);
             Directory.CreateDirectory(localDir);
 
-            var filesReq = _driveService.Files.List();
-            filesReq.Q = $"'{remoteFolderId}' in parents and trashed = false";
-            filesReq.Fields = "files(id, name)";
-            var remoteFiles = (await filesReq.ExecuteAsync()).Files ?? new List<Google.Apis.Drive.v3.Data.File>();
+            var remoteFiles = await ListAllFilesAsync($"'{remoteFolderId}' in parents and trashed = false", "id, name");
 
             foreach (var rFile in remoteFiles)
             {
                 if (string.IsNullOrEmpty(rFile.Name)) continue;
                 var destFile = Path.Combine(localDir, rFile.Name);
-                if (!File.Exists(destFile))
+                if (File.Exists(destFile)) continue;
+
+                // Per file, so one failed download doesn't abandon every file after it until the
+                // next sync.
+                try
                 {
-                    // ROADMAP #130: same MemoryStream-then-ToArray double-buffering as
-                    // DownloadFileAsync above, for every attachment/inline-image file individually
-                    // - streamed straight to a temp file and moved into place instead.
-                    var dlReq = _driveService.Files.Get(rFile.Id);
-                    var tempFile = destFile + ".download.tmp";
-                    await using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write))
-                    {
-                        await dlReq.DownloadAsync(fileStream);
-                    }
-                    File.Move(tempFile, destFile, overwrite: true);
+                    await DownloadToFileAsync(rFile.Id, destFile);
                     AppLogger.Info("GoogleDriveService", $"Downloaded {dirName} file '{rFile.Name}' to '{destFile}'");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Warn("GoogleDriveService", $"Failed to download {dirName} file '{rFile.Name}': {ex.Message}");
                 }
             }
         }
@@ -933,16 +992,15 @@ public class GoogleDriveService
 
         try
         {
-            var request = _driveService.Files.List();
             // Drive's "contains" operator on name is word/prefix-tokenized, not a literal
             // substring match - it ignores the dot, so "name contains '.tasky'" alone also
             // matches a folder or file named just "Tasky" (e.g. the root Tasky sync folder, or a
             // leftover duplicate folder). Exclude folders in the query, then re-check the exact
             // ".tasky" suffix client-side as a second guard regardless of Drive's matching quirks.
-            request.Q = "name contains '.tasky' and trashed = false and mimeType != 'application/vnd.google-apps.folder'";
-            request.Fields = "files(id, name, modifiedTime, size)";
-            var result = await request.ExecuteAsync();
-            return (result.Files ?? new List<Google.Apis.Drive.v3.Data.File>())
+            var files = await ListAllFilesAsync(
+                "name contains '.tasky' and trashed = false and mimeType != 'application/vnd.google-apps.folder'",
+                "id, name, modifiedTime, size");
+            return files
                 .Where(f => !string.IsNullOrEmpty(f.Name) && f.Name.EndsWith(".tasky", StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }

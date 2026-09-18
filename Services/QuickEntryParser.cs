@@ -3,22 +3,28 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using TodoApp.Models;
 
 namespace TodoApp.Services;
 
-public readonly record struct QuickEntryResult(string Text, DateTime? DueDate, List<string> Tags);
+public readonly record struct QuickEntryResult(
+    string Text,
+    DateTime? DueDate,
+    List<string> Tags,
+    RecurrenceRule Recurrence = RecurrenceRule.None,
+    int RecurrenceInterval = 1);
 
 /// <summary>
 /// Parses a small set of inline tokens out of quick-add task text: #tag for tags, !due:&lt;value&gt;
 /// for a due date (today/tomorrow/a weekday name/a literal date), and @&lt;time&gt; for a time of
-/// day - e.g. "Submit budget report !due:tue @3pm #finance".
+/// day - e.g. "Submit budget report !due:tue @3pm #finance". A token is only ever consumed when it
+/// actually matches one of these forms, so an unrecognized "!due:whenever" or an
+/// email-address-shaped "@" is left untouched in the title instead of silently mangled.
 ///
-/// Deliberately a fixed token syntax rather than full natural-language date parsing: free-text NLP
-/// risks misreading plain words in a title (a task literally titled "Call Tuesday about the
-/// budget" doesn't have a due date) and pulls in a large localization-heavy dependency for a
-/// single-user desktop app. A token is only ever consumed when it actually matches one of these
-/// forms, so an unrecognized "!due:whenever" or an email-address-shaped "@" is left untouched in
-/// the title instead of silently mangled.
+/// On top of the tokens, a small set of plain-language phrases is read from the END of the title
+/// only ("Call mom tomorrow 3pm", "Pay rent every month") - see ParseNaturalTail. Restricting it to
+/// the tail is what keeps ordinary words safe: "Call Tuesday about the budget" has no due date.
+/// Mirrored exactly by docs/js/model.js parseNaturalTail; the two test suites share vectors.
 /// </summary>
 public static class QuickEntryParser
 {
@@ -86,15 +92,147 @@ public static class QuickEntryParser
             return m.Value;
         });
 
+        text = MultiSpacePattern.Replace(text, " ").Trim();
+
+        var natural = ParseNaturalTail(text, reference, needDate: datePart is null, needTime: timePart is null);
+        text = natural.Text;
+        datePart ??= natural.Date;
+        timePart ??= natural.Time;
+
         DateTime? dueDate = datePart is { } d
-            ? d.ToDateTime(timePart ?? new TimeOnly(DefaultDueHour, 0))
+            ? d.ToDateTime(timePart ?? new TimeOnly(natural.DefaultHour, 0))
             : timePart is { } t
                 ? DateOnly.FromDateTime(reference).ToDateTime(t)
                 : null;
 
-        text = MultiSpacePattern.Replace(text, " ").Trim();
+        return new QuickEntryResult(text, dueDate, tags, natural.Recurrence, natural.RecurrenceInterval);
+    }
 
-        return new QuickEntryResult(text, dueDate, tags);
+    /// <summary>
+    /// Preview wording for a parsed repeat ("repeats daily", "repeats every 2 weeks"), or null for
+    /// none - shared by the two quick-add previews (QuickAddWindow and MainWindow's inline box).
+    /// </summary>
+    public static string? DescribeRecurrence(RecurrenceRule rule, int interval)
+    {
+        var unit = rule switch
+        {
+            RecurrenceRule.Daily => "day",
+            RecurrenceRule.Weekly => "week",
+            RecurrenceRule.Monthly => "month",
+            RecurrenceRule.Yearly => "year",
+            _ => null,
+        };
+        if (unit is null) return null;
+        if (interval > 1) return $"repeats every {interval} {unit}s";
+        return rule == RecurrenceRule.Daily ? "repeats daily" : $"repeats {unit}ly";
+    }
+
+    // --- Plain-language tail -------------------------------------------------------------------
+    //   time:   3pm · 3:30 pm · 15:00 · at 9am
+    //   date:   today · tonight (8 PM unless a time is given) · tomorrow/tmrw · [on|due] fri ·
+    //           next fri (never today) · in 3 days · in 2 weeks
+    //   repeat: daily · weekly · monthly · yearly · every day|week|month|year · every 2 weeks ·
+    //           every monday (weekly, starting that day)
+    // Phrases may stack in any order; one is never consumed if it would leave the title empty. A
+    // repeat with no date starts today, so the series has an anchor.
+    private const string NaturalWeekdays = "sunday|monday|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sun|mon";
+    private const RegexOptions NaturalOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
+    private static readonly Regex NaturalTimeTail = new(
+        @"\s(?:at\s+)?([0-9]{1,2}(?::[0-9]{2})?\s?(?:am|pm)|[0-9]{1,2}:[0-9]{2})$", NaturalOptions);
+    private static readonly Regex NaturalRepeatTail = new(
+        @"\s(?:every\s+(?:([0-9]{1,2})\s+)?(days?|weeks?|months?|years?|" + NaturalWeekdays + @")|(daily|weekly|monthly|yearly))$", NaturalOptions);
+    private static readonly Regex NaturalDateTail = new(
+        @"\s(?:(?:on|due)\s+)?(today|tonight|tomorrow|tmrw|next\s+(" + NaturalWeekdays + @")|(" + NaturalWeekdays + @")|in\s+([0-9]{1,3})\s+(days?|weeks?))$", NaturalOptions);
+    private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled);
+    private const int TonightHour = 20;
+
+    private readonly record struct NaturalTail(
+        string Text, DateOnly? Date, TimeOnly? Time, RecurrenceRule Recurrence, int RecurrenceInterval, int DefaultHour);
+
+    private static int WeekdayOffset(DateOnly today, string name, bool excludeToday = false)
+    {
+        var offset = ((int)WeekdayNames[name] - (int)today.DayOfWeek + 7) % 7;
+        return offset == 0 && excludeToday ? 7 : offset;
+    }
+
+    private static NaturalTail ParseNaturalTail(string input, DateTime reference, bool needDate, bool needTime)
+    {
+        var text = input;
+        DateOnly? date = null;
+        TimeOnly? time = null;
+        var recurrence = RecurrenceRule.None;
+        var interval = 1;
+        var defaultHour = DefaultDueHour;
+        string? repeatWeekday = null;
+        var today = DateOnly.FromDateTime(reference);
+
+        Match? Take(Regex pattern)
+        {
+            var m = pattern.Match(text);
+            return m.Success && text[..m.Index].Trim().Length > 0 ? m : null;
+        }
+
+        var changed = true;
+        for (var guard = 0; changed && guard < 4; guard++)
+        {
+            changed = false;
+            Match? m;
+            if (needTime && time is null && (m = Take(NaturalTimeTail)) is not null
+                && TryParseTimeToken(WhitespacePattern.Replace(m.Groups[1].Value, ""), out var parsedTime))
+            {
+                time = parsedTime;
+                text = text[..m.Index].TrimEnd();
+                changed = true;
+                continue;
+            }
+
+            if (recurrence == RecurrenceRule.None && (m = Take(NaturalRepeatTail)) is not null)
+            {
+                var hasCount = m.Groups[1].Success;
+                var word = (m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value).ToLowerInvariant();
+                var isWeekday = WeekdayNames.ContainsKey(word);
+                if (!(isWeekday && hasCount))
+                {
+                    var unit = m.Groups[3].Success
+                        ? word switch { "daily" => "day", "weekly" => "week", "monthly" => "month", _ => "year" }
+                        : word.TrimEnd('s');
+                    recurrence = isWeekday ? RecurrenceRule.Weekly : unit switch
+                    {
+                        "day" => RecurrenceRule.Daily,
+                        "week" => RecurrenceRule.Weekly,
+                        "month" => RecurrenceRule.Monthly,
+                        _ => RecurrenceRule.Yearly,
+                    };
+                    interval = hasCount ? Math.Clamp(int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), 1, 30) : 1;
+                    if (isWeekday) repeatWeekday = word;
+                    text = text[..m.Index].TrimEnd();
+                    changed = true;
+                    continue;
+                }
+            }
+
+            if (needDate && date is null && (m = Take(NaturalDateTail)) is not null)
+            {
+                var phrase = m.Groups[1].Value.ToLowerInvariant();
+                if (phrase == "today") date = today;
+                else if (phrase == "tonight") { date = today; defaultHour = TonightHour; }
+                else if (phrase is "tomorrow" or "tmrw") date = today.AddDays(1);
+                else if (m.Groups[2].Success) date = today.AddDays(WeekdayOffset(today, m.Groups[2].Value, excludeToday: true));
+                else if (m.Groups[3].Success) date = today.AddDays(WeekdayOffset(today, m.Groups[3].Value));
+                else
+                {
+                    var count = int.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
+                    date = today.AddDays(count * (m.Groups[5].Value.StartsWith("week", StringComparison.OrdinalIgnoreCase) ? 7 : 1));
+                }
+                text = text[..m.Index].TrimEnd();
+                changed = true;
+            }
+        }
+
+        if (recurrence != RecurrenceRule.None && needDate && date is null)
+            date = repeatWeekday is null ? today : today.AddDays(WeekdayOffset(today, repeatWeekday));
+
+        return new NaturalTail(text, date, time, recurrence, interval, defaultHour);
     }
 
     private static bool TryParseDueToken(string token, DateTime reference, out DateOnly result)

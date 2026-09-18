@@ -35,7 +35,7 @@ public partial class QuickAddWindow : Window
     {
         if (string.IsNullOrWhiteSpace(TitleBox.Text))
         {
-            PreviewText.Text = "Enter · Esc · #tag !due:day @time";
+            PreviewText.Text = "Enter · Esc · #tag · tomorrow 3pm · every monday";
             return;
         }
 
@@ -49,6 +49,8 @@ public partial class QuickAddWindow : Window
                 ? $"due {due:ddd, MMM d}"
                 : $"due {due:ddd, MMM d 'at' h:mmtt}");
         }
+        if (QuickEntryParser.DescribeRecurrence(parsed.Recurrence, parsed.RecurrenceInterval) is { } repeat)
+            parts.Add(repeat);
         if (parsed.Tags.Count > 0)
             parts.Add(string.Join(" ", parsed.Tags.Select(t => $"#{t}")));
         PreviewText.Text = string.Join("  ·  ", parts);

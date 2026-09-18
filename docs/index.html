@@ -37,7 +37,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=31" />
+  <link rel="stylesheet" href="css/styles.css?v=33" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -88,7 +88,7 @@
            is the only always-visible signal, and #save-status (relocated to a bottom bar there) is
            reserved for errors and reconnect prompts instead of flipping on every keystroke. -->
       <button type="button" id="sync-indicator" class="icon-btn sync-indicator" aria-label="Sync status" data-state="synced"></button>
-      <span id="save-status" class="save-status"></span>
+      <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
       <!-- ROADMAP.md #57: mirrors desktop's ProgressBar in the bottom status bar - stage-based
            percent (see setSyncProgress in app.js), not true byte progress. -->
       <span id="save-progress" class="save-progress hidden" role="progressbar" aria-label="Google Drive sync progress"
@@ -122,9 +122,15 @@
       </nav>
 
       <section id="list-pane" class="pane list-pane">
+        <!-- Phones only (styles.css .list-title): the tab bar says where you are only by colour,
+             and a tag or saved view had no visible name at all. -->
+        <div id="list-title" class="list-title">
+          <h2 id="list-title-text"></h2>
+          <span id="list-title-count" class="list-title-count"></span>
+        </div>
         <div class="list-toolbar">
           <div class="search-box-wrap">
-            <input id="search-box" type="search" placeholder="Search… (tag:name, is:overdue)" class="search-box"
+            <input id="search-box" type="search" placeholder="Search tasks" class="search-box"
                    title="Operators: tag:name, is:overdue, is:pinned, is:recurring, has:link, has:attachment, due:today|week|none - see Keyboard Shortcuts (F1) for the full list" />
             <button id="search-clear-btn" class="search-clear-btn hidden" aria-label="Clear search" title="Clear search"></button>
           </div>
@@ -132,7 +138,7 @@
           <button id="filter-toggle-btn" class="icon-btn filter-toggle-btn" aria-label="Sort & filter" title="Sort & filter"></button>
         </div>
         <div class="quick-add-row">
-          <input id="quick-add-input" type="text" class="quick-add-input" placeholder="+ Add a task…" title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
+          <input id="quick-add-input" type="text" class="quick-add-input" placeholder="+ Add a task…" title="Enter to add. Try: Call mom tomorrow 3pm #family - or: Pay rent every month" enterkeyhint="done" />
           <!-- ROADMAP.md #135: mirrors desktop's QuickAddWindow PreviewText - live preview of what
                #tag/!due:/@time will actually parse to before Enter commits it. -->
           <div id="quick-add-preview" class="quick-add-preview hidden"></div>
@@ -193,6 +199,10 @@
                platform's own date UI for free instead of a bespoke calendar widget. Visually hidden
                rather than display:none because Chrome refuses showPicker() on a non-rendered input. -->
           <input id="bulk-due-input" type="date" class="visually-hidden" tabindex="-1" aria-hidden="true" />
+        </div>
+        <div id="reschedule-bar" class="reschedule-bar hidden" role="status">
+          <span id="reschedule-bar-text"></span>
+          <button type="button" id="reschedule-overdue-btn" class="btn btn-ghost small">Move all to today</button>
         </div>
         <ul id="task-list" class="task-list"></ul>
         <div id="list-empty" class="empty-state hidden">No tasks here.</div>
@@ -257,6 +267,8 @@
                 <button id="editor-done-btn" class="dropdown-item">Mark Done</button>
                 <!-- Mobile counterpart of desktop's Export/Print Note: the task as Markdown via
                      the Web Share sheet, or the clipboard where there's no share sheet. -->
+                <button id="editor-tomorrow-btn" class="dropdown-item">Move to Tomorrow</button>
+                <button id="editor-calendar-btn" class="dropdown-item">Add to Calendar</button>
                 <button id="editor-share-btn" class="dropdown-item">Share Task</button>
                 <button id="editor-trash-btn" class="dropdown-item">Move to Trash</button>
                 <button id="editor-delete-btn" class="dropdown-item danger hidden">Delete Permanently</button>
@@ -331,6 +343,10 @@
               <select id="editor-recurrence-interval"></select>
               <span class="editor-field-arrow"></span>
             </label>
+          </div>
+          <!-- Tags sit on their own row so the pill row above can scroll sideways on a phone
+               without clipping the tag-suggestion popup. -->
+          <div class="editor-tags-row">
             <span id="editor-tags" class="editor-tags"></span>
             <div class="tag-input-wrap">
               <input id="editor-tag-input" class="tag-input" type="text" placeholder="+ tag, Enter to add" enterkeyhint="done" autocomplete="off" />
@@ -377,8 +393,18 @@
       <!-- Rows are rendered from the SHORTCUTS table in app.js (renderShortcutsList), the same
            table the keydown dispatcher reads, so this list can't drift from what actually fires. -->
       <div id="shortcuts-list" class="shortcuts-list"></div>
-      <p class="shortcuts-hint">Quick-add syntax: <code>#tag</code> · <code>!due:tue</code> (or today/tomorrow/a date) · <code>@3pm</code></p>
+      <p class="shortcuts-hint">Quick add: end a title with <code>tomorrow 3pm</code>, <code>next fri</code>, <code>in 2 weeks</code>, <code>tonight</code> or <code>every monday</code> · <code>#tag</code> · <code>!due:tue</code> / <code>@3pm</code> tokens still work</p>
       <p class="shortcuts-hint">Search operators: <code>tag:name</code> · <code>is:overdue</code> · <code>is:pinned</code> · <code>is:recurring</code> · <code>has:link</code> · <code>has:attachment</code> · <code>due:today</code> · <code>due:week</code> · <code>due:none</code> - combine with plain text or each other</p>
+    </div>
+  </div>
+
+  <!-- Command palette (Ctrl+K / Ctrl+P): jump to any task or run any action by typing. Built by
+       app.js openCommandPalette from the tasks and the SHORTCUTS table. -->
+  <div id="command-palette" class="modal-overlay hidden">
+    <div class="modal-card command-palette-card" role="dialog" aria-modal="true" aria-label="Command palette">
+      <input id="command-palette-input" class="command-palette-input" type="text" placeholder="Search tasks or type a command…"
+             autocomplete="off" role="combobox" aria-expanded="true" aria-controls="command-palette-list" />
+      <ul id="command-palette-list" class="command-palette-list" role="listbox"></ul>
     </div>
   </div>
 
@@ -389,7 +415,7 @@
     <div class="modal-card onboarding-modal-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
       <h2 id="onboarding-title">Welcome to Tasky</h2>
       <ul class="onboarding-list">
-        <li>Quick Add a task, then tag or schedule it inline: <code>Buy milk #errands !due:tomorrow @9am</code></li>
+        <li>Quick Add a task, then tag or schedule it in plain words: <code>Buy milk tomorrow 9am #errands</code> or <code>Pay rent every month</code></li>
         <!-- Text set in app.js from a (hover: hover) and (pointer: fine) media query - "Long-press"
              reads as nonsense advice on a desktop mouse, and "Right-click" doesn't work with a
              finger, so this shows only the one gesture that's actually usable on the device it's
@@ -415,8 +441,8 @@
   <div id="more-sheet-popup" class="more-sheet-popup hidden">
     <button type="button" id="more-sheet-dashboard" class="dropdown-item"></button>
     <button type="button" id="more-sheet-sections" class="dropdown-item"></button>
-    <!-- Recurring and Trash moved here from the tab bar to make room for Today, the section a
-         phone actually opens most - the tab bar is Today · All · Completed · More. -->
+    <!-- The tab bar is Today · Upcoming · All · More; Completed, Recurring and Trash live here. -->
+    <button type="button" id="more-sheet-completed" class="dropdown-item">Completed</button>
     <button type="button" id="more-sheet-recurring" class="dropdown-item">Recurring</button>
     <button type="button" id="more-sheet-trash" class="dropdown-item">Trash</button>
     <div class="dropdown-divider"></div>
@@ -433,7 +459,7 @@
        same as Settings/About/More above. -->
   <div id="quick-add-popup" class="quick-add-popup hidden">
     <input id="quick-add-popup-input" type="text" class="quick-add-input" placeholder="+ Add a task…"
-           title="Enter to add. Try #tag, !due:tue, @3pm" enterkeyhint="done" />
+           title="Enter to add. Try: Call mom tomorrow 3pm #family - or: Pay rent every month" enterkeyhint="done" />
     <div id="quick-add-popup-preview" class="quick-add-preview hidden"></div>
   </div>
 
@@ -467,6 +493,13 @@
     <label class="settings-toggle-row">
       <span>Show "Mark done" checkbox on task rows and in the editor</span>
       <input type="checkbox" id="setting-show-done-checkbox" checked />
+    </label>
+    <div class="dropdown-section-label">Reminders</div>
+    <!-- Notifications for tasks with a due time, while Tasky is open (or installed and running in
+         the background on Android). app.js reminder loop; permission is asked on first enable. -->
+    <label class="settings-toggle-row">
+      <span>Notify me when a task with a time is due</span>
+      <input type="checkbox" id="setting-reminders" />
     </label>
     <div class="dropdown-section-label">Photos</div>
     <!-- A 12 MP phone JPEG is 3-6 MB; shrinking to 2048 px on the long side before upload keeps
@@ -508,7 +541,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=31"></script>
-  <script type="module" src="js/app.js?v=31"></script>
+  <script src="js/boot-guard.js?v=33"></script>
+  <script type="module" src="js/app.js?v=33"></script>
 </body>
 </html>

@@ -15,11 +15,11 @@ import {
   extractInlineFileNames,
   xamlToHtml,
   htmlToXaml,
-} from './model.js?v=31';
-import { icon } from './icons.js?v=31';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=31';
-import { storage } from './storage.js?v=31';
-import { openDialog, trapFocus } from './dialog.js?v=31';
+} from './model.js?v=33';
+import { icon } from './icons.js?v=33';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=33';
+import { storage } from './storage.js?v=33';
+import { openDialog, trapFocus } from './dialog.js?v=33';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.
@@ -84,26 +84,53 @@ function friendlyDriveError(err) {
 // Trash): text blocks lose contentEditable, checklist rows lose their inputs' edit-ability, and
 // the per-block remove buttons and the insert toolbar aren't rendered at all. Photos/files/links
 // still render and still open, since viewing isn't editing.
+const BLOCK_KIND_CLASS = {
+  [NoteBlockType.Text]: 'text',
+  [NoteBlockType.Checklist]: 'checklist',
+  [NoteBlockType.Link]: 'link',
+  [NoteBlockType.Photo]: 'photo',
+  [NoteBlockType.File]: 'file',
+};
+
+// Where the Insert menu puts a new block: right after whichever block last had focus (so "/" or
+// Insert while editing the middle of a note adds content there, not at the bottom). Reset per
+// task; an index past the end just means "append".
+let insertAfterIndex = null;
+let insertTaskId = null;
+
 export function renderEditableBody(container, task, onChange, { readOnly = false } = {}) {
   releaseMediaCacheIfTaskChanged(task.Id);
+  if (insertTaskId !== task.Id) {
+    insertTaskId = task.Id;
+    insertAfterIndex = null;
+  }
   const focus = captureBodyFocus(container);
   container.innerHTML = '';
   container.classList.toggle('read-only', readOnly);
 
+  const insertMenu = readOnly ? null : createInsertMenu(task, onChange);
+  if (!readOnly && task.Body.some((b) => b.Type === NoteBlockType.Text)) {
+    container.appendChild(renderFormatBar());
+  }
+
   task.Body.forEach((block, index) => {
     const wrap = document.createElement('div');
-    wrap.className = 'block-wrap';
-    wrap.appendChild(renderBlock(block, task, index, onChange, readOnly));
+    wrap.className = `block-wrap block-kind-${BLOCK_KIND_CLASS[block.Type] ?? 'other'}`;
+    wrap.dataset.blockId = block.Id;
+    wrap.addEventListener('focusin', () => { insertAfterIndex = index; });
+    wrap.appendChild(renderBlock(block, task, index, onChange, readOnly, insertMenu));
 
     if (!readOnly) {
       const removeBtn = document.createElement('button');
       removeBtn.className = 'block-remove';
       removeBtn.innerHTML = icon('x');
       removeBtn.title = 'Remove block';
+      removeBtn.setAttribute('aria-label', 'Remove block');
       removeBtn.addEventListener('click', () => {
         releaseBlockMedia(block);
         deleteRemoteAttachmentIfAny(block);
         task.Body.splice(index, 1);
+        insertAfterIndex = null;
         onChange({ rerenderBody: true });
       });
       wrap.appendChild(removeBtn);
@@ -112,8 +139,21 @@ export function renderEditableBody(container, task, onChange, { readOnly = false
     container.appendChild(wrap);
   });
 
-  if (!readOnly) container.appendChild(renderInsertToolbar(task, onChange));
+  if (insertMenu) container.appendChild(insertMenu.wrap);
   restoreBodyFocus(container, focus);
+}
+
+// Focuses the Text block with this Id (after a re-render) and puts the caret at its end.
+function focusTextBlock(blockId) {
+  const target = document.querySelector(`[data-block-id="${CSS.escape(blockId)}"] .block-text`);
+  if (!target) return;
+  target.focus();
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 // A body re-render (rerenderBody: true - adding a checklist item, removing a block) rebuilds every
@@ -146,10 +186,10 @@ function restoreBodyFocus(container, focus) {
   }
 }
 
-function renderBlock(block, task, index, onChange, readOnly) {
+function renderBlock(block, task, index, onChange, readOnly, insertMenu) {
   switch (block.Type) {
     case NoteBlockType.Text:
-      return renderTextBlock(block, task, index, onChange, readOnly);
+      return renderTextBlock(block, task, index, onChange, readOnly, insertMenu);
     case NoteBlockType.Checklist:
       return renderChecklistBlock(block, onChange, readOnly);
     case NoteBlockType.Link:
@@ -163,7 +203,16 @@ function renderBlock(block, task, index, onChange, readOnly) {
   }
 }
 
-function renderTextBlock(block, task, index, onChange, readOnly) {
+// Browsers disagree on what Enter inserts in a contentEditable (Chrome <div>, Firefox <br> or
+// <div>, Safari <div>); asking for <p> everywhere gives htmlToXaml one shape to map to Paragraphs.
+try {
+  document.execCommand('defaultParagraphSeparator', false, 'p');
+  document.execCommand('styleWithCSS', false, false); // <b>/<i>/<u>, not <span style>
+} catch {
+  // Not supported - htmlToXaml copes with <div>/<br> and styled spans too.
+}
+
+function renderTextBlock(block, task, index, onChange, readOnly, insertMenu) {
   const wrap = document.createElement('div');
 
   const div = document.createElement('div');
@@ -182,22 +231,15 @@ function renderTextBlock(block, task, index, onChange, readOnly) {
     for (const fileName of extractInlineFileNames(block.Rtf)) wrap.appendChild(renderFileByFileName(fileName));
     return wrap;
   }
-  // When formatted HTML is present, keep full contentEditable to support rich styles; otherwise
-  // plaintext-only keeps pasted content and Enter from producing unexpected nested HTML.
-  if (formattedHtml) {
-    div.contentEditable = 'true';
-  } else {
-    let plainTextOnly = false;
-    try {
-      div.contentEditable = 'plaintext-only';
-      plainTextOnly = div.contentEditable === 'plaintext-only';
-    } catch {
-      // SyntaxError from an engine that rejects the value outright.
-    }
-    if (!plainTextOnly) div.contentEditable = 'true';
-  }
-  div.dataset.placeholder = 'Type…';
-  div.addEventListener('input', () => {
+  // Always rich: the format bar (renderFormatBar), Ctrl+B/I/U and lists all need real HTML, and
+  // htmlToXaml turns whatever the browser produces into XAML desktop can load. Pasting still comes
+  // in as plain text (see the paste handler below), so nothing foreign gets in that way.
+  div.contentEditable = 'true';
+  div.dataset.placeholder = 'Type… ( / to insert)';
+  div.setAttribute('role', 'textbox');
+  div.setAttribute('aria-multiline', 'true');
+
+  const commit = () => {
     block.Text = div.innerText;
     // Hoist any inline attachment files (pasted images or file chips) into real Photo/File blocks
     // before updating formatting, ensuring attachment references are preserved across sync.
@@ -208,6 +250,35 @@ function renderTextBlock(block, task, index, onChange, readOnly) {
     // formatting, bold/italics, lists and paragraphs cleanly rather than losing styling.
     block.Rtf = htmlToXaml(div.innerHTML, block.Text);
     onChange({ rerenderBody: false });
+  };
+
+  div.addEventListener('input', () => {
+    commit();
+    // "/" on its own (optionally followed by a filter word) opens the Insert menu here - the
+    // keyboard-first way to add a checklist/photo/link without reaching for the toolbar.
+    const slash = /^\/(\w*)$/.exec(div.innerText.trim());
+    if (slash && insertMenu) insertMenu.open(div, { slashBlock: block, slashIndex: index, filter: slash[1] });
+    else insertMenu?.closeSlash(block);
+  });
+  div.addEventListener('keydown', (e) => {
+    if (insertMenu?.handleSlashKey(e, block)) return;
+  });
+  div.addEventListener('blur', () => {
+    // Let a click on a menu item land before the menu disappears.
+    setTimeout(() => insertMenu?.closeSlash(block), 150);
+  });
+
+  // Desktop's inline checklist boxes (see xamlToHtml) - tapping one ticks it, and the change goes
+  // back to desktop as the same CheckBox.
+  div.addEventListener('click', (e) => {
+    const box = e.target.closest?.('.inline-check');
+    if (!box || !div.contains(box)) return;
+    e.preventDefault();
+    const checked = box.dataset.checked !== 'true';
+    box.dataset.checked = String(checked);
+    box.setAttribute('aria-checked', String(checked));
+    box.textContent = checked ? '☑' : '☐';
+    commit();
   });
 
   // Mirrors the desktop app's paste-URL-to-link behavior: pasting a bare URL turns into a real
@@ -230,11 +301,11 @@ function renderTextBlock(block, task, index, onChange, readOnly) {
     // keeps it clickable.
     const segments = splitTextIntoUrlSegments(text);
     if (!segments.some((s) => s.url)) {
-      // No embedded URL. Where plaintext-only isn't available the browser would paste the
-      // clipboard's HTML flavour (fonts, colours, tables from Gmail/Docs) into what is meant to be
-      // a plain-text block - insert the text/plain flavour ourselves instead. execCommand is the
-      // one way to do that which keeps native undo and fires the input event above.
-      if (!plainTextOnly && text) {
+      // No embedded URL. Left alone the browser would paste the clipboard's HTML flavour (fonts,
+      // colours, tables from Gmail/Docs) - insert the text/plain flavour ourselves instead, and
+      // format it with the toolbar afterwards. execCommand is the one way to do that which keeps
+      // native undo and fires the input event above.
+      if (text) {
         e.preventDefault();
         document.execCommand('insertText', false, text);
       }
@@ -339,6 +410,60 @@ function moveChecklistItem(block, index, delta, onChange) {
   focusChecklistItem(block, target, 'end');
 }
 
+function autoGrow(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
+// Drag-to-reorder by the grip handle (pointer events, so mouse, pen and touch all work - the
+// Alt+Up/Down keys above remain the keyboard path). The row under the pointer shows a drop line;
+// releasing moves the item there.
+function bindChecklistDrag(handle, row, list, block, fromIndex, onChange) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    row.classList.add('dragging');
+    let target = null;
+    let after = false;
+
+    const clearMarkers = () => {
+      for (const r of list.querySelectorAll('.drop-before, .drop-after')) r.classList.remove('drop-before', 'drop-after');
+    };
+    const onMove = (ev) => {
+      const rows = [...list.querySelectorAll('.block-checklist-item')];
+      const hit = rows.find((r) => {
+        const rect = r.getBoundingClientRect();
+        return ev.clientY >= rect.top && ev.clientY <= rect.bottom;
+      });
+      clearMarkers();
+      if (!hit || hit === row) { target = null; return; }
+      const rect = hit.getBoundingClientRect();
+      after = ev.clientY > rect.top + rect.height / 2;
+      hit.classList.add(after ? 'drop-after' : 'drop-before');
+      target = Number(hit.dataset.index);
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      row.classList.remove('dragging');
+      clearMarkers();
+      if (target === null) return;
+      let to = target + (after ? 1 : 0);
+      if (to > fromIndex) to -= 1;
+      if (to === fromIndex) return;
+      const [moved] = block.ChecklistItems.splice(fromIndex, 1);
+      block.ChecklistItems.splice(to, 0, moved);
+      navigator.vibrate?.(10);
+      onChange({ rerenderBody: true });
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
 function renderChecklistBlock(block, onChange, readOnly) {
   const div = document.createElement('div');
   div.className = 'block-checklist';
@@ -387,6 +512,17 @@ function renderChecklistBlock(block, onChange, readOnly) {
   block.ChecklistItems.forEach((item, i) => {
     const row = document.createElement('div');
     row.className = 'block-checklist-item editable';
+    row.dataset.index = String(i);
+
+    if (!readOnly && block.ChecklistItems.length > 1) {
+      const handle = document.createElement('span');
+      handle.className = 'checklist-drag-handle';
+      handle.innerHTML = icon('grip');
+      handle.title = 'Drag to reorder';
+      handle.setAttribute('aria-hidden', 'true');
+      bindChecklistDrag(handle, row, div, block, i, onChange);
+      row.appendChild(handle);
+    }
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -394,6 +530,7 @@ function renderChecklistBlock(block, onChange, readOnly) {
     checkbox.disabled = readOnly;
     checkbox.addEventListener('change', () => {
       item.IsChecked = checkbox.checked;
+      if (checkbox.checked) navigator.vibrate?.(10); // Android only; a no-op everywhere else
       refreshProgress();
       onChange({ rerenderBody: false });
     });
@@ -404,21 +541,28 @@ function renderChecklistBlock(block, onChange, readOnly) {
     checkboxWrap.className = 'checkbox-tap-target';
     checkboxWrap.appendChild(checkbox);
 
-    const text = document.createElement('input');
-    text.type = 'text';
+    // A textarea rather than <input type=text> so a long item wraps onto more lines instead of
+    // being cut off mid-word on a phone. Enter still means "next item" (see keydown below), so it
+    // never holds a real newline.
+    const text = document.createElement('textarea');
+    text.rows = 1;
     text.value = item.Text;
     text.placeholder = 'Checklist item';
     text.readOnly = readOnly;
+    text.enterKeyHint = 'next';
     text.dataset.focusKey = `${block.Id}:item:${i}`; // see captureBodyFocus
     text.addEventListener('input', (e) => {
       // Gboard and friends send Enter as this input event rather than a keydown (see addRow below).
-      if (e.inputType === 'insertLineBreak') {
+      if (e.inputType === 'insertLineBreak' || text.value.includes('\n')) {
+        text.value = text.value.replace(/\n/g, '');
         splitChecklistItem(block, i, text, onChange);
         return;
       }
       item.Text = text.value;
+      autoGrow(text);
       onChange({ rerenderBody: false });
     });
+    requestAnimationFrame(() => autoGrow(text));
     text.addEventListener('keydown', (e) => {
       if (readOnly) return;
       if (e.key === 'Enter') {
@@ -446,6 +590,12 @@ function renderChecklistBlock(block, onChange, readOnly) {
     }
     div.appendChild(row);
   });
+
+  // Item boxes size themselves to their text, but a body rendered while its pane is hidden (a phone
+  // opening the editor) or later resized has no width to measure against - re-fit on any width change.
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => div.querySelectorAll('textarea').forEach(autoGrow)).observe(div);
+  }
 
   if (readOnly) return div;
 
@@ -931,119 +1081,320 @@ function promptForLink() {
   });
 }
 
-// Rebuilt fully on every render (renderEditableBody clears and re-renders the whole body on most
-// edits), so the outside-click-closes listener below is registered once at module load rather
-// than once per render - it just checks whichever bar/toggle are current at click time instead of
-// accumulating a fresh document-level listener (and matching leaked closure) on every edit.
-let activeInsertBar = null;
-let activeInsertToggle = null;
+// --- Insert menu ------------------------------------------------------------------------------
+// One labelled "Insert" button under the note (it used to be a row of five "+ Text/+ Checklist/..."
+// buttons that read as part of the note itself on desktop, and a bare unlabelled "+" on phones).
+// The same menu also opens from a Text block when you type "/" (optionally "/check", "/pho" to
+// filter), and inserts the new block right after the block you were in rather than at the bottom.
+//
+// Rebuilt on every body render, so the outside-click-closes listener is registered once at module
+// load and just checks whichever menu is current.
+let activeInsertMenu = null;
 document.addEventListener('click', (e) => {
-  if (!activeInsertBar || activeInsertBar.classList.contains('hidden')) return;
-  if (activeInsertBar.contains(e.target) || e.target === activeInsertToggle) return;
-  activeInsertBar.classList.add('hidden');
+  if (!activeInsertMenu || activeInsertMenu.menu.classList.contains('hidden')) return;
+  if (activeInsertMenu.menu.contains(e.target) || activeInsertMenu.toggle.contains(e.target)) return;
+  if (e.target.closest?.('.block-text')) return; // typing in a block with "/" open
+  activeInsertMenu.close();
 });
 
-function renderInsertToolbar(task, onChange) {
+// The hidden file inputs live on <body>, not inside the note: the body re-renders on nearly every
+// edit, and a picker whose <input> was removed mid-pick never reports back on some browsers (iOS).
+let pendingPick = null;
+const filePickers = {};
+function filePicker(kind) {
+  if (filePickers[kind]) return filePickers[kind];
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.className = 'hidden';
+  if (kind !== 'file') input.accept = 'image/*';
+  if (kind === 'camera') input.setAttribute('capture', 'environment');
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    input.value = ''; // lets the same file be picked again later
+    const req = pendingPick;
+    pendingPick = null;
+    if (file && req) req.handler(req.task, file, req.onChange, req.at);
+  });
+  document.body.appendChild(input);
+  filePickers[kind] = input;
+  return input;
+}
+
+function createInsertMenu(task, onChange) {
   const wrap = document.createElement('div');
   wrap.className = 'insert-toolbar-wrap';
 
-  // Desktop has room for all four buttons in a row (unchanged, always visible - see the
-  // min-width:768px override that forces .hidden off regardless of this class). On mobile they
-  // don't fit, so this doubles as a menu trigger there: standard mobile pattern for 3+ actions
-  // that don't fit a toolbar is one trigger with an overflow menu rather than letting them spill
-  // off-screen.
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.className = 'icon-btn insert-toggle-btn';
-  toggleBtn.setAttribute('aria-label', 'Add content');
-  toggleBtn.title = 'Add content';
-  toggleBtn.innerHTML = icon('plus');
-  toggleBtn.addEventListener('click', (e) => {
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'btn btn-ghost insert-toggle-btn';
+  toggle.setAttribute('aria-haspopup', 'menu');
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.innerHTML = `${icon('plus')}<span>Insert</span>`;
+
+  const menu = document.createElement('div');
+  menu.className = 'insert-menu hidden';
+  menu.setAttribute('role', 'menu');
+
+  // Where the next block goes, and (for "/") which block the slash was typed into.
+  let pending = { slashBlock: null, slashIndex: -1 };
+  let highlighted = 0;
+
+  const insertionIndex = () => {
+    if (pending.slashBlock) return pending.slashIndex + 1;
+    if (insertAfterIndex !== null && insertAfterIndex < task.Body.length) return insertAfterIndex + 1;
+    return task.Body.length;
+  };
+  // A "/" typed into an otherwise-empty block is replaced by the chosen block rather than leaving
+  // an empty paragraph behind it.
+  const consumeSlash = () => {
+    const block = pending.slashBlock;
+    if (!block) return insertionIndex();
+    block.Text = '';
+    block.Rtf = '';
+    const at = task.Body.indexOf(block);
+    const keepEmptyText = task.Body.filter((b) => b.Type === NoteBlockType.Text).length === 1;
+    if (at !== -1 && !keepEmptyText) {
+      task.Body.splice(at, 1);
+      return at;
+    }
+    return at === -1 ? task.Body.length : at + 1;
+  };
+  const insert = (newBlock) => {
+    const at = consumeSlash();
+    task.Body.splice(at, 0, newBlock);
+    insertAfterIndex = at;
+    close();
+    onChange({ rerenderBody: true });
+    return newBlock;
+  };
+
+  // The picker finishes after the menu (and maybe this whole body) is gone; the new block still
+  // lands where the menu was opened, captured here.
+  const pick = (kind, handler) => {
+    const hadSlash = !!pending.slashBlock;
+    pendingPick = { task, onChange, handler, at: consumeSlash() };
+    close();
+    filePicker(kind).click(); // synchronously, inside the tap that chose the item
+    if (hadSlash) onChange({ rerenderBody: true });
+  };
+
+  const items = [
+    { label: 'Text', icon: 'text', run: () => { const b = insert(newNoteBlock(NoteBlockType.Text, {})); focusTextBlock(b.Id); } },
+    {
+      label: 'Checklist',
+      icon: 'checklist',
+      run: () => {
+        const b = insert(newNoteBlock(NoteBlockType.Checklist, {}));
+        document.querySelector(`[data-focus-key="${CSS.escape(`${b.Id}:add`)}"]`)?.focus();
+      },
+    },
+    {
+      label: 'Link',
+      icon: 'link',
+      run: async () => {
+        const at = consumeSlash();
+        close();
+        const result = await promptForLink();
+        if (!result) { onChange({ rerenderBody: true }); return; }
+        task.Body.splice(at, 0, newNoteBlock(NoteBlockType.Link, { url: result.url, linkLabel: result.label }));
+        onChange({ rerenderBody: true });
+      },
+    },
+    { label: 'Photo', icon: 'image', run: () => pick('photo', handlePhotoPick) },
+    ...(isTouchDevice ? [{ label: 'Take Photo', icon: 'camera', run: () => pick('camera', handlePhotoPick) }] : []),
+    { label: 'File', icon: 'paperclip', run: () => pick('file', handleFilePick) },
+  ];
+
+
+  const buttons = items.map((item) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dropdown-item insert-menu-item';
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = icon(item.icon, 'inline-icon');
+    btn.appendChild(document.createTextNode(` ${item.label}`));
+    // mousedown, not click: keeps focus (and the "/" block's caret) where it is until the item runs.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => item.run());
+    menu.appendChild(btn);
+    return { item, btn };
+  });
+
+  const visibleButtons = () => buttons.filter((b) => !b.btn.classList.contains('hidden'));
+  const paintHighlight = () => {
+    const visible = visibleButtons();
+    buttons.forEach((b) => b.btn.classList.remove('highlighted'));
+    if (visible.length) visible[Math.min(highlighted, visible.length - 1)].btn.classList.add('highlighted');
+  };
+
+  function open(anchor, { slashBlock = null, slashIndex = -1, filter = '' } = {}) {
+    pending = { slashBlock, slashIndex };
+    const f = filter.toLowerCase();
+    for (const { item, btn } of buttons) btn.classList.toggle('hidden', !!f && !item.label.toLowerCase().startsWith(f));
+    if (visibleButtons().length === 0) { close(); return; }
+    highlighted = 0;
+    paintHighlight();
+    menu.classList.remove('hidden');
+    menu.classList.toggle('from-slash', !!slashBlock);
+    toggle.setAttribute('aria-expanded', 'true');
+    // Anchor under the "/" block when opened from one; above the Insert button otherwise.
+    if (slashBlock) {
+      // Fixed to the viewport, just under the line being typed, kept on screen.
+      const a = anchor.getBoundingClientRect();
+      menu.style.top = `${Math.max(8, Math.min(a.bottom + 4, window.innerHeight - menu.offsetHeight - 8))}px`;
+      menu.style.left = `${Math.max(8, Math.min(a.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+    } else {
+      menu.style.top = '';
+      menu.style.left = '';
+    }
+  }
+  function close() {
+    menu.classList.add('hidden');
+    toggle.setAttribute('aria-expanded', 'false');
+    pending = { slashBlock: null, slashIndex: -1 };
+  }
+
+  toggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    bar.classList.toggle('hidden');
+    if (menu.classList.contains('hidden')) {
+      open(toggle);
+      visibleButtons()[0]?.btn.focus();
+    } else {
+      close();
+    }
+  });
+  menu.addEventListener('keydown', (e) => {
+    const visible = visibleButtons().map((b) => b.btn);
+    const i = visible.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); visible[(i + 1) % visible.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); visible[(i - 1 + visible.length) % visible.length]?.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); toggle.focus(); }
   });
 
+  // Keys typed in the "/" block drive the menu while it's open from there.
+  function handleSlashKey(e, block) {
+    if (menu.classList.contains('hidden') || pending.slashBlock !== block) return false;
+    const visible = visibleButtons();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      highlighted = (highlighted + (e.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+      paintHighlight();
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      visible[Math.min(highlighted, visible.length - 1)]?.item.run();
+      return true;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return true;
+    }
+    return false;
+  }
+  function closeSlash(block) {
+    if (pending.slashBlock === block) close();
+  }
+
+  wrap.append(toggle, menu);
+  const api = { wrap, menu, toggle, open, close, closeSlash, handleSlashKey };
+  activeInsertMenu = api;
+  return api;
+}
+
+// --- Formatting toolbar -------------------------------------------------------------------------
+// Bold / italic / underline / lists / link / clear, shown (sticky at the top of the note) while a
+// Text block has focus. Every button acts on the live selection through execCommand, which also
+// fires the block's input event - so the XAML for desktop is regenerated exactly as for typing.
+function renderFormatBar() {
   const bar = document.createElement('div');
-  bar.className = 'insert-toolbar hidden';
+  bar.className = 'format-bar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Text formatting');
 
-  const addText = document.createElement('button');
-  addText.className = 'btn btn-ghost';
-  addText.textContent = '+ Text';
-  addText.addEventListener('click', () => {
-    task.Body.push(newNoteBlock(NoteBlockType.Text, {}));
-    onChange({ rerenderBody: true });
+  const actions = [
+    { icon: 'bold', label: 'Bold (Ctrl+B)', command: 'bold' },
+    { icon: 'italic', label: 'Italic (Ctrl+I)', command: 'italic' },
+    { icon: 'underline', label: 'Underline (Ctrl+U)', command: 'underline' },
+    { icon: 'list', label: 'Bulleted list', command: 'insertUnorderedList' },
+    { icon: 'listOrdered', label: 'Numbered list', command: 'insertOrderedList' },
+    { icon: 'link', label: 'Link', run: insertLinkAtSelection },
+    { icon: 'clearFormat', label: 'Clear formatting', command: 'removeFormat' },
+  ];
+  const buttons = [];
+  for (const action of actions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'icon-btn format-btn';
+    btn.innerHTML = icon(action.icon);
+    btn.title = action.label;
+    btn.setAttribute('aria-label', action.label);
+    if (action.command && ['bold', 'italic', 'underline'].includes(action.command)) btn.setAttribute('aria-pressed', 'false');
+    // pointerdown/mousedown default would move focus off the text and drop the selection.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => {
+      if (action.run) action.run();
+      else document.execCommand(action.command, false, null);
+      refresh();
+    });
+    buttons.push({ btn, action });
+    bar.appendChild(btn);
+  }
+
+  const refresh = () => {
+    for (const { btn, action } of buttons) {
+      if (!btn.hasAttribute('aria-pressed')) continue;
+      let on = false;
+      try { on = document.queryCommandState(action.command); } catch { /* unsupported */ }
+      btn.setAttribute('aria-pressed', String(on));
+      btn.classList.toggle('active', on);
+    }
+  };
+  document.addEventListener('selectionchange', () => {
+    if (!bar.isConnected) return;
+    const inText = document.activeElement?.classList?.contains('block-text');
+    bar.classList.toggle('visible', !!inText);
+    if (inText) refresh();
   });
+  return bar;
+}
 
-  const addChecklist = document.createElement('button');
-  addChecklist.className = 'btn btn-ghost';
-  addChecklist.textContent = '+ Checklist';
-  addChecklist.addEventListener('click', () => {
-    task.Body.push(newNoteBlock(NoteBlockType.Checklist, {}));
-    onChange({ rerenderBody: true });
+async function insertLinkAtSelection() {
+  const sel = window.getSelection();
+  const editable = document.activeElement?.closest?.('.block-text');
+  if (!sel || sel.rangeCount === 0 || !editable) return;
+  const range = sel.getRangeAt(0).cloneRange();
+  const selectedText = range.toString();
+  const result = await openDialog({
+    title: 'Add Link',
+    fields: [
+      { key: 'url', label: 'URL', type: 'url', placeholder: 'https://…', error: 'Enter a valid http:// or https:// URL.' },
+      ...(selectedText ? [] : [{ key: 'label', label: 'Text (optional)' }]),
+    ],
+    actions: [
+      { label: 'Cancel', value: null },
+      {
+        label: 'Add',
+        primary: true,
+        submit: true,
+        validate: (v) => (URL_RE.test(v.url) ? null : 'url'),
+        value: (v) => ({ url: v.url, label: v.label || v.url }),
+      },
+    ],
   });
-
-  const addLink = document.createElement('button');
-  addLink.className = 'btn btn-ghost';
-  addLink.textContent = '+ Link';
-  addLink.addEventListener('click', async () => {
-    const result = await promptForLink();
-    if (!result) return;
-    task.Body.push(newNoteBlock(NoteBlockType.Link, { url: result.url, linkLabel: result.label }));
-    onChange({ rerenderBody: true });
-  });
-
-  const addPhoto = document.createElement('button');
-  addPhoto.className = 'btn btn-ghost';
-  addPhoto.textContent = '+ Photo';
-  const photoInput = document.createElement('input');
-  photoInput.type = 'file';
-  photoInput.accept = 'image/*';
-  photoInput.className = 'hidden';
-  addPhoto.addEventListener('click', () => photoInput.click());
-  // "Take Photo" - a second file input with capture="environment", which phones open straight on
-  // the rear camera instead of the gallery picker. Only offered on touch devices; a laptop's
-  // webcam prompt for the same attribute is more confusing than useful.
-  const addCamera = document.createElement('button');
-  addCamera.className = 'btn btn-ghost';
-  addCamera.textContent = '+ Take Photo';
-  const cameraInput = document.createElement('input');
-  cameraInput.type = 'file';
-  cameraInput.accept = 'image/*';
-  cameraInput.setAttribute('capture', 'environment');
-  cameraInput.className = 'hidden';
-  addCamera.addEventListener('click', () => cameraInput.click());
-  cameraInput.addEventListener('change', () => {
-    const file = cameraInput.files?.[0];
-    cameraInput.value = '';
-    if (file) handlePhotoPick(task, file, onChange);
-  });
-
-  photoInput.addEventListener('change', () => {
-    const file = photoInput.files?.[0];
-    photoInput.value = ''; // lets the same file be picked again later
-    if (file) handlePhotoPick(task, file, onChange);
-  });
-
-  const addFile = document.createElement('button');
-  addFile.className = 'btn btn-ghost';
-  addFile.textContent = '+ File';
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.className = 'hidden';
-  addFile.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    fileInput.value = ''; // lets the same file be picked again later
-    if (file) handleFilePick(task, file, onChange);
-  });
-
-  bar.append(addText, addChecklist, addLink, addPhoto, photoInput);
-  if (isTouchDevice) bar.append(addCamera, cameraInput);
-  bar.append(addFile, fileInput);
-  wrap.append(toggleBtn, bar);
-  activeInsertBar = bar;
-  activeInsertToggle = toggleBtn;
-  return wrap;
+  editable.focus();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  if (!result) return;
+  if (selectedText) {
+    document.execCommand('createLink', false, result.url);
+  } else {
+    const a = document.createElement('a');
+    a.href = result.url;
+    a.textContent = result.label;
+    document.execCommand('insertHTML', false, a.outerHTML);
+  }
 }
 
 // Every attachment upload still in flight, including its rollback-on-failure. The block for a
@@ -1070,7 +1421,7 @@ function trackUpload(work) {
   return work;
 }
 
-async function handlePhotoPick(task, pickedFile, onChange) {
+export async function handlePhotoPick(task, pickedFile, onChange, insertAt = task.Body.length) {
   // Optionally shrunk before anything else happens (see prepareUploadImage) so the preview, the
   // thumbnail cache and the upload all agree on one set of bytes. A re-encoded image is JPEG
   // whatever it started as, so its name says so.
@@ -1084,7 +1435,7 @@ async function handlePhotoPick(task, pickedFile, onChange) {
   const fileName = `${crypto.randomUUID()}${ext}`;
 
   const block = newNoteBlock(NoteBlockType.Photo, { photoPath: fileName });
-  task.Body.push(block);
+  task.Body.splice(Math.min(insertAt, task.Body.length), 0, block);
   // Show it immediately from the local file rather than waiting on the upload + a Drive
   // round-trip to fetch back what was just picked.
   photoUrlCache.set(fileName, URL.createObjectURL(file));
@@ -1129,13 +1480,13 @@ async function handlePhotoPick(task, pickedFile, onChange) {
 // already content-agnostic), and PhotoPath doubles as the generic "attachment reference" field for
 // every block type that has one, File included (see NoteBlock.cs - FileName is just PhotoPath's
 // basename, regardless of Type).
-async function handleFilePick(task, file, onChange) {
+export async function handleFilePick(task, file, onChange, insertAt = task.Body.length) {
   const dot = file.name.lastIndexOf('.');
   const ext = dot > -1 ? file.name.slice(dot) : '';
   const fileName = `${crypto.randomUUID()}${ext}`;
 
   const block = newNoteBlock(NoteBlockType.File, { photoPath: fileName });
-  task.Body.push(block);
+  task.Body.splice(Math.min(insertAt, task.Body.length), 0, block);
   fileUrlCache.set(fileName, URL.createObjectURL(file));
   fileBlobCache.set(fileName, file); // shareable right away, no round-trip through Drive
   onChange({ rerenderBody: true });

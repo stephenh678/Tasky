@@ -955,6 +955,19 @@ public class MainViewModel : INotifyPropertyChanged
     {
         if (sourceTask is null || targetTask is null || ReferenceEquals(sourceTask, targetTask)) return;
 
+        // Everything below works in AllTasks index order and then renumbers SortOrder from it, but
+        // that order can drift from the Manual order actually on screen: MergeTaskOrder only
+        // rewrites SortOrder (it never moves items), and pinned tasks always sort first. Line the
+        // collection up with the displayed order first, or one drag snaps every other task back to
+        // raw collection order.
+        var manualComparer = new TaskComparer(SortOption.Manual);
+        var displayed = AllTasks.OrderBy(t => t, Comparer<TaskItem>.Create((a, b) => manualComparer.Compare(a, b))).ToList();
+        for (var i = 0; i < displayed.Count; i++)
+        {
+            var current = AllTasks.IndexOf(displayed[i]);
+            if (current != i) AllTasks.Move(current, i);
+        }
+
         int sourceIndex = AllTasks.IndexOf(sourceTask);
         int targetIndex = AllTasks.IndexOf(targetTask);
         if (sourceIndex < 0 || targetIndex < 0) return;
@@ -1239,8 +1252,10 @@ public class MainViewModel : INotifyPropertyChanged
             };
             if (dialog.ShowDialog() != true) return;
 
+            var previousFilePath = _currentFilePath;
             _currentFilePath = dialog.FileName;
             MediaPathResolver.SetDataFilePath(_currentFilePath);
+            CopyReferencedMedia(previousFilePath, _currentFilePath);
             // ROADMAP.md #124: SaveAsync awaited directly (this handler is already off the sync
             // call stack once ShowDialog returns) instead of the blocking Save()/GetResult() bridge.
             await _store.SaveAsync(_state, _currentFilePath);
@@ -1964,6 +1979,40 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // Attachments/InlineImages live next to the data file (MediaPathResolver.DirectoryFor), so a
+    // Save As into a different folder has to bring along the files its tasks reference - otherwise
+    // every image and file card in the new copy points at a folder that doesn't have them.
+    private void CopyReferencedMedia(string fromDataFile, string toDataFile)
+    {
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in AllTasks)
+            ExtractTaskMediaFilenames(task, referenced);
+        if (referenced.Count == 0) return;
+
+        foreach (var dirName in new[] { "Attachments", "InlineImages" })
+        {
+            var fromDir = MediaPathResolver.DirectoryFor(fromDataFile, dirName);
+            var toDir = MediaPathResolver.DirectoryFor(toDataFile, dirName);
+            if (string.Equals(fromDir, toDir, StringComparison.OrdinalIgnoreCase)) continue;
+
+            foreach (var fileName in referenced)
+            {
+                var source = Path.Combine(fromDir, fileName);
+                var destination = Path.Combine(toDir, fileName);
+                if (!File.Exists(source) || File.Exists(destination)) continue;
+                try
+                {
+                    Directory.CreateDirectory(toDir);
+                    File.Copy(source, destination);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Warn("MainViewModel", $"Save As: couldn't copy '{source}' to '{destination}': {ex.Message}");
+                }
+            }
+        }
+    }
+
     private static void ExtractTaskMediaFilenames(TaskItem task, HashSet<string> set)
     {
         if (task.Body is null) return;
@@ -1983,7 +2032,13 @@ public class MainViewModel : INotifyPropertyChanged
         var parsed = QuickEntryParser.Parse(title);
         var text = string.IsNullOrWhiteSpace(parsed.Text) ? title : parsed.Text;
 
-        var task = new TaskItem { Text = text, DueDate = parsed.DueDate };
+        var task = new TaskItem
+        {
+            Text = text,
+            DueDate = parsed.DueDate,
+            Recurrence = parsed.Recurrence,
+            RecurrenceInterval = parsed.RecurrenceInterval,
+        };
         foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
 
         if (SelectedSidebarItem?.Kind == SidebarFilterKind.Done || SelectedSidebarItem?.Kind == SidebarFilterKind.Trash)
@@ -2012,6 +2067,8 @@ public class MainViewModel : INotifyPropertyChanged
         {
             var parsed = QuickEntryParser.Parse(quickAddTokens);
             task.DueDate = parsed.DueDate;
+            task.Recurrence = parsed.Recurrence;
+            task.RecurrenceInterval = parsed.RecurrenceInterval;
             foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
         }
         task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
@@ -2175,6 +2232,12 @@ public class MainViewModel : INotifyPropertyChanged
         // resurrected on the next sync.
         _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
 
+        // Same reasoning for saved Views: without this they vanish from the sidebar on every
+        // launch, the next save writes the empty in-memory list over what's on disk, and opening a
+        // different file carries the previous file's views into it.
+        _state.SavedViews = loaded.SavedViews ?? new();
+        _state.DeletedSavedViewIds = loaded.DeletedSavedViewIds ?? new();
+
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
         _state.TasksOrderModifiedAt = loaded.TasksOrderModifiedAt;
         // Pre-SortOrder data (and files written by a Tasky Web build older than the one that learned
@@ -2337,6 +2400,10 @@ public class MainViewModel : INotifyPropertyChanged
                     {
                         DetachTask(spawned);
                         AllTasks.Remove(spawned);
+                        // The spawned occurrence may already have synced out - without a tombstone
+                        // the next Drive merge sees it as a task this device just hasn't pulled
+                        // yet and adds it straight back.
+                        RecordTaskDeletionTombstone(spawned);
                         OnTaskChanged();
                     }
                 }

@@ -862,6 +862,10 @@ public partial class MainWindow : Window
                 ? $"Due: {due:ddd, MMM d}"
                 : $"Due: {due:ddd, MMM d 'at' h:mmtt}");
         }
+        if (QuickEntryParser.DescribeRecurrence(parsed.Recurrence, parsed.RecurrenceInterval) is { } repeat)
+        {
+            parts.Add(repeat);
+        }
         if (parsed.Tags.Count > 0)
         {
             parts.Add(string.Join(" ", parsed.Tags.Select(t => $"#{t}")));
@@ -978,6 +982,11 @@ public partial class MainWindow : Window
 
         if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control) return;
 
+        // Every branch below pastes into NoteEditor - a Ctrl+V aimed at the title, search, or
+        // subtask box belongs to that TextBox's own paste. Checked once up front: the file-list and
+        // image branches used to skip it, so pasting a screenshot into Search landed in the note.
+        if (Keyboard.FocusedElement is TextBox) return;
+
         // 1. Files copied from Windows File Explorer (via Ctrl+C in Explorer)
         if (Clipboard.ContainsFileDropList())
         {
@@ -1041,12 +1050,9 @@ public partial class MainWindow : Window
         // exactly the paste this case exists to handle.
         if (Clipboard.ContainsText() && TryGetBareUrl(Clipboard.GetText(), out var url))
         {
-            if (Keyboard.FocusedElement is not TextBox)
-            {
-                RichTextBoxBehavior.InsertInlineHyperlink(NoteEditor, url);
-                e.Handled = true;
-                return;
-            }
+            RichTextBoxBehavior.InsertInlineHyperlink(NoteEditor, url);
+            e.Handled = true;
+            return;
         }
 
         // 4. Rich content copied from a chat/browser app (Slack, Teams, browser selections) - these
@@ -1060,7 +1066,7 @@ public partial class MainWindow : Window
         if (Clipboard.ContainsData(DataFormats.Html) && !Clipboard.ContainsData(DataFormats.Rtf))
         {
             var html = Clipboard.GetData(DataFormats.Html) as string;
-            if (!string.IsNullOrWhiteSpace(html) && Keyboard.FocusedElement is not TextBox)
+            if (!string.IsNullOrWhiteSpace(html))
             {
                 RichTextBoxBehavior.InsertHtmlClipboardContent(NoteEditor, html);
                 e.Handled = true;
@@ -1076,7 +1082,7 @@ public partial class MainWindow : Window
             Clipboard.ContainsText())
         {
             var plainText = Clipboard.GetText();
-            if (Keyboard.FocusedElement is not TextBox && RichTextBoxBehavior.ContainsEmbeddedUrl(plainText))
+            if (RichTextBoxBehavior.ContainsEmbeddedUrl(plainText))
             {
                 RichTextBoxBehavior.InsertPlainTextWithLinkedUrls(NoteEditor, plainText);
                 e.Handled = true;
@@ -1087,7 +1093,7 @@ public partial class MainWindow : Window
         // 6. Regular Text: if focus is NOT inside an active editable control, focus the editor and paste
         if (Clipboard.ContainsText())
         {
-            if (Keyboard.FocusedElement is not TextBox && Keyboard.FocusedElement is not RichTextBox)
+            if (Keyboard.FocusedElement is not RichTextBox)
             {
                 NoteEditor.Focus();
                 NoteEditor.Paste();

@@ -153,14 +153,9 @@ public static class RichTextBoxBehavior
                     nextPara.Inlines.Add(new Run(remaining));
                 }
 
-                if (currentPara.Parent is FlowDocument doc)
-                {
-                    doc.Blocks.InsertAfter(currentPara, nextPara);
-                }
-                else
-                {
-                    rtb.Document.Blocks.InsertAfter(currentPara, nextPara);
-                }
+                // SiblingBlocks, not Document.Blocks: a checklist line inside a list item or table
+                // cell isn't a direct child of the document, and inserting there would throw.
+                (currentPara.SiblingBlocks ?? rtb.Document.Blocks).InsertAfter(currentPara, nextPara);
 
                 rtb.CaretPosition = nextContainer.ElementEnd;
                 e.Handled = true;
@@ -296,7 +291,10 @@ public static class RichTextBoxBehavior
             var localDir = string.Equals(m.Groups["dir"].Value, "InlineImages", StringComparison.OrdinalIgnoreCase)
                 ? GetInlineAttachmentDirectory()
                 : GetAttachmentsDirectory();
-            var localPath = Path.Combine(localDir, m.Groups["file"].Value);
+            // localDir is a raw filesystem path going into a XAML attribute - a folder name with
+            // '&' or an apostrophe in it would otherwise make the whole note fail to parse. The
+            // captured file name is already XAML-escaped text, so only the directory needs it.
+            var localPath = Path.Combine(System.Security.SecurityElement.Escape(localDir)!, m.Groups["file"].Value);
             return $"{m.Groups["attr"].Value}=\"{localPath}\"";
         });
     }
@@ -410,7 +408,11 @@ public static class RichTextBoxBehavior
                     AppLogger.Info("NoteEditor", $"LoadContent: Loaded {rtb.Document.Blocks.Count} blocks from RTF stream");
                     return;
                 }
-                catch (NotSupportedException ex)
+                // Broad on purpose (here and in the two branches below): TextRange.Load throws
+                // ArgumentException for malformed RTF/XamlPackage, not just the documented types,
+                // and anything escaping this method surfaces from the Loaded handler as a crash
+                // instead of reaching the plain-text fallback.
+                catch (Exception ex)
                 {
                     AppLogger.Warn("NoteEditor", $"RTF load failed - falling back: {ex.Message}");
                     App.LogException(ex);
@@ -434,7 +436,7 @@ public static class RichTextBoxBehavior
                         return;
                     }
                 }
-                catch (XamlParseException ex)
+                catch (Exception ex)
                 {
                     AppLogger.Warn("NoteEditor", $"XAML parse failed - falling back: {ex.Message}");
                     App.LogException(ex);
@@ -459,13 +461,17 @@ public static class RichTextBoxBehavior
                     AppLogger.Info("NoteEditor", $"LoadContent: Loaded {rtb.Document.Blocks.Count} blocks from legacy XamlPackage");
                     return;
                 }
-                catch (FormatException ex)
+                catch (Exception ex)
                 {
-                    AppLogger.Warn("NoteEditor", $"Legacy XamlPackage Base64 decode failed: {ex.Message}");
+                    AppLogger.Warn("NoteEditor", $"Legacy XamlPackage load failed: {ex.Message}");
                     App.LogException(ex);
                 }
             }
         }
+
+        // A failed load above can leave part of the document populated - clear it so the
+        // fallback below doesn't render on top of (and then save over) a half-loaded copy.
+        rtb.Document.Blocks.Clear();
 
         if (!string.IsNullOrEmpty(block.PhotoPath) && File.Exists(block.PhotoPath) && !HasMedia(rtb.Document))
             RestoreInlinePhotoIfNeeded(rtb, block);
@@ -631,13 +637,33 @@ public static class RichTextBoxBehavior
         {
             AppLogger.Error("NoteEditor", "ERROR in SaveContent", ex);
             App.LogException(ex);
-            return string.Empty;
+            // Returning "" here used to overwrite the block's Rtf with nothing on the next
+            // autosave, so a single unserializable element wiped every image, table and bit of
+            // formatting in the note. RTF drops embedded UI (checkboxes, cards) but keeps the text
+            // and its formatting, and LoadContent already reads it back.
+            return SaveContentAsRtf(rtb);
         }
         finally
         {
             for (int i = 0; i < checkBoxes.Count; i++) checkBoxes[i].Tag = savedTags[i];
             HookDocumentImages(rtb.Document, rtb);
             HookDocumentFileChips(rtb.Document, rtb);
+        }
+    }
+
+    private static string SaveContentAsRtf(RichTextBox rtb)
+    {
+        try
+        {
+            var range = new TextRange(rtb.Document.ContentStart, rtb.Document.ContentEnd);
+            using var stream = new MemoryStream();
+            range.Save(stream, DataFormats.Rtf);
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("NoteEditor", "RTF fallback in SaveContent also failed", ex);
+            return string.Empty;
         }
     }
 
@@ -999,26 +1025,28 @@ public static class RichTextBoxBehavior
                 delBtn.MouseLeave -= DelBtn_MouseLeave;
                 delBtn.MouseLeave += DelBtn_MouseLeave;
 
-                delBtn.PreviewMouseLeftButtonDown -= (s, e) => { };
-                delBtn.PreviewMouseLeftButtonDown += (s, e) =>
+                if (HookedDeleteButtons.TryAdd(delBtn, HookedMarker))
                 {
-                    e.Handled = true;
-                    var parentBlock = rtb.Document.Blocks.OfType<BlockUIContainer>().FirstOrDefault(b => b.Child == cardElement);
-                    if (parentBlock is not null)
+                    delBtn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        rtb.Document.Blocks.Remove(parentBlock);
-                        SaveContentToBlock(rtb);
-                        try
+                        e.Handled = true;
+                        var parentBlock = rtb.Document.Blocks.OfType<BlockUIContainer>().FirstOrDefault(b => b.Child == cardElement);
+                        if (parentBlock is not null)
                         {
-                            if (File.Exists(filePath))
+                            rtb.Document.Blocks.Remove(parentBlock);
+                            SaveContentToBlock(rtb);
+                            try
                             {
-                                File.Delete(filePath);
-                                AppLogger.Info("NoteEditor", $"Deleted attachment '{filePath}' via ✕ button");
+                                if (File.Exists(filePath))
+                                {
+                                    File.Delete(filePath);
+                                    AppLogger.Info("NoteEditor", $"Deleted attachment '{filePath}' via ✕ button");
+                                }
                             }
+                            catch { }
                         }
-                        catch { }
-                    }
-                };
+                    };
+                }
             }
         }
 
@@ -1029,6 +1057,13 @@ public static class RichTextBoxBehavior
         cardElement.Unloaded -= Container_Unloaded;
         cardElement.Unloaded += Container_Unloaded;
     }
+
+    // SaveContent re-runs HookDocumentImages/HookDocumentFileChips after every save (i.e. every
+    // keystroke), and the delete handlers are closures, so they can't be -=/+= deduplicated the
+    // way the named handlers are. Tracks which buttons are already wired so each gets exactly one.
+    // Deliberately not an attached property: XamlWriter.Save would serialize it into the note.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, object> HookedDeleteButtons = new();
+    private static readonly object HookedMarker = new();
 
     private static void DelBtn_MouseEnter(object sender, MouseEventArgs e)
     {
@@ -1245,29 +1280,31 @@ public static class RichTextBoxBehavior
                 delBtn.MouseLeave -= DelBtn_MouseLeave;
                 delBtn.MouseLeave += DelBtn_MouseLeave;
 
-                delBtn.PreviewMouseLeftButtonDown -= (s, e) => { };
-                delBtn.PreviewMouseLeftButtonDown += (s, e) =>
+                if (HookedDeleteButtons.TryAdd(delBtn, HookedMarker))
                 {
-                    e.Handled = true;
-                    var parentBlock = rtb.Document.Blocks.OfType<BlockUIContainer>().FirstOrDefault(b => b.Child == container);
-                    if (parentBlock is not null)
+                    delBtn.PreviewMouseLeftButtonDown += (s, e) =>
                     {
-                        rtb.Document.Blocks.Remove(parentBlock);
-                        SaveContentToBlock(rtb);
-                        try
+                        e.Handled = true;
+                        var parentBlock = rtb.Document.Blocks.OfType<BlockUIContainer>().FirstOrDefault(b => b.Child == container);
+                        if (parentBlock is not null)
                         {
-                            if (image.Source is BitmapImage bi && bi.UriSource is { IsAbsoluteUri: true, Scheme: "file" } uri)
+                            rtb.Document.Blocks.Remove(parentBlock);
+                            SaveContentToBlock(rtb);
+                            try
                             {
-                                if (File.Exists(uri.LocalPath))
+                                if (image.Source is BitmapImage bi && bi.UriSource is { IsAbsoluteUri: true, Scheme: "file" } uri)
                                 {
-                                    File.Delete(uri.LocalPath);
-                                    AppLogger.Info("NoteEditor", $"Deleted inline image file '{uri.LocalPath}' via ✕ button");
+                                    if (File.Exists(uri.LocalPath))
+                                    {
+                                        File.Delete(uri.LocalPath);
+                                        AppLogger.Info("NoteEditor", $"Deleted inline image file '{uri.LocalPath}' via ✕ button");
+                                    }
                                 }
                             }
+                            catch { }
                         }
-                        catch { }
-                    }
-                };
+                    };
+                }
             }
         }
 
@@ -1585,7 +1622,7 @@ public static class RichTextBoxBehavior
         var currentPara = insertion.Paragraph;
         if (currentPara is not null)
         {
-            rtb.Document.Blocks.InsertAfter(currentPara, container);
+            InsertAfterTopLevelBlock(rtb, currentPara, container);
             var nextPara = new Paragraph();
             rtb.Document.Blocks.InsertAfter(container, nextPara);
             rtb.CaretPosition = nextPara.ContentStart;
@@ -1600,6 +1637,26 @@ public static class RichTextBoxBehavior
         rtb.Focus();
         SaveContentToBlock(rtb);
         AppLogger.Info("NoteEditor", $"InsertInlineImage: Successfully inserted and saved inline image (Doc blocks: {rtb.Document.Blocks.Count})");
+    }
+
+    // Images, file cards and tables go after the caret paragraph's top-level ancestor rather than
+    // after the paragraph itself: a paragraph inside a list item or table cell isn't a child of
+    // Document.Blocks (InsertAfter would throw), and HookDocumentImages/HookDocumentFileChips/
+    // SaveContent only walk Document.Blocks, so media nested deeper would lose its interactivity.
+    private static void InsertAfterTopLevelBlock(RichTextBox rtb, Block anchor, Block newBlock)
+    {
+        var top = anchor;
+        DependencyObject? node = anchor;
+        while (node is FrameworkContentElement element && element.Parent is not FlowDocument)
+        {
+            node = element.Parent;
+            if (node is Block block) top = block;
+        }
+
+        if (top.Parent == rtb.Document)
+            rtb.Document.Blocks.InsertAfter(top, newBlock);
+        else
+            rtb.Document.Blocks.Add(newBlock);
     }
 
     public static void InsertInlineTable(RichTextBox rtb, int rows, int cols)
@@ -1662,7 +1719,7 @@ public static class RichTextBoxBehavior
         var currentPara = insertion.Paragraph;
         if (currentPara is not null)
         {
-            rtb.Document.Blocks.InsertAfter(currentPara, table);
+            InsertAfterTopLevelBlock(rtb, currentPara, table);
             var nextPara = new Paragraph();
             rtb.Document.Blocks.InsertAfter(table, nextPara);
             rtb.CaretPosition = nextPara.ContentStart;
@@ -1794,7 +1851,7 @@ public static class RichTextBoxBehavior
             if (i < lines.Length - 1)
             {
                 var nextPara = new Paragraph();
-                rtb.Document.Blocks.InsertAfter(paragraph, nextPara);
+                (paragraph.SiblingBlocks ?? rtb.Document.Blocks).InsertAfter(paragraph, nextPara);
                 paragraph = nextPara;
             }
         }
@@ -2074,7 +2131,7 @@ public static class RichTextBoxBehavior
         var currentPara = caret.Paragraph;
         if (currentPara is not null)
         {
-            rtb.Document.Blocks.InsertAfter(currentPara, container);
+            InsertAfterTopLevelBlock(rtb, currentPara, container);
             var nextPara = new Paragraph();
             rtb.Document.Blocks.InsertAfter(container, nextPara);
             rtb.CaretPosition = nextPara.ContentStart;

@@ -1,4 +1,5 @@
 using System;
+using TodoApp.Models;
 using TodoApp.Services;
 
 namespace TodoApp.Tests;
@@ -197,4 +198,57 @@ public class QuickEntryParserTests
         Assert.Null(result.DueDate);
         Assert.Empty(result.Tags);
     }
+
+    // Plain-language phrases at the end of the title - same vectors as parity.test.js's
+    // "natural language" cases. Due is "yyyy-MM-dd HH:mm", or null for no due date.
+    [Theory]
+    [InlineData("Call mom tomorrow 3pm", "Call mom", "2026-03-05 15:00", RecurrenceRule.None, 1)]
+    [InlineData("Call mom tomorrow at 3:30pm", "Call mom", "2026-03-05 15:30", RecurrenceRule.None, 1)]
+    [InlineData("Call mom tomorrow at 3 pm", "Call mom", "2026-03-05 15:00", RecurrenceRule.None, 1)]
+    [InlineData("Pay rent every month", "Pay rent", "2026-03-04 09:00", RecurrenceRule.Monthly, 1)]
+    [InlineData("Water plants every 2 weeks", "Water plants", "2026-03-04 09:00", RecurrenceRule.Weekly, 2)]
+    [InlineData("Team sync every monday 10am", "Team sync", "2026-03-09 10:00", RecurrenceRule.Weekly, 1)]
+    [InlineData("Dentist next fri", "Dentist", "2026-03-06 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Dentist next wed", "Dentist", "2026-03-11 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Dentist wed", "Dentist", "2026-03-04 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Report on friday", "Report", "2026-03-06 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Renew passport in 3 weeks", "Renew passport", "2026-03-25 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Renew passport in 10 days", "Renew passport", "2026-03-14 09:00", RecurrenceRule.None, 1)]
+    [InlineData("Stand-up daily", "Stand-up", "2026-03-04 09:00", RecurrenceRule.Daily, 1)]
+    [InlineData("Taxes yearly", "Taxes", "2026-03-04 09:00", RecurrenceRule.Yearly, 1)]
+    [InlineData("Buy milk tonight", "Buy milk", "2026-03-04 20:00", RecurrenceRule.None, 1)]
+    [InlineData("Buy milk tonight 7pm", "Buy milk", "2026-03-04 19:00", RecurrenceRule.None, 1)]
+    [InlineData("Gym tomorrow 7am #health", "Gym", "2026-03-05 07:00", RecurrenceRule.None, 1)]
+    [InlineData("Standup every day @9am", "Standup", "2026-03-04 09:00", RecurrenceRule.Daily, 1)]
+    [InlineData("Lunch 12:30", "Lunch", "2026-03-04 12:30", RecurrenceRule.None, 1)]
+    [InlineData("Call Tuesday about the budget", "Call Tuesday about the budget", null, RecurrenceRule.None, 1)]
+    [InlineData("Tomorrow", "Tomorrow", null, RecurrenceRule.None, 1)]
+    [InlineData("every day", "every day", null, RecurrenceRule.None, 1)]
+    [InlineData("Sync every 2 mondays", "Sync every 2 mondays", null, RecurrenceRule.None, 1)]
+    public void NaturalLanguage(string input, string title, string? due, RecurrenceRule recurrence, int interval)
+    {
+        var result = QuickEntryParser.Parse(input, Reference);
+
+        Assert.Equal(title, result.Text);
+        Assert.Equal(due is null ? null : DateTime.ParseExact(due, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture), result.DueDate);
+        Assert.Equal(recurrence, result.Recurrence);
+        Assert.Equal(interval, result.RecurrenceInterval);
+    }
+
+    [Fact]
+    public void ExplicitDueToken_WinsOverTrailingDatePhrase()
+    {
+        var result = QuickEntryParser.Parse("Plan trip tomorrow !due:fri", Reference);
+
+        Assert.Equal("Plan trip tomorrow", result.Text);
+        Assert.Equal(new DateTime(2026, 3, 6, 9, 0, 0), result.DueDate);
+    }
+
+    [Theory]
+    [InlineData(RecurrenceRule.None, 1, null)]
+    [InlineData(RecurrenceRule.Daily, 1, "repeats daily")]
+    [InlineData(RecurrenceRule.Weekly, 1, "repeats weekly")]
+    [InlineData(RecurrenceRule.Monthly, 3, "repeats every 3 months")]
+    public void DescribeRecurrence_ReadsNaturally(RecurrenceRule rule, int interval, string? expected)
+        => Assert.Equal(expected, QuickEntryParser.DescribeRecurrence(rule, interval));
 }

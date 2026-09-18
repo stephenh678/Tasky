@@ -441,10 +441,18 @@ export function parseQuickAdd(input, now = new Date()) {
     return lead;
   });
 
+  text = text.replace(/\s{2,}/g, ' ').trim();
+
+  // Plain-language phrases at the END of the title ("... tomorrow 3pm", "... every monday").
+  const natural = parseNaturalTail(text, now, { needDate: !datePart, needTime: !timePart });
+  text = natural.text;
+  datePart ??= natural.date;
+  timePart ??= natural.time;
+
   let dueDate = null;
   if (datePart) {
     const d = new Date(datePart);
-    d.setHours(timePart ? timePart.hour : QUICK_ADD_DEFAULT_DUE_HOUR, timePart ? timePart.minute : 0, 0, 0);
+    d.setHours(timePart ? timePart.hour : natural.defaultHour, timePart ? timePart.minute : 0, 0, 0);
     dueDate = formatDotNetDate(d);
   } else if (timePart) {
     const d = new Date(now);
@@ -452,8 +460,116 @@ export function parseQuickAdd(input, now = new Date()) {
     dueDate = formatDotNetDate(d);
   }
 
-  text = text.replace(/\s{2,}/g, ' ').trim();
-  return { text, dueDate, tags };
+  return { text, dueDate, tags, recurrence: natural.recurrence, recurrenceInterval: natural.recurrenceInterval };
+}
+
+// Upcoming (agenda) view buckets. Overdue means an earlier calendar day (a task due at 9 AM today
+// is still "Today" at noon, matching the Today section and isTaskOverdue in app.js).
+export const AgendaGroup = Object.freeze({ Overdue: 'overdue', Today: 'today', Tomorrow: 'tomorrow', Week: 'week', Later: 'later' });
+export const AGENDA_GROUP_LABELS = Object.freeze({
+  overdue: 'Overdue', today: 'Today', tomorrow: 'Tomorrow', week: 'Next 7 days', later: 'Later',
+});
+export function agendaGroup(due, now = new Date()) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const days = Math.round((startOfDay(due) - startOfDay(now)) / dayMs);
+  if (days < 0) return AgendaGroup.Overdue;
+  if (days === 0) return AgendaGroup.Today;
+  if (days === 1) return AgendaGroup.Tomorrow;
+  if (days <= 7) return AgendaGroup.Week;
+  return AgendaGroup.Later;
+}
+
+// Preview wording for a parsed repeat - mirrors QuickEntryParser.DescribeRecurrence.
+export function describeRecurrence(rule, interval = 1) {
+  const unit = { [RecurrenceRule.Daily]: 'day', [RecurrenceRule.Weekly]: 'week', [RecurrenceRule.Monthly]: 'month', [RecurrenceRule.Yearly]: 'year' }[rule];
+  if (!unit) return null;
+  if (interval > 1) return `repeats every ${interval} ${unit}s`;
+  return rule === RecurrenceRule.Daily ? 'repeats daily' : `repeats ${unit}ly`;
+}
+
+// Plain-language scheduling, mirrored by Services/QuickEntryParser.cs ParseNaturalTail. Only a
+// phrase at the very END of the title is read - "Call mom tomorrow 3pm" is due tomorrow at 3, but
+// "Call Tuesday about the budget" is left alone, which is what keeps this from misreading ordinary
+// words the way free-text date parsing does. Phrases may stack in any order ("every monday 10am"),
+// and a phrase is never consumed if it would leave the title empty ("Tomorrow" stays a title).
+//   time:   3pm · 3:30 pm · 15:00 · at 9am
+//   date:   today · tonight (8 PM unless a time is given) · tomorrow/tmrw · [on|due] fri ·
+//           next fri (never today) · in 3 days · in 2 weeks
+//   repeat: daily · weekly · monthly · yearly · every day|week|month|year · every 2 weeks ·
+//           every monday (weekly, starting that day)
+// A repeat with no date starts today, so the series has an anchor.
+const NATURAL_WEEKDAYS = 'sunday|monday|tuesday|tues|tue|wednesday|weds|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sun|mon';
+const NATURAL_TIME_TAIL_RE = /\s(?:at\s+)?([0-9]{1,2}(?::[0-9]{2})?\s?(?:am|pm)|[0-9]{1,2}:[0-9]{2})$/i;
+const NATURAL_REPEAT_TAIL_RE = new RegExp(String.raw`\s(?:every\s+(?:([0-9]{1,2})\s+)?(days?|weeks?|months?|years?|${NATURAL_WEEKDAYS})|(daily|weekly|monthly|yearly))$`, 'i');
+const NATURAL_DATE_TAIL_RE = new RegExp(String.raw`\s(?:(?:on|due)\s+)?(today|tonight|tomorrow|tmrw|next\s+(${NATURAL_WEEKDAYS})|(${NATURAL_WEEKDAYS})|in\s+([0-9]{1,3})\s+(days?|weeks?))$`, 'i');
+const NATURAL_REPEAT_UNITS = { day: RecurrenceRule.Daily, week: RecurrenceRule.Weekly, month: RecurrenceRule.Monthly, year: RecurrenceRule.Yearly };
+const NATURAL_TONIGHT_HOUR = 20;
+
+function weekdayOffset(today, name, { excludeToday = false } = {}) {
+  const offset = (QUICK_ADD_WEEKDAYS[name.toLowerCase()] - today.getDay() + 7) % 7;
+  return offset === 0 && excludeToday ? 7 : offset;
+}
+
+function parseNaturalTail(input, now, { needDate, needTime }) {
+  let text = input;
+  let date = null;
+  let time = null;
+  let recurrence = RecurrenceRule.None;
+  let recurrenceInterval = 1;
+  let defaultHour = QUICK_ADD_DEFAULT_DUE_HOUR;
+  let repeatWeekday = null;
+  const today = startOfDay(now);
+
+  const take = (re) => {
+    const m = re.exec(text);
+    if (!m || !text.slice(0, m.index).trim()) return null;
+    return m;
+  };
+
+  for (let changed = true, guard = 0; changed && guard < 4; guard++) {
+    changed = false;
+    let m;
+    if (needTime && !time && (m = take(NATURAL_TIME_TAIL_RE))) {
+      const parsed = parseQuickAddTimeToken(m[1].replace(/\s+/g, ''));
+      if (parsed) {
+        time = parsed;
+        text = text.slice(0, m.index).trimEnd();
+        changed = true;
+        continue;
+      }
+    }
+    if (recurrence === RecurrenceRule.None && (m = take(NATURAL_REPEAT_TAIL_RE))) {
+      const [, count, unit, adverb] = m;
+      const word = (unit ?? adverb).toLowerCase();
+      const isWeekday = word in QUICK_ADD_WEEKDAYS;
+      if (!(isWeekday && count)) {
+        const base = adverb ? word.replace(/ly$/, '').replace(/^dai$/, 'day') : word.replace(/s$/, '');
+        recurrence = isWeekday ? RecurrenceRule.Weekly : NATURAL_REPEAT_UNITS[base];
+        recurrenceInterval = count ? Math.min(Math.max(Number(count), 1), 30) : 1;
+        if (isWeekday) repeatWeekday = word;
+        text = text.slice(0, m.index).trimEnd();
+        changed = true;
+        continue;
+      }
+    }
+    if (needDate && !date && (m = take(NATURAL_DATE_TAIL_RE))) {
+      const [, phrase, nextDay, day, count, unit] = m;
+      const lower = phrase.toLowerCase();
+      if (lower === 'today') date = today;
+      else if (lower === 'tonight') { date = today; defaultHour = NATURAL_TONIGHT_HOUR; }
+      else if (lower === 'tomorrow' || lower === 'tmrw') date = addDays(today, 1);
+      else if (nextDay) date = addDays(today, weekdayOffset(today, nextDay, { excludeToday: true }));
+      else if (day) date = addDays(today, weekdayOffset(today, day));
+      else date = addDays(today, Number(count) * (unit.toLowerCase().startsWith('week') ? 7 : 1));
+      text = text.slice(0, m.index).trimEnd();
+      changed = true;
+    }
+  }
+
+  if (recurrence !== RecurrenceRule.None && needDate && !date) {
+    date = repeatWeekday ? addDays(today, weekdayOffset(today, repeatWeekday)) : today;
+  }
+  return { text, date, time, recurrence, recurrenceInterval, defaultHour };
 }
 
 function parseQuickAddDueToken(token, reference) {
@@ -526,109 +642,433 @@ export function escapeXml(str) {
     .replace(/'/g, '&apos;');
 }
 
-export function xamlToHtml(xaml) {
-  if (!xaml || typeof xaml !== 'string' || !xaml.trim()) return '';
-  if (xaml.startsWith('{\\rtf')) {
-    return xaml.replace(/\\[a-z0-9-]+ ?/gi, '').replace(/[{}]/g, '').trim();
+// --- Note formatting: desktop FlowDocument XAML <-> the web editor's contentEditable HTML ---------
+//
+// Desktop stores a text block's formatting as FlowDocument XAML (XamlWriter.Save) and loads it with
+// XamlReader.Parse, which rejects anything that isn't well-formed XAML - an HTML-only entity like
+// &nbsp;, a stray <span>, or bare text sitting directly inside <FlowDocument> makes the whole
+// document fail to parse, and desktop then falls back to the block's plain Text (formatting gone).
+// The regex converter this replaced produced exactly those whenever a web user pressed Enter
+// (Chrome writes "line one<div>line two</div>") or typed two spaces (&nbsp;). Both directions now
+// go through one small, tolerant HTML tree parser instead, so the output is always well-formed:
+// every text run is escaped, every inline sits inside a Paragraph, and only elements both editors
+// understand survive. Pure string code (no DOMParser) so node:test can cover it.
+
+const VOID_HTML_TAGS = new Set(['br', 'img', 'hr', 'input', 'meta', 'link', 'wbr', 'col', 'source']);
+const BLOCK_HTML_TAGS = new Set([
+  'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'section', 'article',
+  'header', 'footer', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+]);
+const DROP_WITH_CONTENT_TAGS = new Set(['script', 'style', 'head', 'title', 'template']);
+const HTML_TOKEN_RE = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)|(<)/g;
+const HTML_ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const SAFE_HREF_RE = /^(https?:|mailto:)/i;
+
+export function decodeHtmlEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, body) => {
+    if (body[0] === '#') {
+      const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? m;
+  });
+}
+
+function parseHtmlAttributes(raw) {
+  const attrs = {};
+  for (const m of raw.matchAll(HTML_ATTR_RE)) {
+    attrs[m[1].toLowerCase()] = decodeHtmlEntities(m[2] ?? m[3] ?? m[4] ?? '');
   }
+  return attrs;
+}
 
-  // Remove XML declaration and FlowDocument namespaces
-  let clean = xaml.replace(/<\?[^>]*\?>/g, '').replace(/xmlns="[^"]*"/g, '');
+// Builds a { tag, attrs, children } tree (text nodes are { text }). Tolerant the way browsers are:
+// an unmatched closing tag is ignored, an unclosed element is closed at the end.
+export function parseHtmlFragment(html) {
+  const root = { tag: '#root', attrs: {}, children: [] };
+  const stack = [root];
+  let dropDepth = 0;
+  for (const m of String(html ?? '').matchAll(HTML_TOKEN_RE)) {
+    const [, closing, rawTag, rawAttrs, text, strayLt] = m;
+    const top = stack[stack.length - 1];
+    if (text !== undefined || strayLt !== undefined) {
+      if (dropDepth === 0) top.children.push({ text: decodeHtmlEntities(text ?? '<') });
+      continue;
+    }
+    if (!rawTag) continue; // comment
+    const tag = rawTag.toLowerCase();
+    const selfClosing = /\/\s*$/.test(rawAttrs);
+    if (DROP_WITH_CONTENT_TAGS.has(tag)) {
+      if (!selfClosing) dropDepth = Math.max(0, dropDepth + (closing ? -1 : 1));
+      continue;
+    }
+    if (dropDepth > 0) continue;
+    if (closing) {
+      const at = stack.map((n) => n.tag).lastIndexOf(tag);
+      if (at > 0) stack.length = at;
+      continue;
+    }
+    const node = { tag, attrs: parseHtmlAttributes(rawAttrs), children: [] };
+    top.children.push(node);
+    if (!VOID_HTML_TAGS.has(tag) && !selfClosing) stack.push(node);
+  }
+  return root;
+}
 
-  // Strip complex embedded UI containers that are handled as separate attachments
-  clean = clean.replace(/<BlockUIContainer>[\s\S]*?<\/BlockUIContainer>/gi, '');
-  clean = clean.replace(/<InlineUIContainer>[\s\S]*?<\/InlineUIContainer>/gi, '');
+function isInlineCheck(node) {
+  return node.tag === 'span' && /(^|\s)inline-check(\s|$)/.test(node.attrs.class ?? '');
+}
 
-  // Map FlowDocument structural tags to HTML
-  clean = clean
-    .replace(/<FlowDocument[^>]*>/gi, '')
-    .replace(/<\/FlowDocument>/gi, '')
-    .replace(/<Paragraph[^>]*>/gi, '<p>')
-    .replace(/<\/Paragraph>/gi, '</p>')
-    .replace(/<Bold[^>]*>/gi, '<strong>')
-    .replace(/<\/Bold>/gi, '</strong>')
-    .replace(/<Italic[^>]*>/gi, '<em>')
-    .replace(/<\/Italic>/gi, '</em>')
-    .replace(/<Underline[^>]*>/gi, '<u>')
-    .replace(/<\/Underline>/gi, '</u>')
-    .replace(/<LineBreak\s*\/?>/gi, '<br>')
-    .replace(/<Hyperlink[^>]*NavigateUri="([^"]*)"[^>]*>([\s\S]*?)<\/Hyperlink>/gi, '<a href="$1" target="_blank" rel="noopener">$2</a>')
-    // The (?=[\s>]) lookaheads matter: without them `<List[^>]*>` also matches `<ListItem>` (the
-    // "Item" is just more [^>]*), so every list item was rewritten to a second `<ul>` before the
-    // ListItem rule below ever saw it - a one-item list came out as the malformed
-    // `<ul><ul><p>x</p></li></ul>`, which browsers then re-nested into a stray empty bullet.
-    .replace(/<List(?=[\s>])[^>]*MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
-    .replace(/<List(?=[\s>])[^>]*>/gi, '<ul>')
-    .replace(/<\/List>/gi, '</ul>')
-    .replace(/<ListItem(?=[\s>])[^>]*>/gi, '<li>')
-    .replace(/<\/ListItem>/gi, '</li>')
-    .replace(/<Table[^>]*>/gi, '<table class="note-table">')
-    .replace(/<\/Table>/gi, '</table>')
-    .replace(/<TableRowGroup[^>]*>/gi, '<tbody>')
-    .replace(/<\/TableRowGroup>/gi, '</tbody>')
-    .replace(/<TableRow[^>]*>/gi, '<tr>')
-    .replace(/<\/TableRow>/gi, '</tr>')
-    .replace(/<TableCell[^>]*>/gi, '<td>')
-    .replace(/<\/TableCell>/gi, '</td>');
+function spanStyleFlags(node) {
+  const style = (node.attrs.style ?? '').toLowerCase();
+  return {
+    bold: /font-weight\s*:\s*(bold|[6-9]00)/.test(style),
+    italic: /font-style\s*:\s*italic/.test(style),
+    underline: /text-decoration(-line)?\s*:[^;]*underline/.test(style),
+  };
+}
 
-  // Convert Run elements: <Run Text="..." FontWeight="..." /> and <Run ...>content</Run>
-  clean = clean.replace(/<Run\s+([^>]*?)\s*\/>/gi, (_, attrs) => {
-    const textMatch = /Text="([^"]*)"/i.exec(attrs);
-    let res = textMatch ? textMatch[1] : '';
-    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
-    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
-    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
-    return res;
-  });
-  clean = clean.replace(/<Run\s+([^>]*?)>([\s\S]*?)<\/Run>/gi, (_, attrs, content) => {
-    let res = content;
-    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
-    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
-    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
-    return res;
-  });
+function isWhitespaceText(node) {
+  return node.text !== undefined && !/\S/.test(node.text.replace(/ /g, 'x'));
+}
 
-  // Strip any remaining structural wrapper tags like Section, Span
-  clean = clean.replace(/<\/?(Section|Span)[^>]*>/gi, '');
+// --- HTML -> XAML ---------------------------------------------------------------------------------
 
-  return clean.trim();
+function xamlRuns(text) {
+  // Run's Text attribute keeps spaces exactly (element content would be whitespace-normalised by
+  // XamlReader, gluing "a <b>b</b>" into "ab"); a newline becomes a real LineBreak.
+  return text
+    .split('\n')
+    .map((part) => (part ? `<Run Text="${escapeXml(part)}"/>` : ''))
+    .join('<LineBreak/>');
+}
+
+function xamlInline(nodes, inLink) {
+  return nodes.map((n) => xamlInlineNode(n, inLink)).join('');
+}
+
+function xamlInlineNode(node, inLink) {
+  if (node.text !== undefined) {
+    if (/\n/.test(node.text) && isWhitespaceText(node)) return ''; // source-formatting whitespace
+    return xamlRuns(node.text);
+  }
+  const wrap = (element, inner) => (inner ? `<${element}>${inner}</${element}>` : '');
+  switch (node.tag) {
+    case 'br':
+      return '<LineBreak/>';
+    case 'b': case 'strong':
+      return wrap('Bold', xamlInline(node.children, inLink));
+    case 'i': case 'em':
+      return wrap('Italic', xamlInline(node.children, inLink));
+    case 'u':
+      return wrap('Underline', xamlInline(node.children, inLink));
+    case 'a': {
+      const inner = xamlInline(node.children, true);
+      const href = (node.attrs.href ?? '').trim();
+      if (inLink || !SAFE_HREF_RE.test(href) || !inner) return inner;
+      return `<Hyperlink NavigateUri="${escapeXml(href)}">${inner}</Hyperlink>`;
+    }
+    case 'span': {
+      if (isInlineCheck(node)) {
+        const checked = node.attrs['data-checked'] === 'true';
+        return `<InlineUIContainer><CheckBox IsChecked="${checked ? 'True' : 'False'}" Margin="0,0,6,0" VerticalAlignment="Center" Cursor="Hand"/></InlineUIContainer>`;
+      }
+      let inner = xamlInline(node.children, inLink);
+      const flags = spanStyleFlags(node);
+      if (flags.underline) inner = wrap('Underline', inner);
+      if (flags.italic) inner = wrap('Italic', inner);
+      if (flags.bold) inner = wrap('Bold', inner);
+      return inner;
+    }
+    case 'img': case 'input': case 'hr':
+      return '';
+    default:
+      // A block element that ended up inside inline content (e.g. <b><div>x</div></b>) - keep its
+      // words on their own line rather than dropping them.
+      if (BLOCK_HTML_TAGS.has(node.tag)) {
+        const inner = xamlInline(node.children, inLink);
+        return inner ? `<LineBreak/>${inner}` : '';
+      }
+      return xamlInline(node.children, inLink);
+  }
+}
+
+function xamlParagraph(children, attrs = '') {
+  // Browsers keep a trailing <br> in a line so it stays tall - not content.
+  const inner = xamlInline(children, false).replace(/(<LineBreak\/>)+$/, '');
+  return inner ? `<Paragraph${attrs}>${inner}</Paragraph>` : `<Paragraph${attrs}/>`;
+}
+
+function xamlBlocks(nodes) {
+  let out = '';
+  let pending = [];
+  const flush = () => {
+    if (pending.length && !pending.every(isWhitespaceText)) out += xamlParagraph(pending);
+    pending = [];
+  };
+  for (const node of nodes) {
+    if (node.tag && BLOCK_HTML_TAGS.has(node.tag)) {
+      flush();
+      out += xamlBlock(node);
+    } else {
+      pending.push(node);
+    }
+  }
+  flush();
+  return out;
+}
+
+function xamlBlock(node) {
+  switch (node.tag) {
+    case 'ul': case 'ol': {
+      const marker = node.tag === 'ol' ? ' MarkerStyle="Decimal"' : '';
+      let items = '';
+      for (const child of node.children) {
+        if (isWhitespaceText(child)) continue;
+        const content = child.tag === 'li' ? xamlBlocks(child.children) : xamlBlocks([child]);
+        items += `<ListItem>${content || '<Paragraph/>'}</ListItem>`;
+      }
+      return items ? `<List${marker}>${items}</List>` : '';
+    }
+    case 'table': {
+      const rows = [];
+      const collectRows = (n) => {
+        for (const c of n.children ?? []) {
+          if (c.tag === 'tr') rows.push(c);
+          else if (c.tag === 'thead' || c.tag === 'tbody' || c.tag === 'tfoot') collectRows(c);
+        }
+      };
+      collectRows(node);
+      const xamlRows = rows.map((tr) => {
+        const cells = tr.children
+          .filter((c) => c.tag === 'td' || c.tag === 'th')
+          .map((c) => `<TableCell>${xamlBlocks(c.children) || '<Paragraph/>'}</TableCell>`)
+          .join('');
+        return cells ? `<TableRow>${cells}</TableRow>` : '';
+      }).join('');
+      return xamlRows ? `<Table><TableRowGroup>${xamlRows}</TableRowGroup></Table>` : '';
+    }
+    case 'li': case 'thead': case 'tbody': case 'tfoot': case 'tr': case 'td': case 'th':
+      return xamlBlocks(node.children); // stray structure outside its container - keep the content
+    default: {
+      const hasBlockChild = node.children.some((c) => c.tag && BLOCK_HTML_TAGS.has(c.tag));
+      if (hasBlockChild) return xamlBlocks(node.children);
+      const heading = /^h[1-3]$/.test(node.tag) ? ' FontWeight="Bold"' : '';
+      return xamlParagraph(node.children, heading);
+    }
+  }
 }
 
 export function htmlToXaml(html, fallbackText = '') {
-  if (!html || !html.trim()) {
+  let blocks = html && html.trim() ? xamlBlocks(parseHtmlFragment(html).children) : '';
+  // A document of nothing but empty paragraphs is no content at all.
+  if (!blocks || /^(<Paragraph\/>)+$/.test(blocks)) {
     if (!fallbackText || !fallbackText.trim()) return '';
-    return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left"><Paragraph>${escapeXml(fallbackText)}</Paragraph></FlowDocument>`;
+    blocks = `<Paragraph>${xamlRuns(fallbackText)}</Paragraph>`;
+  }
+  return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left">${blocks}</FlowDocument>`;
+}
+
+// --- XAML -> HTML ---------------------------------------------------------------------------------
+
+function escapeHtmlText(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+const SAFE_HTML_TAGS = new Set(['p', 'br', 'strong', 'em', 'u', 'a', 'ul', 'ol', 'li', 'table', 'tbody', 'tr', 'td', 'span']);
+
+function serializeSafeHtml(nodes) {
+  return nodes.map((n) => {
+    if (n.text !== undefined) return escapeHtmlText(n.text);
+    const inner = serializeSafeHtml(n.children);
+    if (!SAFE_HTML_TAGS.has(n.tag)) return inner;
+    switch (n.tag) {
+      case 'br':
+        return '<br>';
+      case 'a': {
+        const href = (n.attrs.href ?? '').trim();
+        return SAFE_HREF_RE.test(href)
+          ? `<a href="${escapeHtmlText(href)}" target="_blank" rel="noopener">${inner}</a>`
+          : inner;
+      }
+      case 'table':
+        return `<table class="note-table">${inner}</table>`;
+      case 'span': {
+        if (!isInlineCheck(n)) return inner;
+        const checked = n.attrs['data-checked'] === 'true';
+        return `<span class="inline-check" contenteditable="false" data-checked="${checked}" role="checkbox" aria-checked="${checked}">${checked ? '☑' : '☐'}</span>`;
+      }
+      default:
+        return `<${n.tag}>${inner}</${n.tag}>`;
+    }
+  }).join('');
+}
+
+// Allow-lists whatever the XAML mapping below produced, so markup in a synced file can never inject
+// script, event handlers or a javascript: link into the editor's innerHTML.
+export function sanitizeNoteHtml(html) {
+  return serializeSafeHtml(parseHtmlFragment(html).children);
+}
+
+export function xamlToHtml(xaml) {
+  if (!xaml || typeof xaml !== 'string' || !xaml.trim()) return '';
+  if (xaml.startsWith('{\\rtf')) {
+    return escapeHtmlText(xaml.replace(/\\[a-z0-9-]+ ?/gi, '').replace(/[{}]/g, '').trim());
   }
 
-  let xaml = html
-    .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '<Bold>$1</Bold>')
-    .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '<Bold>$1</Bold>')
-    .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '<Italic>$1</Italic>')
-    .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '<Italic>$1</Italic>')
-    .replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, '<Underline>$1</Underline>')
-    .replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '<Hyperlink NavigateUri="$1"><Run Text="$2"/></Hyperlink>')
-    .replace(/<br\s*\/?>/gi, '<LineBreak/>')
-    .replace(/<ol[^>]*>/gi, '<List MarkerStyle="Decimal">')
-    .replace(/<\/ol>/gi, '</List>')
-    .replace(/<ul[^>]*>/gi, '<List>')
-    .replace(/<\/ul>/gi, '</List>')
-    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '<ListItem><Paragraph>$1</Paragraph></ListItem>')
-    .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '<Paragraph>$1</Paragraph>')
-    .replace(/<div[^>]*>([\s\S]*?)<\/div>/gi, '<Paragraph>$1</Paragraph>')
-    .replace(/<table[^>]*>/gi, '<Table><TableRowGroup>')
-    .replace(/<\/table>/gi, '</TableRowGroup></Table>')
-    .replace(/<tbody[^>]*>|<\/tbody>/gi, '')
-    .replace(/<tr[^>]*>/gi, '<TableRow>')
-    .replace(/<\/tr>/gi, '</TableRow>')
-    .replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '<TableCell><Paragraph>$1</Paragraph></TableCell>');
+  // Remove XML declaration and FlowDocument namespaces
+  let clean = xaml.replace(/<\?[^>]*\?>/g, '').replace(/xmlns(:\w+)?="[^"]*"/g, '');
 
-  // Ensure content is wrapped in Paragraph if needed
-  if (!xaml.includes('<Paragraph') && !xaml.includes('<List') && !xaml.includes('<Table')) {
-    xaml = `<Paragraph>${xaml}</Paragraph>`;
+  // Desktop's inline checklist boxes (RichTextBoxBehavior.CreateInlineCheckBox) become a tappable
+  // token the web editor round-trips back to the same CheckBox - see htmlToXaml. Anything else in
+  // an InlineUIContainer, and every BlockUIContainer (images, file cards - surfaced as separate
+  // attachments by editor.js), is dropped from the text.
+  clean = clean.replace(/<InlineUIContainer\b[^>]*>([\s\S]*?)<\/InlineUIContainer>/gi, (m, inner) => {
+    const box = /<CheckBox\b([^>]*)/i.exec(inner);
+    if (!box) return '';
+    const checked = /IsChecked="True"/i.test(box[1]);
+    return `<span class="inline-check" data-checked="${checked}"></span>`;
+  });
+  clean = clean.replace(/<BlockUIContainer\b[^>]*>[\s\S]*?<\/BlockUIContainer>/gi, '');
+  // Property elements (<Paragraph.TextDecorations>, <Run.Foreground> ...) hold styling objects, not text.
+  clean = clean.replace(/<(\w+)\.(\w+)\b[^>]*>[\s\S]*?<\/\1\.\2>/g, '');
+
+  clean = clean
+    .replace(/<FlowDocument[^>]*>/gi, '')
+    .replace(/<\/FlowDocument>/gi, '')
+    .replace(/<Paragraph\b[^>]*\/>/gi, '<p><br></p>')
+    .replace(/<Paragraph\b[^>]*>/gi, '<p>')
+    .replace(/<\/Paragraph>/gi, '</p>')
+    .replace(/<Bold\b[^>]*>/gi, '<strong>')
+    .replace(/<\/Bold>/gi, '</strong>')
+    .replace(/<Italic\b[^>]*>/gi, '<em>')
+    .replace(/<\/Italic>/gi, '</em>')
+    .replace(/<Underline\b[^>]*>/gi, '<u>')
+    .replace(/<\/Underline>/gi, '</u>')
+    .replace(/<LineBreak\s*\/?>/gi, '<br>')
+    .replace(/<Hyperlink\b[^>]*NavigateUri="([^"]*)"[^>]*>([\s\S]*?)<\/Hyperlink>/gi, '<a href="$1">$2</a>')
+    // The \b matters: without it `<List[^>]*>` also matches `<ListItem>` (the "Item" is just more
+    // [^>]*), so every list item was rewritten to a second `<ul>`.
+    .replace(/<List\b[^>]*MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
+    .replace(/<List\b[^>]*>/gi, '<ul>')
+    .replace(/<\/List>/gi, '</ul>')
+    .replace(/<ListItem\b[^>]*>/gi, '<li>')
+    .replace(/<\/ListItem>/gi, '</li>')
+    .replace(/<Table\b[^>]*>/gi, '<table>')
+    .replace(/<\/Table>/gi, '</table>')
+    .replace(/<TableRowGroup\b[^>]*>/gi, '<tbody>')
+    .replace(/<\/TableRowGroup>/gi, '</tbody>')
+    .replace(/<TableRow\b[^>]*>/gi, '<tr>')
+    .replace(/<\/TableRow>/gi, '</tr>')
+    .replace(/<TableCell\b[^>]*>/gi, '<td>')
+    .replace(/<\/TableCell>/gi, '</td>');
+
+  // Runs: <Run Text="..."/> and <Run ...>content</Run>, with their inline formatting attributes.
+  const styleRun = (attrs, content) => {
+    let res = content;
+    if (/FontWeight="(Bold|SemiBold|DemiBold|ExtraBold|UltraBold|Black|Heavy)"/i.test(attrs)) res = `<strong>${res}</strong>`;
+    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
+    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
+    return res;
+  };
+  clean = clean.replace(/<Run\b([^>]*?)\s*\/>/gi, (_, attrs) => styleRun(attrs, /\bText="([^"]*)"/i.exec(attrs)?.[1] ?? ''));
+  clean = clean.replace(/<Run\b([^>]*)>([\s\S]*?)<\/Run>/gi, (_, attrs, content) => styleRun(attrs, content));
+  // <Span FontWeight="Bold"> etc. carry formatting too; the sanitizer drops the Span tag itself.
+  // Case-sensitive on purpose (XAML is): the inline-check <span> made above must survive.
+  clean = clean.replace(/<Span\b([^>]*)>([\s\S]*?)<\/Span>/g, (_, attrs, content) => styleRun(attrs, content));
+
+  return sanitizeNoteHtml(clean).trim();
+}
+
+// --- Reminders and calendar export -------------------------------------------------------------
+
+// Mirrors ReminderScheduler.IsDueAsOf: a midnight due time means "sometime that day" (a date-only
+// pick) and fires from that date on; any other time fires at that instant.
+export function isReminderDue(task, now = new Date()) {
+  if (!task || task.IsDone || task.IsClosed || !task.DueDate) return false;
+  const due = parseDotNetDate(task.DueDate);
+  if (!due) return false;
+  const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
+  return allDay ? startOfDay(due) <= startOfDay(now) : due <= now;
+}
+
+const ICS_RRULE_FREQ = { 1: 'DAILY', 2: 'WEEKLY', 3: 'MONTHLY', 4: 'YEARLY' };
+
+function escapeIcsText(text) {
+  return String(text ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
+}
+
+// RFC 5545 folds content lines at 75 octets, continuation lines starting with one space.
+function foldIcsLine(line) {
+  const bytes = new TextEncoder().encode(line);
+  if (bytes.length <= 75) return line;
+  const parts = [];
+  let current = '';
+  let currentBytes = 0;
+  for (const ch of line) {
+    const size = new TextEncoder().encode(ch).length;
+    const limit = parts.length === 0 ? 75 : 74;
+    if (currentBytes + size > limit) {
+      parts.push(current);
+      current = '';
+      currentBytes = 0;
+    }
+    current += ch;
+    currentBytes += size;
   }
+  parts.push(current);
+  return parts.join('\r\n ');
+}
 
-  // Clean empty paragraphs
-  xaml = xaml.replace(/<Paragraph>\s*<\/Paragraph>/gi, '<Paragraph><LineBreak/></Paragraph>');
+function icsLocal(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}T${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
+}
+function icsDate(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`;
+}
 
-  return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left">${xaml}</FlowDocument>`;
+// One task as an .ics event - same shape as desktop's ExportService.ExportToICalendar (UID, all-day
+// vs 30-minute timed event, floating local time), plus the task's repeat as an RRULE and, for a
+// timed task, an alarm at the due time: the phone's own calendar then reminds you even when Tasky
+// isn't running. Returns null for a task with no due date.
+export function taskToICalendar(task, now = new Date()) {
+  if (!task?.DueDate) return null;
+  const due = parseDotNetDate(task.DueDate);
+  if (!due) return null;
+  const allDay = due.getHours() === 0 && due.getMinutes() === 0;
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Tasky//Tasky Task Manager//EN',
+    'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    `UID:${task.Id}@tasky.app`,
+    `DTSTAMP:${stamp}`,
+  ];
+  if (allDay) {
+    const end = new Date(due);
+    end.setDate(end.getDate() + 1);
+    lines.push(`DTSTART;VALUE=DATE:${icsDate(due)}`, `DTEND;VALUE=DATE:${icsDate(end)}`);
+  } else {
+    lines.push(`DTSTART:${icsLocal(due)}`, `DTEND:${icsLocal(new Date(due.getTime() + 30 * 60 * 1000))}`);
+  }
+  lines.push(`SUMMARY:${escapeIcsText(task.IsDone ? `[Done] ${task.Text}` : task.Text)}`);
+  const notes = (task.Body ?? []).filter((b) => b.Type === NoteBlockType.Text && b.Text?.trim()).map((b) => b.Text.trim()).join('\n\n');
+  const description = [task.Tags?.length ? `Tags: ${task.Tags.join(', ')}` : '', notes].filter(Boolean).join('\n\n');
+  if (description) lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
+  const freq = ICS_RRULE_FREQ[task.Recurrence];
+  if (freq) lines.push(`RRULE:FREQ=${freq}${task.RecurrenceInterval > 1 ? `;INTERVAL=${task.RecurrenceInterval}` : ''}`);
+  if (!allDay) {
+    lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escapeIcsText(task.Text)}`, 'TRIGGER:PT0M', 'END:VALARM');
+  }
+  lines.push('END:VEVENT', 'END:VCALENDAR');
+  return `${lines.map(foldIcsLine).join('\r\n')}\r\n`;
 }

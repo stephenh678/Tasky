@@ -36,6 +36,17 @@ const ICONS = {
   alertCircle: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01" stroke-linecap="round"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5"/>',
   share: '<path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13" stroke-linecap="round" stroke-linejoin="round"/>',
+  bold: '<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" stroke-linejoin="round"/>',
+  italic: '<path d="M10 5h8M6 19h8M14 5l-4 14" stroke-linecap="round"/>',
+  underline: '<path d="M7 4v7a5 5 0 0 0 10 0V4M5 20h14" stroke-linecap="round"/>',
+  listOrdered: '<path d="M10 6h11M10 12h11M10 18h11" stroke-linecap="round"/><path d="M4 4h1v4M4 8h2M4 13a1 1 0 0 1 2 0c0 .8-2 1.4-2 2.4h2" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  text: '<path d="M4 7V5h16v2M12 5v14M9 19h6" stroke-linecap="round" stroke-linejoin="round"/>',
+  clearFormat: '<path d="M4 7V5h11v2M9.5 5 7 19M14 14l6 6M20 14l-6 6" stroke-linecap="round" stroke-linejoin="round"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5" stroke-linecap="round"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z" stroke-linejoin="round"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  agenda: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h7" stroke-linecap="round"/>',
+  calendarPlus: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M12 12v6M9 15h6" stroke-linecap="round"/>',
+  forward: '<path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
 export function icon(name, cls = '') {

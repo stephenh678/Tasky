@@ -55,7 +55,7 @@
                             </ContextMenu>
                         </TextBox.ContextMenu>
                     </TextBox>
-                    <TextBlock Text="What needs to be done? (#tag !due:day @time)"
+                    <TextBlock Text="What needs to be done? (#tag, tomorrow 3pm, every monday)"
                                FontSize="14" Foreground="{DynamicResource PlaceholderBrush}"
                                VerticalAlignment="Center" Margin="8,0,0,0" IsHitTestVisible="False"
                                Visibility="{Binding Text.IsEmpty, ElementName=TitleBox, Converter={StaticResource BoolToVis}}"/>
@@ -64,7 +64,7 @@
 
             <!-- Preview & Hints -->
             <Grid Grid.Row="2" Margin="0,8,0,0">
-                <TextBlock x:Name="PreviewText" Text="Press Enter to add · Supports #tag !due:day @time" FontSize="11"
+                <TextBlock x:Name="PreviewText" Text="Press Enter to add · #tag · tomorrow 3pm · every monday" FontSize="11"
                            Foreground="{DynamicResource TertiaryBrush}" TextTrimming="CharacterEllipsis"/>
             </Grid>
         </Grid>

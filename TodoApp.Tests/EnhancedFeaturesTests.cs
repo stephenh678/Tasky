@@ -392,6 +392,83 @@ public class EnhancedFeaturesTests
         Assert.Equal(99, target.SortOrder);
     }
 
+    // Ordering is list-level state, so it can't ride on TaskItem.ModifiedAt (a drag renumbers every
+    // task). Before AppState.TasksOrderModifiedAt existed, a pure reorder made no task "newer", so
+    // ApplyTaskFields never ran for it and every device silently threw the arrangement away.
+    [Fact]
+    public void TaskSyncMerge_MergeTaskOrder_NewerRemoteOrderWins()
+    {
+        var id = Guid.NewGuid();
+        var local = new List<TaskItem> { new() { Id = id, SortOrder = 5 } };
+        var remote = new List<TaskItem> { new() { Id = id, SortOrder = 0 } };
+        var localAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var remoteAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var winner = TaskSyncMerge.MergeTaskOrder(local, remote, localAt, remoteAt);
+
+        Assert.Equal(remoteAt, winner);
+        Assert.Equal(0, local[0].SortOrder);
+    }
+
+    [Fact]
+    public void TaskSyncMerge_MergeTaskOrder_OlderRemoteOrderLoses()
+    {
+        var id = Guid.NewGuid();
+        var local = new List<TaskItem> { new() { Id = id, SortOrder = 5 } };
+        var remote = new List<TaskItem> { new() { Id = id, SortOrder = 0 } };
+        var localAt = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var remoteAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var winner = TaskSyncMerge.MergeTaskOrder(local, remote, localAt, remoteAt);
+
+        Assert.Equal(localAt, winner);
+        Assert.Equal(5, local[0].SortOrder);
+    }
+
+    // Null means "this side never reordered", which must lose to any real timestamp - and must not
+    // be treated as "epoch", which would let an unordered file wipe a real arrangement.
+    [Fact]
+    public void TaskSyncMerge_MergeTaskOrder_NullTimestampsHandled()
+    {
+        var id = Guid.NewGuid();
+        var local = new List<TaskItem> { new() { Id = id, SortOrder = 5 } };
+        var remote = new List<TaskItem> { new() { Id = id, SortOrder = 0 } };
+        var remoteAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Remote never reordered: local keeps everything.
+        Assert.Null(TaskSyncMerge.MergeTaskOrder(local, remote, null, null));
+        Assert.Equal(5, local[0].SortOrder);
+
+        // Local never reordered, remote did: remote wins.
+        Assert.Equal(remoteAt, TaskSyncMerge.MergeTaskOrder(local, remote, null, remoteAt));
+        Assert.Equal(0, local[0].SortOrder);
+    }
+
+    // A task only one side knows about has no remote position to adopt - it must keep its own
+    // rather than being reset to 0 and jumping to the top of the list.
+    [Fact]
+    public void TaskSyncMerge_MergeTaskOrder_LeavesLocalOnlyTasksAlone()
+    {
+        var shared = Guid.NewGuid();
+        var localOnly = new TaskItem { Id = Guid.NewGuid(), SortOrder = 7 };
+        var local = new List<TaskItem> { new() { Id = shared, SortOrder = 5 }, localOnly };
+        var remote = new List<TaskItem> { new() { Id = shared, SortOrder = 2 } };
+
+        TaskSyncMerge.MergeTaskOrder(local, remote, null, new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal(2, local[0].SortOrder);
+        Assert.Equal(7, localOnly.SortOrder);
+    }
+
+    [Fact]
+    public void AppState_Clone_CarriesTasksOrderModifiedAt()
+    {
+        var at = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+        var state = new AppState { TasksOrderModifiedAt = at };
+
+        Assert.Equal(at, state.Clone().TasksOrderModifiedAt);
+    }
+
     [Fact]
     public void MainViewModel_ReorderTask_MovesTaskAndSetsSortOrder()
     {

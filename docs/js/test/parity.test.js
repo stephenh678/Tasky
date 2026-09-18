@@ -29,13 +29,14 @@ import {
   extractInlineFileNames,
   collectTaskFileNames,
   normalizeTask,
+  nextSortOrder,
   taskHasLink,
   taskHasChecklist,
   escapeXml,
   xamlToHtml,
   htmlToXaml,
 } from '../model.js';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from '../sync.js';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, mergeTaskOrder, reconcileLocalSnapshot } from '../sync.js';
 
 // --- parseDotNetDate / formatDotNetDate round-trips (mirrors the .NET JSON date shape) ---------
 
@@ -955,5 +956,94 @@ describe('xamlToHtml / htmlToXaml', () => {
   test('htmlToXaml with empty html returns empty or fallback', () => {
     assert.equal(htmlToXaml(''), '');
     assert.ok(htmlToXaml('', 'Fallback').includes('<Paragraph>Fallback</Paragraph>'));
+  });
+});
+
+// --- SortOrder / manual ordering parity (TaskSyncMerge.MergeTaskOrder, AppState.TasksOrderModifiedAt)
+// Manual ordering is list-level state: a drag renumbers every task, so it can't ride on a task's
+// ModifiedAt without spraying conflicted copies, and desktop's Task_PropertyChanged therefore
+// ignores SortOrder. These pin the JS half of the timestamp-based scheme that closes the resulting
+// hole, plus the two places SortOrder used to fall out of the file entirely on this side.
+describe('manual ordering (SortOrder)', () => {
+  test('newTaskItem carries SortOrder so desktop does not read a missing int as 0', () => {
+    const task = newTaskItem({ text: 'x' });
+    assert.equal(task.SortOrder, 0);
+    assert.ok(Object.prototype.hasOwnProperty.call(task, 'SortOrder'));
+  });
+
+  test('nextSortOrder puts a new task at the end, matching desktop Max(SortOrder) + 1', () => {
+    assert.equal(nextSortOrder([]), 0);
+    assert.equal(nextSortOrder([{ SortOrder: 0 }, { SortOrder: 4 }, { SortOrder: 2 }]), 5);
+    // A file from a client that never wrote SortOrder must not produce NaN.
+    assert.equal(nextSortOrder([{ SortOrder: undefined }]), 1);
+  });
+
+  test('normalizeTask coerces a missing SortOrder to 0', () => {
+    const task = normalizeTask({ ...newTaskItem({ text: 'x' }), SortOrder: undefined });
+    assert.equal(task.SortOrder, 0);
+  });
+
+  test('newAppState exposes TasksOrderModifiedAt', () => {
+    assert.ok(Object.prototype.hasOwnProperty.call(newAppState(), 'TasksOrderModifiedAt'));
+    assert.equal(newAppState().TasksOrderModifiedAt, null);
+  });
+
+  // Mirrors TaskSyncMerge_ApplyTaskFields_CopiesSortOrder on the C# side - the omission this
+  // covers meant a task whose content remote won kept the local device's stale position.
+  test('mergeRemoteState applies remote SortOrder to an updated task', () => {
+    const local = newAppState();
+    const remote = newAppState();
+    const task = newTaskItem({ text: 'shared' });
+    task.SortOrder = 9;
+    local.Tasks.push(task);
+    remote.Tasks.push({ ...task, SortOrder: 3, Text: 'shared edited', ModifiedAt: formatDotNetDate(new Date(Date.now() + 60000)) });
+
+    mergeRemoteState(local, remote, null);
+
+    assert.equal(local.Tasks[0].Text, 'shared edited');
+    assert.equal(local.Tasks[0].SortOrder, 3);
+  });
+
+  test('mergeTaskOrder: newer remote ordering wins the whole arrangement', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    const localTasks = [a];
+    const remoteTasks = [{ Id: 'a', SortOrder: 0 }];
+    const localAt = formatDotNetDate(new Date('2026-01-01T00:00:00Z'));
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    assert.equal(mergeTaskOrder(localTasks, remoteTasks, localAt, remoteAt), remoteAt);
+    assert.equal(a.SortOrder, 0);
+  });
+
+  test('mergeTaskOrder: older remote ordering loses', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    const localAt = formatDotNetDate(new Date('2026-03-01T00:00:00Z'));
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], localAt, remoteAt), localAt);
+    assert.equal(a.SortOrder, 5);
+  });
+
+  // null is "never reordered", not "epoch" - treating it as epoch would let an unordered file
+  // wipe out a real arrangement made on another device.
+  test('mergeTaskOrder: null timestamps', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], null, null), null);
+    assert.equal(a.SortOrder, 5);
+
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], null, remoteAt), remoteAt);
+    assert.equal(a.SortOrder, 0);
+  });
+
+  test('mergeTaskOrder leaves a local-only task at its own position', () => {
+    const shared = { Id: 'a', SortOrder: 5 };
+    const localOnly = { Id: 'b', SortOrder: 7 };
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    mergeTaskOrder([shared, localOnly], [{ Id: 'a', SortOrder: 2 }], null, remoteAt);
+
+    assert.equal(shared.SortOrder, 2);
+    assert.equal(localOnly.SortOrder, 7);
   });
 });

@@ -108,6 +108,11 @@ export function newTaskItem({ text = '' } = {}) {
     CreatedAt: now,
     ModifiedAt: now,
     IsPinned: false,
+    // Manual (drag-and-drop) position. Callers that have the current list pass the real value via
+    // nextSortOrder(); the 0 here is only the standalone default. Omitting the field entirely (as
+    // this did before) isn't harmless: desktop's JsonSerializer reads a missing int as 0, so every
+    // task made on Web or a phone landed at the very top of desktop's manual order.
+    SortOrder: 0,
     Text: clamp(text, MAX_TASK_TEXT),
     IsDone: false,
     IsClosed: false,
@@ -124,7 +129,24 @@ export function newTaskItem({ text = '' } = {}) {
 }
 
 export function newAppState() {
-  return { Tasks: [], DeletedTasks: [], SavedViews: [], DeletedSavedViewIds: [] };
+  // TasksOrderModifiedAt mirrors AppState.cs: when any device last changed the manual ordering.
+  // null means "never reordered" and loses to any real timestamp in mergeTaskOrder.
+  return { Tasks: [], DeletedTasks: [], SavedViews: [], DeletedSavedViewIds: [], TasksOrderModifiedAt: null };
+}
+
+// The SortOrder a newly created task should get: the end of the list, matching what desktop's
+// MainViewModel does at its three creation sites (`AllTasks.Max(t => t.SortOrder) + 1`). New tasks
+// belong at the bottom of a manual arrangement, not the top.
+export function nextSortOrder(tasks) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return 0;
+  // reduce, not Math.max(...spread): the spread passes one argument per task, which throws
+  // RangeError once a synced file grows past the engine's argument limit.
+  let max = 0;
+  for (const t of tasks) {
+    const order = Number(t.SortOrder) || 0;
+    if (order > max) max = order;
+  }
+  return max + 1;
 }
 
 export function newTaskSyncRecord(taskId, timestamp = nowDotNet()) {
@@ -249,6 +271,9 @@ export function normalizeTask(task) {
   task.Recurrence = Number(task.Recurrence) || RecurrenceRule.None;
   task.RecurrenceInterval = Math.max(1, Number(task.RecurrenceInterval) || 1);
   task.Priority = Number(task.Priority) || TaskPriority.None;
+  // A file written by desktop before drag-reordering existed, or by an older Tasky Web build, has
+  // no SortOrder at all - coerce to 0 so comparisons and Math.max never see undefined/NaN.
+  task.SortOrder = Number(task.SortOrder) || 0;
   for (const block of task.Body) {
     block.Type = Number(block.Type) || NoteBlockType.Text;
     if (block.Type === NoteBlockType.Checklist && !Array.isArray(block.ChecklistItems)) block.ChecklistItems = [];

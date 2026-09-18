@@ -9,6 +9,7 @@ import {
   nowDotNet,
   newTaskItem,
   newTaskSyncRecord,
+  nextSortOrder,
   spawnNextOccurrence,
   blockHasInlineImage,
   blockHasInlineFile,
@@ -595,6 +596,7 @@ async function startGuestMode() {
     appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
     appState.SavedViews ??= [];
     appState.DeletedSavedViewIds ??= [];
+    appState.TasksOrderModifiedAt ??= null;
   } else {
     initGuestSampleTasks();
   }
@@ -1146,6 +1148,7 @@ async function loadFromDrive() {
       appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
       appState.SavedViews ??= [];
       appState.DeletedSavedViewIds ??= [];
+      appState.TasksOrderModifiedAt ??= null;
     } else {
       initGuestSampleTasks();
     }
@@ -1186,6 +1189,7 @@ async function loadFromDrive() {
       appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
       appState.SavedViews ??= [];
       appState.DeletedSavedViewIds ??= [];
+      appState.TasksOrderModifiedAt ??= null;
       const recovered = await reconcileDirtySnapshot();
       autoEmptyTrashIfNeeded();
       setStatus(recovered ? 'Loaded, with unsaved edits recovered from your last session' : `Loaded ${appState.Tasks.length} task(s)`, { autoHide: !recovered });
@@ -1254,6 +1258,7 @@ async function reconcileDirtySnapshot() {
   local.DeletedTasks = deduplicateTombstones(local.DeletedTasks ?? []);
   local.SavedViews ??= [];
   local.DeletedSavedViewIds ??= [];
+  local.TasksOrderModifiedAt ??= null;
   const storedLastSync = storage.get(LAST_SYNCED_KEY);
   const { state, conflicted } = reconcileLocalSnapshot(local, appState, storedLastSync ? new Date(storedLastSync) : null);
   appState = state;
@@ -1594,6 +1599,7 @@ async function restoreFromSnapshot(err) {
   appState.DeletedTasks = deduplicateTombstones(appState.DeletedTasks ?? []);
   appState.SavedViews ??= [];
   appState.DeletedSavedViewIds ??= [];
+  appState.TasksOrderModifiedAt ??= null;
   currentFileId = snap.currentFileId ?? null;
   currentFileName = snap.currentFileName ?? DEFAULT_DATA_FILE_NAME;
   taskyFolderId = snap.taskyFolderId ?? null;
@@ -1844,6 +1850,7 @@ async function mergeFromRemote() {
     remoteState.DeletedTasks = deduplicateTombstones(remoteState.DeletedTasks ?? []);
     remoteState.SavedViews ??= [];
     remoteState.DeletedSavedViewIds ??= [];
+    remoteState.TasksOrderModifiedAt ??= null;
     const storedLastSync = storage.get(LAST_SYNCED_KEY);
     const { conflicted, updatedIds, removedIds } = mergeRemoteState(appState, remoteState, storedLastSync ? new Date(storedLastSync) : null);
     mergeSavedViews(appState, remoteState);
@@ -2107,11 +2114,21 @@ function discardUntouchedNewTasks({ keep = null } = {}) {
   return true;
 }
 
+// The single place a brand-new task joins the list. Stamping SortOrder here (rather than in
+// newTaskItem, which has no view of the list) puts it at the end of the manual arrangement, the
+// same as desktop's three creation sites. Skipping this left every Web/phone-created task at
+// SortOrder 0, i.e. pinned to the top of desktop's manual order.
+function addNewTask(task) {
+  task.SortOrder = nextSortOrder(appState.Tasks);
+  appState.Tasks.push(task);
+  return task;
+}
+
 function createTask() {
   discardUntouchedNewTasks();
   const task = newTaskItem({ text: '' });
   adoptSectionScope(task);
-  appState.Tasks.push(task);
+  addNewTask(task);
   untouchedNewTaskIds.add(task.Id);
   selectedTaskId = task.Id;
   markDirty();
@@ -2134,7 +2151,7 @@ function createQuickTask(raw) {
     if (!task.Tags.includes(lower)) task.Tags.push(lower);
   }
   adoptSectionScope(task);
-  appState.Tasks.push(task);
+  addNewTask(task);
   markDirty();
   settleSectionAfterCreate(task);
   renderSidebar();
@@ -2160,7 +2177,7 @@ function createDemoTask(title, quickAddTokens) {
       if (!task.Tags.includes(lower)) task.Tags.push(lower);
     }
   }
-  appState.Tasks.push(task);
+  addNewTask(task);
   if (currentSection.kind !== 'all') currentSection = { kind: 'all' };
   markDirty();
   renderSidebar();
@@ -2181,7 +2198,7 @@ function haptic(pattern = 15) {
 function spawnIfRecurring(task) {
   if (!task.IsDone || task.Recurrence === RecurrenceRule.None) return null;
   const spawned = spawnNextOccurrence(task);
-  appState.Tasks.push(spawned);
+  addNewTask(spawned);
   return spawned;
 }
 

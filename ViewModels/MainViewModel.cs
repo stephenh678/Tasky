@@ -988,6 +988,10 @@ public class MainViewModel : INotifyPropertyChanged
         }
 
         sourceTask.ModifiedAt = DateTime.UtcNow;
+        // Ordering is list-level state with its own timestamp - without this a reorder makes no
+        // task "newer", so every device that merged silently threw the new arrangement away. See
+        // AppState.TasksOrderModifiedAt and TaskSyncMerge.MergeTaskOrder.
+        _state.TasksOrderModifiedAt = DateTime.UtcNow;
         FilteredTasksView.Refresh();
         OnTaskChanged();
 
@@ -1001,6 +1005,7 @@ public class MainViewModel : INotifyPropertyChanged
                 if (cur != i) AllTasks.Move(cur, i);
                 AllTasks[i].SortOrder = i;
             }
+            _state.TasksOrderModifiedAt = DateTime.UtcNow;
             FilteredTasksView.Refresh();
             OnTaskChanged();
         });
@@ -1858,6 +1863,12 @@ public class MainViewModel : INotifyPropertyChanged
 
         _state.DeletedTasks.AddRange(plan.TombstonesToAdd);
 
+        // After the field updates above, so remote's arrangement wins over any SortOrder
+        // ApplyTaskFields just copied. Safe to run on attached tasks: Task_PropertyChanged returns
+        // early for SortOrder, so this can't stamp ModifiedAt on the whole list.
+        _state.TasksOrderModifiedAt = TaskSyncMerge.MergeTaskOrder(
+            AllTasks, remoteState.Tasks, _state.TasksOrderModifiedAt, remoteState.TasksOrderModifiedAt);
+
         var (mergedViews, mergedDeletedViewIds) = SavedViewSyncMerge.Merge(
             _state.SavedViews, remoteState.SavedViews, _state.DeletedSavedViewIds, remoteState.DeletedSavedViewIds);
         _state.SavedViews = mergedViews;
@@ -2153,6 +2164,12 @@ public class MainViewModel : INotifyPropertyChanged
         _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
+        _state.TasksOrderModifiedAt = loaded.TasksOrderModifiedAt;
+        // Pre-SortOrder data (and files written by a Tasky Web build older than the one that learned
+        // to stamp SortOrder) arrive all-zero - lay down a sequential order so a first drag has
+        // something to move within. Deliberately does NOT stamp TasksOrderModifiedAt: this is a
+        // local backfill of an arbitrary order, not a user's arrangement, and letting it win a merge
+        // would overwrite a real ordering made on another device.
         if (AllTasks.Count > 0 && AllTasks.All(t => t.SortOrder == 0))
         {
             for (int i = 0; i < AllTasks.Count; i++)

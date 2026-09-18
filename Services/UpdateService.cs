@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
@@ -13,7 +14,9 @@ namespace TodoApp.Services;
 /// <see cref="UpdateService.GetPendingStagedUpdate"/>) - <see cref="ReleaseUrl"/> and
 /// <see cref="ReleaseNotes"/> are empty in the resumed case since nothing persists them
 /// across a restart, and the caller already showed them once in the session that staged it.</summary>
-public sealed record UpdateInfo(Version Version, string ReleaseUrl, string ReleaseNotes, string DownloadUrl, string AssetName);
+/// <see cref="Sha256"/> is the installer's expected SHA-256 (lowercase hex) as published by GitHub
+/// for the release asset - see <see cref="UpdateService.StageUpdateAsync"/>.
+public sealed record UpdateInfo(Version Version, string ReleaseUrl, string ReleaseNotes, string DownloadUrl, string AssetName, string? Sha256 = null);
 
 /// <summary>
 /// Checks GitHub Releases for a newer Tasky build and, if the user opts in, downloads and runs
@@ -44,6 +47,7 @@ public static class UpdateService
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tasky", "update-staging");
     private static readonly string StagedInstallerFile = Path.Combine(StagingRoot, "staged-installer.txt");
     private static readonly string StagedVersionFile = Path.Combine(StagingRoot, "staged-version.txt");
+    private static readonly string StagedHashFile = Path.Combine(StagingRoot, "staged-sha256.txt");
 
     public static Version CurrentVersion =>
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
@@ -72,6 +76,7 @@ public static class UpdateService
         // falling back to something that would half-apply.
         string? downloadUrl = null;
         string? assetName = null;
+        string? sha256 = null;
         if (root.TryGetProperty("assets", out var assets))
         {
             foreach (var asset in assets.EnumerateArray())
@@ -81,6 +86,7 @@ public static class UpdateService
                     || !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
                 downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp) ? urlProp.GetString() : null;
                 assetName = name;
+                sha256 = ParseSha256Digest(asset.TryGetProperty("digest", out var digestProp) ? digestProp.GetString() : null);
                 break;
             }
         }
@@ -89,7 +95,23 @@ public static class UpdateService
         var htmlUrl = root.TryGetProperty("html_url", out var urlProp2) ? urlProp2.GetString() ?? "" : "";
         var body = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() ?? "" : "";
 
-        return new UpdateInfo(latestVersion, htmlUrl, body, downloadUrl, assetName!);
+        return new UpdateInfo(latestVersion, htmlUrl, body, downloadUrl, assetName!, sha256);
+    }
+
+    // GitHub reports each release asset's digest as "sha256:<hex>". Anything else (absent, another
+    // algorithm, not 64 hex chars) is treated as "no digest" rather than trusted.
+    internal static string? ParseSha256Digest(string? digest)
+    {
+        const string prefix = "sha256:";
+        if (digest is null || !digest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+        var hex = digest[prefix.Length..].Trim().ToLowerInvariant();
+        return hex.Length == 64 && hex.All(Uri.IsHexDigit) ? hex : null;
+    }
+
+    internal static string ComputeSha256(string filePath)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     /// <summary>
@@ -158,7 +180,9 @@ public static class UpdateService
     {
         try
         {
-            if (!File.Exists(StagedVersionFile) || !File.Exists(StagedInstallerFile)) return null;
+            // StagedHashFile too: a stage left by a build that predates checksum verification has
+            // none, and ApplyUpdateAndRestart would refuse it - better to offer a fresh download.
+            if (!File.Exists(StagedVersionFile) || !File.Exists(StagedInstallerFile) || !File.Exists(StagedHashFile)) return null;
             var installerPath = File.ReadAllText(StagedInstallerFile).Trim();
             if (!File.Exists(installerPath)) return null;
             if (!Version.TryParse(File.ReadAllText(StagedVersionFile).Trim(), out var version)) return null;
@@ -211,6 +235,26 @@ public static class UpdateService
             throw new InvalidOperationException("The downloaded file doesn't look like a valid Tasky installer.");
         }
 
+        // This file is about to be EXECUTED, silently, with the user's full rights - "it came
+        // over HTTPS and it's bigger than a megabyte" was the entire check. Compare it against the
+        // SHA-256 GitHub publishes for the asset, which catches a truncated or corrupted download
+        // and anything swapped in between GitHub's API and the download CDN. Fails closed: a
+        // release with no digest doesn't install itself - the release page is still one click away.
+        if (string.IsNullOrEmpty(info.Sha256))
+        {
+            Directory.Delete(StagingRoot, recursive: true);
+            throw new InvalidOperationException(
+                "This release doesn't publish a checksum, so the download couldn't be verified. Download the installer from the release page instead.");
+        }
+        var actualSha256 = await Task.Run(() => ComputeSha256(installerPath), ct);
+        if (!string.Equals(actualSha256, info.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            Directory.Delete(StagingRoot, recursive: true);
+            AppLogger.Error("UpdateService", $"Installer checksum mismatch: expected {info.Sha256}, got {actualSha256}");
+            throw new InvalidOperationException("The downloaded installer didn't match its published checksum and was discarded. Please try again.");
+        }
+
+        File.WriteAllText(StagedHashFile, actualSha256);
         File.WriteAllText(StagedInstallerFile, installerPath);
         File.WriteAllText(StagedVersionFile, info.Version.ToString());
     }
@@ -229,6 +273,20 @@ public static class UpdateService
         if (!File.Exists(installerPath))
             throw new InvalidOperationException("The staged installer is missing - download the update again.");
 
+        // A staged installer can sit in %LocalAppData% for days after a "Later" click. Re-check it
+        // against the hash recorded when it was verified, and make sure the path read back from
+        // the pointer file is still inside the staging folder, before running anything.
+        var fullInstallerPath = Path.GetFullPath(installerPath);
+        var stagingPrefix = Path.GetFullPath(StagingRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!fullInstallerPath.StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(StagedHashFile)
+            || !string.Equals(File.ReadAllText(StagedHashFile).Trim(), ComputeSha256(fullInstallerPath), StringComparison.OrdinalIgnoreCase))
+        {
+            try { Directory.Delete(StagingRoot, recursive: true); } catch (IOException) { }
+            throw new InvalidOperationException("The staged installer changed since it was downloaded and was discarded - download the update again.");
+        }
+        installerPath = fullInstallerPath;
+
         // /SILENT shows only a progress bar (no wizard) - the user already agreed in Tasky's own
         // dialog, so re-asking would be redundant, but /VERYSILENT would leave a multi-second
         // update looking like nothing happened.
@@ -243,9 +301,9 @@ public static class UpdateService
         {
             FileName = installerPath,
             // No /RESTARTAPPLICATIONS: that asks Restart Manager to restart what it closed, which
-            // together with /LAUNCHAFTER=1 is two independent relaunch paths for one update. Tasky
-            // has no single-instance mutex, so both firing means two copies running against the
-            // same data file. Tasky.iss sets RestartApplications=no for the same reason.
+            // together with /LAUNCHAFTER=1 is two independent relaunch paths for one update.
+            // SingleInstanceGuard would now stop the second copy, but one relaunch path is still
+            // the right number. Tasky.iss sets RestartApplications=no for the same reason.
             Arguments = "/SILENT /CLOSEAPPLICATIONS /LAUNCHAFTER=1",
             UseShellExecute = true,
         });

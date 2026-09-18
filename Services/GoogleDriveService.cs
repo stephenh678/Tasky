@@ -72,10 +72,7 @@ public class GoogleDriveService
         _credential = null;
     }
 
-    private static string TokenDataDataPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Tasky",
-        "GoogleDriveToken");
+    private static string TokenDataDataPath => TaskyPaths.GoogleDriveTokenDirectory;
 
     public const string DefaultClientId = "395690152006-u4b10m6lkqffllfpsa7imtu0mluibe13.apps.googleusercontent.com";
 
@@ -344,11 +341,11 @@ public class GoogleDriveService
     /// shape for its own port of this retry (listWithIndexLagRetry) - worth keeping the two in
     /// sync if the retry policy itself ever changes.
     /// </summary>
-    private async Task<string?> FindFileIdWithIndexLagRetryAsync(string query, string notFoundContext)
+    private async Task<string?> FindFileIdWithIndexLagRetryAsync(string query, string notFoundContext, bool retryForIndexLag = true)
     {
         if (_driveService is null) return null;
 
-        const int maxAttempts = 3;
+        var maxAttempts = retryForIndexLag ? 3 : 1;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             var listRequest = _driveService.Files.List();
@@ -589,6 +586,11 @@ public class GoogleDriveService
     /// <summary>
     /// Same by-name lookup as GetOrCreateFolderAsync, but never creates one - for probes where
     /// "doesn't exist" is a legitimate answer, not something to fix by creating an empty folder.
+    /// No index-lag retry, for the same reason: that retry exists so a find-or-CREATE doesn't
+    /// create a duplicate of something another device wrote seconds ago. Nothing is created here,
+    /// so a miss costs nothing but waiting until the next sync - whereas retrying made every sync
+    /// (including the one blocking app exit) sleep 3 seconds per folder that simply doesn't exist,
+    /// which for a file with no attachments in the other layout is every probe, every time.
     /// </summary>
     private async Task<string?> FindFolderIdAsync(string folderName, string? parentFolderId)
     {
@@ -598,7 +600,7 @@ public class GoogleDriveService
         if (!string.IsNullOrEmpty(parentFolderId))
             q += $" and '{EscapeDriveQueryValue(parentFolderId)}' in parents";
 
-        return await FindFileIdWithIndexLagRetryAsync(q, $"Folder '{folderName}'");
+        return await FindFileIdWithIndexLagRetryAsync(q, $"Folder '{folderName}'", retryForIndexLag: false);
     }
 
     /// <summary>
@@ -878,7 +880,7 @@ public class GoogleDriveService
         // ResolveMediaContainerFolderIdAsync).
         try
         {
-            var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
+            var taskyFolderId = await ResolveTaskyFolderForDownloadAsync(settings, settingsStore, remoteFileId);
             var containerFolderIds = await GetCandidateMediaContainerFolderIdsAsync(destinationLocalPath, taskyFolderId, settings, settingsStore);
             foreach (var containerFolderId in containerFolderIds)
             {
@@ -907,7 +909,7 @@ public class GoogleDriveService
         if (_driveService is null) return;
         try
         {
-            var taskyFolderId = await GetOrCreateFolderAsync("Tasky");
+            var taskyFolderId = await ResolveTaskyFolderForDownloadAsync(settings, settingsStore, anchorFileId: null);
             var containerFolderIds = await GetCandidateMediaContainerFolderIdsAsync(localDataFilePath, taskyFolderId, settings, settingsStore);
             foreach (var containerFolderId in containerFolderIds)
             {
@@ -918,6 +920,36 @@ public class GoogleDriveService
         catch (Exception ex)
         {
             AppLogger.Warn("GoogleDriveService", $"Error syncing attachments down: {ex.Message}");
+        }
+    }
+
+    // Download passes used to call GetOrCreateFolderAsync("Tasky") directly - a by-name search on
+    // every single sync, bypassing the cached + trash-validated folder ID the upload path goes
+    // through. Besides the wasted round-trip, a by-name search can land on a different duplicate
+    // "Tasky" folder than the one this install actually syncs into (see EnsureUsableTaskyFolderAsync).
+    private async Task<string> ResolveTaskyFolderForDownloadAsync(Settings? settings, SettingsStore? settingsStore, string? anchorFileId)
+        => settings is not null && settingsStore is not null
+            ? await EnsureUsableTaskyFolderAsync(settings, settingsStore, anchorFileId)
+            : await GetOrCreateFolderAsync("Tasky");
+
+    /// <summary>
+    /// The ID of the remote file's current content revision, or null if it can't be read. Changes
+    /// exactly when some device uploads new content - SyncCoordinator compares it across its
+    /// download/merge to notice an upload that landed in between.
+    /// </summary>
+    public async Task<string?> GetHeadRevisionIdAsync(string remoteFileId)
+    {
+        if (_driveService is null || string.IsNullOrEmpty(remoteFileId)) return null;
+        try
+        {
+            var request = _driveService.Files.Get(remoteFileId);
+            request.Fields = "headRevisionId";
+            return (await request.ExecuteAsync()).HeadRevisionId;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("GoogleDriveService", $"Couldn't read head revision for '{remoteFileId}': {ex.Message}");
+            return null;
         }
     }
 

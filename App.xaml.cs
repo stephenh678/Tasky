@@ -65,7 +65,44 @@ public partial class App : Application
             return;
         }
 
+        // After the two cleanup switches above (they must run even while Tasky is open - the
+        // uninstaller calls them) and before base.OnStartup creates MainWindow and its tray icon.
+        _singleInstance = SingleInstanceGuard.TryAcquire(ShowExistingWindow);
+        if (_singleInstance is null)
+        {
+            AppLogger.Info("App", "Another Tasky instance is already running - asked it to show itself; exiting.");
+            AppLogger.Flush();
+            // Environment.Exit rather than Shutdown(): nothing has been created yet, and this
+            // guarantees StartupUri never gets as far as constructing a second MainWindow/tray icon.
+            Environment.Exit(0);
+            return;
+        }
+
         base.OnStartup(e);
+    }
+
+    private SingleInstanceGuard? _singleInstance;
+
+    // A second launch signalled us (thread-pool thread). Same steps as the tray icon's Show.
+    private void ShowExistingWindow()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (MainWindow is not { } window) return;
+                window.Show();
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+                window.Activate();
+                window.Focus();
+            }
+            catch (InvalidOperationException)
+            {
+                // Signalled while already shutting down - the window can't be re-shown, and the
+                // other launch is waiting to take over once this process exits.
+            }
+        }));
     }
 
     // Reports the outcome of an uninstall cleanup pass. Neither half can go through AppLogger:
@@ -111,6 +148,7 @@ public partial class App : Application
     // an explicit flush-and-wait here or it can be lost when the process exits mid-queue.
     protected override void OnExit(ExitEventArgs e)
     {
+        _singleInstance?.Dispose();
         AppLogger.Flush();
         base.OnExit(e);
     }

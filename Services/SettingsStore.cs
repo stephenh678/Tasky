@@ -18,11 +18,8 @@ public class SettingsStore
 
     public SettingsStore()
     {
-        var folder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Tasky");
-        Directory.CreateDirectory(folder);
-        _filePath = Path.Combine(folder, "settings.json");
+        Directory.CreateDirectory(TaskyPaths.AppDataRoot);
+        _filePath = TaskyPaths.SettingsFilePath;
         _failureCount = 0;
     }
 

@@ -105,6 +105,16 @@ public class TaskItem : INotifyPropertyChanged
         set => SetField(ref _recurrenceInterval, value < 1 ? 1 : value);
     }
 
+    // The day-of-month a Monthly/Yearly series is really "on", when that differs from DueDate's
+    // own day because the month was too short: a task due on the 31st lands on Feb 28, and without
+    // this every later occurrence stayed on the 28th for good. Only ever written when a recurring
+    // task spawns its next occurrence (MainViewModel.SpawnNextOccurrence / model.js), and only
+    // trusted while DueDate still IS that day clamped to its month - see
+    // MainViewModel.EffectiveAnchorDay - so picking a new due date by hand quietly retires it
+    // without any setter-ordering games. Null for everything else; omitted from JSON when null.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RecurrenceAnchorDay { get; set; }
+
     public TaskPriority Priority
     {
         get => _priority;
@@ -190,6 +200,7 @@ public class TaskItem : INotifyPropertyChanged
         DueDate = DueDate,
         Recurrence = Recurrence,
         RecurrenceInterval = RecurrenceInterval,
+        RecurrenceAnchorDay = RecurrenceAnchorDay,
         Priority = Priority,
         Notes = Notes,
         Links = new ObservableCollection<TaskLink>(Links),

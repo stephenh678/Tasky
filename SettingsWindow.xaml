@@ -53,6 +53,28 @@
                         <CheckBox Content="Minimize to system tray when closed (X)" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding CloseToTray}"/>
+                        <!-- Click the box and press the new combination; it's captured rather than typed
+                             (see QuickAddHotkeyBox_PreviewKeyDown). -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="150"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Quick Add shortcut (works from any app)" FontSize="13" VerticalAlignment="Center"
+                                       Margin="0,0,10,0" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                            <TextBox x:Name="QuickAddHotkeyBox" Grid.Column="1" Padding="5,3" IsReadOnly="True"
+                                     IsReadOnlyCaretVisible="False" Cursor="Hand"
+                                     Text="{Binding QuickAddHotkey, Mode=OneWay}"
+                                     ToolTip="Click here, then press the key combination you want"
+                                     AutomationProperties.Name="Quick Add keyboard shortcut"
+                                     PreviewKeyDown="QuickAddHotkeyBox_PreviewKeyDown"/>
+                            <Button Grid.Column="2" Content="Reset" Margin="8,0,0,0" Padding="10,3"
+                                    Click="ResetQuickAddHotkey_Click"/>
+                        </Grid>
+                        <TextBlock Text="Needs Ctrl, Alt or Win plus another key. If another app already uses the combination, Tasky will tell you in the status bar."
+                                   FontSize="11" Margin="0,0,0,14" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
                         <CheckBox Content="Enable reminders" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding RemindersEnabled}"/>

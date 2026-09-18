@@ -5,32 +5,33 @@ A Windows desktop task manager built with WPF (.NET 10). Tasky is a single-windo
 document — mix in notes, photos, links, files, and checklists, tag it, give it a due date, and
 let the app take care of not losing your work.
 
-**Current release: v1.3.1** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
+**Current release: v1.3.2** ([download](https://github.com/stephenh678/Tasky/releases/latest), or
 **Help → Check for Updates** from an installed copy).
 
-v1.3.1 makes Tasky Web / Mobile feel like a phone app, and fixes a batch of desktop data-safety bugs.
+v1.3.2 is a data-safety and sync-correctness release, from a full review of the desktop app.
 
-- **Plain-language quick add, on desktop and web.** End a title with `tomorrow 3pm`, `next fri`,
-  `in 2 weeks`, `tonight` or `every monday` and it's scheduled (and repeated) for you. Only the end
-  of the title is read, so "Call Tuesday about the budget" stays a plain title.
-- **Formatting on the web.** A formatting bar (bold, italic, underline, lists, links) while you type
-  a note, saved in the desktop editor's own format. Notes edited on the web used to lose all their
-  formatting on the desktop after a single Enter; they now round-trip in both directions.
-- **Tasky Web stays current by itself.** It checks Drive every few minutes, whenever you come back
-  to it, and on pull-to-refresh — before, it only noticed other devices' edits when it had one of
-  its own to save.
-- **New on the web/phone:** an **Upcoming** view (Overdue / Today / Tomorrow / Next 7 days / Later)
-  in the tab bar, "Move all overdue to today" and "Move to Tomorrow", reminders while Tasky is open,
-  **Add to Calendar** for any task, a `Ctrl+K` command palette, `/` in a note to insert a checklist,
-  photo, link or file, and — on Android — sharing a link or photo into Tasky and a due-count badge
-  on the app icon. Checklist items wrap instead of being cut off, can be dragged to reorder, and the
-  editor is tidier on a phone (one scrolling row of task details, a single labelled **Insert** menu).
-- **Desktop fixes.** Saved Views vanished on every restart (and the next save erased them from the
-  file); Save As to another folder left every image and file behind; a failed Google Drive download
-  could overwrite the remote file with the local one; a transient Drive error created a duplicate
-  `Tasky.tasky`; more than 100 attachments were re-uploaded on every sync; inserting an image,
-  table or file inside a bulleted list crashed; and a note with an unsaveable element was saved as
-  empty.
+- **One copy of Tasky at a time.** Launching Tasky while it's already running (including hidden in
+  the tray) now brings the existing window forward. It used to start a second copy, and the two
+  overwrote each other's saves.
+- **Saves that fail are retried, and Tasky won't exit over unsaved changes.** A save blocked by
+  OneDrive or antivirus used to be dropped unless you happened to edit again; closing the app then
+  lost it. A file that fails to open no longer leaves an empty list pointed at that file, and
+  opening a different file during a sync can no longer mix the two files together.
+- **Sync keeps both edits, in both directions.** When the same task was edited on two devices, the
+  losing edit was only kept as a "(conflicted copy)" if the *remote* edit won; if yours won, the
+  other device's edit vanished. Edits made while an upload was running, and uploads from another
+  device landing mid-sync, are handled now too. Desktop and Tasky Web.
+- **Faster syncs and exits.** Every sync could sleep 3-9 seconds looking for folders that don't
+  exist; attachment downloads no longer sit in the middle of the merge; the sync on exit is capped
+  so a hidden Tasky can't linger when you're offline.
+- **Reminders.** Rescheduling a task you'd already been reminded about reminds you again; a task due
+  `@3pm` is announced at 3pm rather than up to 15 minutes late; a snoozed reminder stays snoozed.
+- **Recurring tasks.** A monthly task on the 31st comes back to the 31st after February, finishing
+  "due the 1st" on the 3rd keeps the series on the 1st, and the next occurrence keeps its priority.
+- **Choose your Quick Add shortcut** in Settings → General, and Tasky now tells you when another app
+  already owns the combination instead of the hotkey silently not working.
+- **Updates are verified.** The downloaded installer is checked against the SHA-256 checksum GitHub
+  publishes for the release before it is run.
 
 ## Features
 
@@ -67,7 +68,10 @@ Tasks also carry tags (picked from existing ones or typed fresh — always lower
 date, and an optional recurrence rule (daily/weekly/monthly/yearly, with a custom interval —
 e.g. every 3 days). Completing a recurring task automatically spawns the next occurrence, due
 date advanced from today if the previous due date had already passed (so finishing a long-overdue
-task doesn't spawn another one that's still overdue).
+task doesn't spawn another one that's still overdue). Monthly and yearly tasks stay on their day of
+the month: one due on the 31st lands on Feb 28 and is back on the 31st in March, and finishing
+"rent, due the 1st" on the 3rd still makes the next one due on the 1st. The next occurrence keeps
+the task's priority as well as its tags.
 
 ### Export & print
 Turn a task's note into a standalone file, or send it to a printer, via **Export / Print Note...**
@@ -79,7 +83,9 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 ### Reminders & calendar
 - **Native toast notifications** — reminders for due/overdue tasks show as real Windows 10/11
   toast notifications (not old-style balloon tips), with **Mark Complete**, **Snooze 15m**, and
-  **Snooze 1 Hour** buttons right on the notification
+  **Snooze 1 Hour** buttons right on the notification. A task with a time (`@3pm`) is announced at
+  that time rather than at the next 15-minute check, and rescheduling a task you were already
+  reminded about reminds you again for the new date
 - **Calendar view** — toggle to a month-grid view showing tasks by due date, via the toolbar's
   List/Calendar buttons, `F12`, or **View → Calendar View**; click a task to jump to it in the
   editor
@@ -89,7 +95,13 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 
 ### Data safety
 - Auto-save (debounced, so it doesn't hammer the disk while you type), with a small status
-  indicator ("Saving…" / "Saved") and a clear failure message if a write doesn't go through
+  indicator ("Saving…" / "Saved"). A save that fails (the file briefly locked by OneDrive or
+  antivirus, say) is retried automatically until it lands, and Tasky won't quietly exit with
+  unsaved changes - it asks first
+- One copy at a time: launching Tasky while it's already running (including hidden in the tray)
+  brings the existing window forward instead of starting a second copy that would overwrite the
+  first one's saves
+- A file that fails to open (corrupt, or locked) leaves the file you already had open untouched
 - Rolling backups taken before every save, with a **Restore from Backup** dialog to roll back to
   any recent snapshot
 - Ctrl+Z undo for trashing, restoring, tag removal/addition, due date changes, pinning, and
@@ -103,7 +115,9 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
 ### Quick capture
 - Global hotkey **Ctrl+Alt+T**, the system tray icon, a **Quick Add** button on the main
   toolbar, and **File → Quick Add...** all open the same small always-on-top box to jot down a
-  task from anywhere, without switching to the main window
+  task from anywhere, without switching to the main window. If another app already uses
+  Ctrl+Alt+T, Tasky says so, and **Settings → General → Quick Add shortcut** lets you pick a
+  different combination
 - End the title with a plain-language date, time or repeat and it's scheduled for you —
   `Call mom tomorrow 3pm`, `Dentist next fri`, `Renew passport in 3 weeks`, `Buy milk tonight`,
   `Pay rent every month`, `Team sync every monday 10am`. Only the end of the title is read, so
@@ -133,6 +147,8 @@ Turn a task's note into a standalone file, or send it to a printer, via **Export
   on by default) surfaces the same prompt without you having to remember to look
 - "Relaunch Now" saves your work, closes Tasky, swaps in the new files, and reopens automatically;
   "Later" picks the download back up next launch instead of starting over
+- The downloaded installer is checked against the SHA-256 checksum GitHub publishes for the
+  release before it's ever run (and again if it sat waiting after "Later"); a mismatch is discarded
 
 ### Accessibility
 - Confirmation dialogs respond to Enter/Esc, not just mouse clicks
@@ -163,9 +179,21 @@ dotnet build
 dotnet test TodoApp.Tests/TodoApp.Tests.csproj
 ```
 
-Covers file persistence (save/load, atomic writes, backup rotation), sorting, task/note
-validation, quick-add parsing, iCal export, calendar-grid math, and Google Drive's per-task sync
-merge.
+Covers file persistence (save/load, atomic writes, backup rotation and restore), sorting,
+task/note validation, quick-add parsing, iCal export, calendar-grid math, reminders, recurrence,
+the single-instance guard, update checksums, and Google Drive's per-task sync merge.
+
+The tests never touch your real Tasky data. `TodoApp.Tests/TestEnvironment.cs` redirects every
+default per-user location (`%AppData%\Tasky`, `Documents\Tasky`) to a temp folder before any test
+runs, and a test fails if that redirect ever stops applying. Tests that need a `MainViewModel` get
+one with its own settings file and data file via `TestViewModels.Create`.
+
+The sync merge, quick-add parser and recurrence math are ported line-for-line to Tasky Web; their
+JS counterparts run with:
+
+```bash
+node --test docs/js/test/parity.test.js
+```
 
 ## Produce a standalone build
 
@@ -221,7 +249,10 @@ folder; attachments live in an `Attachments` folder the same way.
 - **Per-task merge** — sync no longer overwrites one whole file with another. Each sync downloads
   the remote file, merges it with local state task-by-task (newest edit wins per task, tasks unique
   to either side are kept), then uploads the merged result — so editing on two computers doesn't
-  cause one device's changes to clobber the other's
+  cause one device's changes to clobber the other's. If the same task was edited on two devices
+  between syncs, the newer edit wins and the other is kept as a "(conflicted copy)" task -
+  whichever side it came from - rather than being dropped. If another device uploads while a sync
+  is mid-merge, Tasky merges that newer copy too before uploading
 - **Deletion sync** — deleting a task records a tombstone that travels with sync, so a task deleted
   on one computer stays deleted after syncing on another, without resurrecting it
 - **Automatic Background Live Sync** — debounced auto-sync uploads task edits and media 10 seconds after you finish typing
@@ -268,7 +299,7 @@ per-task-merge sync and `.tasky` file the desktop app uses (no separate data sto
 your home screen for an app-like experience (`manifest.json` sets it up as a standalone PWA).
 Needs a current browser: Safari / iOS 16.4 or newer, or a recent Chrome, Edge or Firefox — older
 browsers get a plain "Tasky couldn't start" message on the sign-in screen instead of a blank page.
-Everything below is live as of **v1.3.1** (18 Sep 2026). v1.3.0 closed the remaining feature
+Everything below is live as of **v1.3.2** (18 Sep 2026). v1.3.0 closed the remaining feature
 gaps with the desktop app; offline support landed in v1.2.0, whose review is in
 `review_web_mobile.md`.
 

@@ -58,13 +58,14 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Use Restart Manager to detect and close a running Tasky instead of failing on a locked
-; Tasky.exe. Tasky has no single-instance mutex, so file locks are what identifies it.
+; Tasky.exe. File locks are what identifies it (Tasky's single-instance mutex is session-local
+; and deliberately not used as AppMutex, which would just block setup instead of closing it).
 CloseApplications=yes
 ; ...but deliberately do NOT let Restart Manager restart it. Relaunching is handled explicitly
 ; below - the postinstall entry interactively, /LAUNCHAFTER=1 when the in-app updater drives this
-; silently. With RestartApplications=yes BOTH could fire for the same update, and since Tasky has
-; no single-instance mutex that means two windows, two tray icons and two autosave loops writing
-; the same .tasky file.
+; silently. With RestartApplications=yes BOTH could fire for the same update; SingleInstanceGuard
+; would turn the second launch away, but copies of Tasky older than that guard would end up with
+; two windows, two tray icons and two autosave loops writing the same .tasky file.
 RestartApplications=no
 MinVersion=10.0.17763
 

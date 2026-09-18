@@ -2,7 +2,7 @@
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=33';
+import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=34';
 
 // ROADMAP.md #140: DeletedTasks used to grow unbounded on both platforms - every permanent delete
 // added a record that got merged and re-uploaded forever. Tombstones older than RETENTION_MS are
@@ -20,9 +20,10 @@ export function deduplicateTombstones(tombstones, now = new Date()) {
     // load down with it - it carries nothing usable, so drop it. Mirrors what desktop's
     // deserializer effectively does with a null Timestamp (DateTime.MinValue, aged out).
     if (!t || !t.TaskId || !t.Timestamp) continue;
-    if (parseDotNetDate(t.Timestamp).getTime() < cutoff) continue;
+    const timestamp = parseDotNetDate(t.Timestamp); // null for a non-empty but unparseable value
+    if (!timestamp || timestamp.getTime() < cutoff) continue;
     const existing = byId.get(t.TaskId);
-    if (!existing || parseDotNetDate(t.Timestamp) > parseDotNetDate(existing.Timestamp)) {
+    if (!existing || timestamp > parseDotNetDate(existing.Timestamp)) {
       byId.set(t.TaskId, t);
     }
   }

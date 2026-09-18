@@ -22,7 +22,7 @@
 // already-open page only ever asks for its own version's assets: those are served cache-first from
 // whichever cache still has them, or from the network - never silently swapped for newer bytes.
 
-const SHELL_VERSION = '?v=33';
+const SHELL_VERSION = '?v=34';
 const CACHE_NAME = `tasky-shell-${SHELL_VERSION.replace('?v=', '')}`;
 
 const SHELL_FILES = [
@@ -58,7 +58,8 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      // Not SHARE_CACHE: photos shared in just before an update would vanish before the page reads them.
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== SHARE_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -141,9 +142,14 @@ async function cacheFirst(request) {
 async function networkFirst(request, fallbackKey) {
   try {
     const response = await fetch(request);
-    if (response.ok) {
+    // A redirected response can't be replayed for a later navigation (the browser rejects it), so
+    // it must never replace the fallback entry.
+    if (response.ok && !(fallbackKey && response.redirected)) {
       const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
+      // A navigation is always the same shell whatever its query string, so it refreshes the one
+      // fallback entry - keyed by request, every ?share-text=... / ?section=... launch left its own
+      // permanent copy behind (with the shared text sitting in the cache key).
+      cache.put(fallbackKey ?? request, response.clone());
     }
     return response;
   } catch (err) {

@@ -130,6 +130,7 @@ public static class TaskSyncMerge
         target.IsDone = source.IsDone;
         target.IsClosed = source.IsClosed;
         target.IsPinned = source.IsPinned;
+        target.SortOrder = source.SortOrder;
         target.DueDate = source.DueDate;
         target.Recurrence = source.Recurrence;
         target.RecurrenceInterval = source.RecurrenceInterval;
@@ -142,6 +143,39 @@ public static class TaskSyncMerge
         foreach (var block in source.Body) target.Body.Add(block);
 
         target.ModifiedAt = source.ModifiedAt;
+    }
+
+    /// <summary>
+    /// Merges the manual (drag-and-drop) ordering, which is list-level state rather than a per-task
+    /// field - see AppState.TasksOrderModifiedAt for why it can't ride on TaskItem.ModifiedAt.
+    /// Whole-arrangement newer-wins: if remote reordered more recently than this device did, adopt
+    /// remote's SortOrder for every task both sides know about; otherwise keep local's. A null
+    /// timestamp means "never reordered" and loses to any real one.
+    /// Returns the winning timestamp to store back on the local state.
+    /// Mirrored line-for-line by mergeTaskOrder in Tasky Web's docs/js/sync.js.
+    /// </summary>
+    public static DateTime? MergeTaskOrder(
+        IEnumerable<TaskItem> localTasks,
+        IEnumerable<TaskItem> remoteTasks,
+        DateTime? localOrderModifiedAt,
+        DateTime? remoteOrderModifiedAt)
+    {
+        if (remoteOrderModifiedAt is null) return localOrderModifiedAt;
+        if (localOrderModifiedAt is not null && localOrderModifiedAt >= remoteOrderModifiedAt)
+            return localOrderModifiedAt;
+
+        // ApplyTaskFields already carries SortOrder for the tasks whose content remote won, but a
+        // pure reorder changes no content, so those tasks never appear in TasksToUpdate - this loop
+        // is what actually moves them. Tasks only one side knows about keep whatever they have;
+        // adds already arrive with remote's SortOrder attached.
+        var remoteOrderById = remoteTasks.ToDictionary(t => t.Id, t => t.SortOrder);
+        foreach (var localTask in localTasks)
+        {
+            if (remoteOrderById.TryGetValue(localTask.Id, out var sortOrder))
+                localTask.SortOrder = sortOrder;
+        }
+
+        return remoteOrderModifiedAt;
     }
 
     // A task can legitimately be tombstoned more than once in its lifetime - delete, then a later

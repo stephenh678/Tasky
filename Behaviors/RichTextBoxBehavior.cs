@@ -471,10 +471,113 @@ public static class RichTextBoxBehavior
             RestoreInlinePhotoIfNeeded(rtb, block);
 
         if (!string.IsNullOrEmpty(block.Text))
-            rtb.Document.Blocks.Add(new Paragraph(new Run(block.Text)));
+        {
+            PopulateDocumentFromFormattedText(rtb, block.Text);
+            HookDocumentHyperlinks(rtb.Document);
+        }
 
         SetIsEmpty(rtb, new TextRange(rtb.Document.ContentStart, rtb.Document.ContentEnd).Text.TrimEnd('\r', '\n').Length == 0 && !HasMedia(rtb.Document));
         AppLogger.Debug("NoteEditor", $"LoadContent: Final block count: {rtb.Document.Blocks.Count}");
+    }
+
+    public static void PopulateDocumentFromFormattedText(RichTextBox rtb, string text)
+    {
+        if (rtb?.Document is not null)
+            PopulateDocumentFromFormattedText(rtb.Document, text);
+    }
+
+    public static void PopulateDocumentFromFormattedText(FlowDocument document, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || document is null) return;
+
+        // Split by double newline into logical paragraphs/blocks
+        var rawParagraphs = text.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var rawPara in rawParagraphs)
+        {
+            var lines = rawPara.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            if (lines.Length == 0) continue;
+
+            // Check if all non-empty lines are bullet items (- or *)
+            if (lines.All(l => string.IsNullOrWhiteSpace(l) || l.TrimStart().StartsWith("- ") || l.TrimStart().StartsWith("* ")))
+            {
+                var list = new List { MarkerStyle = TextMarkerStyle.Disc, Margin = new Thickness(0, 0, 0, 6) };
+                foreach (var line in lines)
+                {
+                    var trimmed = line.TrimStart();
+                    if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
+                    {
+                        var itemText = trimmed.Substring(2);
+                        var listItem = new ListItem();
+                        var para = new Paragraph { Margin = new Thickness(0) };
+                        AppendFormattedInlines(para, itemText);
+                        listItem.Blocks.Add(para);
+                        list.ListItems.Add(listItem);
+                    }
+                }
+                if (list.ListItems.Count > 0)
+                {
+                    document.Blocks.Add(list);
+                    continue;
+                }
+            }
+
+            var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 6) };
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (i > 0) paragraph.Inlines.Add(new LineBreak());
+                AppendFormattedInlines(paragraph, lines[i]);
+            }
+            document.Blocks.Add(paragraph);
+        }
+    }
+
+    private static void AppendFormattedInlines(Paragraph paragraph, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        // Regex to parse **bold**, *italic*, and [link](url)
+        var pattern = @"(\*\*(.*?)\*\*)|(\*(.*?)\*)|(\[(.*?)\]\((https?:\/\/[^\s\)]+)\))";
+        var matches = Regex.Matches(text, pattern);
+        var lastIdx = 0;
+
+        foreach (Match match in matches)
+        {
+            if (match.Index > lastIdx)
+            {
+                paragraph.Inlines.Add(new Run(text.Substring(lastIdx, match.Index - lastIdx)));
+            }
+
+            if (match.Groups[1].Success) // **bold**
+            {
+                paragraph.Inlines.Add(new Bold(new Run(match.Groups[2].Value)));
+            }
+            else if (match.Groups[3].Success) // *italic*
+            {
+                paragraph.Inlines.Add(new Italic(new Run(match.Groups[4].Value)));
+            }
+            else if (match.Groups[5].Success) // [link](url)
+            {
+                var linkText = match.Groups[6].Value;
+                var url = match.Groups[7].Value;
+                if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                {
+                    var h = new Hyperlink(new Run(linkText)) { NavigateUri = uri };
+                    paragraph.Inlines.Add(h);
+                }
+                else
+                {
+                    paragraph.Inlines.Add(new Run(match.Value));
+                }
+            }
+
+            lastIdx = match.Index + match.Length;
+        }
+
+        if (lastIdx < text.Length)
+        {
+            paragraph.Inlines.Add(new Run(text.Substring(lastIdx)));
+        }
     }
 
     private static string SaveContent(RichTextBox rtb)

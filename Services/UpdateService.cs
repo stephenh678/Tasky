@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
@@ -17,22 +16,24 @@ namespace TodoApp.Services;
 public sealed record UpdateInfo(Version Version, string ReleaseUrl, string ReleaseNotes, string DownloadUrl, string AssetName);
 
 /// <summary>
-/// Checks GitHub Releases for a newer Tasky build, and - if the user opts in - downloads and
-/// applies it in place. No installer, no code-signing cert, no Velopack/Squirrel: Tasky already
-/// ships as a flat, no-install folder (see Uninstall-Tasky.ps1's $KnownAppFiles), so "updating" is
-/// just replacing those same files with a fresher copy from the same release zip the manual
-/// download link already offers.
+/// Checks GitHub Releases for a newer Tasky build and, if the user opts in, downloads and runs
+/// that release's installer.
 ///
-/// Two things make this avoid a repeat SmartScreen prompt after the user's initial manual install:
-/// the zip is fetched with HttpClient (not a browser/Explorer download), and the extracted files
-/// are written by this already-running, already-trusted process - neither path applies Windows'
-/// Mark-of-the-Web, which is what SmartScreen's Attachment Execution Service check keys off.
+/// Updating IS the installer, run silently - Tasky-Setup-x.y.z.exe with /SILENT. That is what
+/// makes an update indistinguishable from a fresh install: the same Inno Setup package replaces
+/// the files, refreshes the shortcuts and updates the version shown in Apps &amp; Features. The
+/// previous approach downloaded the raw zip and hand-rolled the file swap in a throwaway
+/// PowerShell script generated at runtime, which did none of that - an updated install kept
+/// advertising the old version to Windows forever.
 ///
-/// A running Tasky.exe can't overwrite its own file (Windows keeps an executing image locked), so
-/// the actual file swap happens after the app has exited, via a small PowerShell script generated
-/// fresh on disk each time (see ApplyUpdateAndRestart) - the same "script deletes its own running
-/// file" trick Uninstall-Tasky.ps1 already relies on, just applied to Tasky.exe instead of to the
-/// script itself.
+/// Two things keep this from tripping SmartScreen on every update: the installer is fetched with
+/// HttpClient rather than a browser, and it is launched by this already-running, already-trusted
+/// process. Neither path applies Mark-of-the-Web, which is what SmartScreen's Attachment Execution
+/// Service check keys off.
+///
+/// A running Tasky.exe can't be overwritten, so the exchange is: this process starts the installer
+/// and exits; Inno closes/replaces/relaunches from there (see /LAUNCHAFTER in
+/// <see cref="ApplyUpdateAndRestart"/> and installer/Tasky.iss).
 /// </summary>
 public static class UpdateService
 {
@@ -41,7 +42,7 @@ public static class UpdateService
 
     private static readonly string StagingRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tasky", "update-staging");
-    private static readonly string ExtractedDir = Path.Combine(StagingRoot, "extracted");
+    private static readonly string StagedInstallerFile = Path.Combine(StagingRoot, "staged-installer.txt");
     private static readonly string StagedVersionFile = Path.Combine(StagingRoot, "staged-version.txt");
 
     public static Version CurrentVersion =>
@@ -64,6 +65,11 @@ public static class UpdateService
         if (!Version.TryParse(tagName.TrimStart('v', 'V'), out var latestVersion)) return null;
         if (latestVersion <= CurrentVersion) return null;
 
+        // The installer asset specifically. A release also carries a "*-win-x64.zip" for copies of
+        // Tasky predating the installer (they look for that name and nothing else), but this build
+        // must never pick it up: the zip has no way to update the Apps & Features registration.
+        // No installer in the release means no update, which is the safe answer rather than
+        // falling back to something that would half-apply.
         string? downloadUrl = null;
         string? assetName = null;
         if (root.TryGetProperty("assets", out var assets))
@@ -71,7 +77,8 @@ public static class UpdateService
             foreach (var asset in assets.EnumerateArray())
             {
                 var name = asset.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
-                if (!name.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!name.StartsWith("Tasky-Setup-", StringComparison.OrdinalIgnoreCase)
+                    || !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
                 downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp) ? urlProp.GetString() : null;
                 assetName = name;
                 break;
@@ -85,6 +92,63 @@ public static class UpdateService
         return new UpdateInfo(latestVersion, htmlUrl, body, downloadUrl, assetName!);
     }
 
+    /// <summary>
+    /// True when this copy of Tasky is running from somewhere the installer didn't put it - no
+    /// Apps &amp; Features registration, or one pointing at a different folder.
+    ///
+    /// The case that matters is the migration: a copy predating the installer updates itself from
+    /// the legacy zip, which drops the new binary over the old folder (Desktop, Downloads,
+    /// wherever it was unpacked) and cannot register anything. That copy works, but Windows knows
+    /// nothing about it - no Start Menu entry, nothing in Settings &gt; Apps - and its next update
+    /// would install a SECOND copy under %LOCALAPPDATA%\Programs, orphaning this one. Telling the
+    /// user once is what turns a stranded install into a managed one.
+    /// </summary>
+    public static bool IsRunningUnmanagedInstall()
+    {
+        try
+        {
+            var current = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            // Inno registers a per-user install under HKCU, keyed on the AppId in
+            // installer/Tasky.iss with Inno's own "_is1" suffix.
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8F1C5A2E-4B3D-4C7A-9E6F-2A8D0B4E7C15}_is1");
+            var registered = key?.GetValue("InstallLocation") as string;
+            if (string.IsNullOrWhiteSpace(registered)) return true;
+            return !string.Equals(
+                registered.TrimEnd(Path.DirectorySeparatorChar), current, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            // Can't tell - say nothing rather than nag on a guess.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the staging folder when what's in it is no longer newer than what's running - i.e.
+    /// after an update was applied, or after this version was installed some other way. The
+    /// staged installer is ~50MB, and nothing else ever removes it: ApplyUpdateAndRestart can't
+    /// (the installer it just launched is about to close this process, and the file is in use),
+    /// and StageUpdateAsync only clears the folder when a NEXT update is downloaded. Without this
+    /// a user who updates once and never again keeps that 50MB forever.
+    /// Safe to call at startup on a background thread; failures are deliberately ignored.
+    /// </summary>
+    public static void CleanUpStaleStaging()
+    {
+        try
+        {
+            if (!Directory.Exists(StagingRoot)) return;
+            // Still-pending staged update: leave it, the user may click Restart to apply it.
+            if (GetPendingStagedUpdate() is not null) return;
+            Directory.Delete(StagingRoot, recursive: true);
+        }
+        catch (Exception)
+        {
+            // A locked file (the installer may still be finishing) or a permissions problem -
+            // there'll be another startup.
+        }
+    }
+
     /// <summary>A staged download left behind by a previous session's "Later" click - lets the
     /// caller offer to finish installing without hitting the network or re-downloading ~75MB.
     /// Returns null if nothing valid is staged (including a stale stage for a version that's no
@@ -94,8 +158,9 @@ public static class UpdateService
     {
         try
         {
-            if (!File.Exists(StagedVersionFile)) return null;
-            if (!File.Exists(Path.Combine(ExtractedDir, "Tasky.exe"))) return null;
+            if (!File.Exists(StagedVersionFile) || !File.Exists(StagedInstallerFile)) return null;
+            var installerPath = File.ReadAllText(StagedInstallerFile).Trim();
+            if (!File.Exists(installerPath)) return null;
             if (!Version.TryParse(File.ReadAllText(StagedVersionFile).Trim(), out var version)) return null;
             if (version <= CurrentVersion) return null;
             return new UpdateInfo(version, ReleaseUrl: "", ReleaseNotes: "", DownloadUrl: "", AssetName: "");
@@ -114,7 +179,7 @@ public static class UpdateService
         if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
         Directory.CreateDirectory(StagingRoot);
 
-        var zipPath = Path.Combine(StagingRoot, string.IsNullOrEmpty(info.AssetName) ? "update.zip" : info.AssetName);
+        var installerPath = Path.Combine(StagingRoot, string.IsNullOrEmpty(info.AssetName) ? "Tasky-Setup.exe" : info.AssetName);
 
         using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
         {
@@ -124,7 +189,7 @@ public static class UpdateService
             var total = response.Content.Headers.ContentLength ?? -1L;
 
             await using var httpStream = await response.Content.ReadAsStreamAsync(ct);
-            await using var fileStream = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await using var fileStream = new FileStream(installerPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
             var buffer = new byte[81920];
             long readTotal = 0;
@@ -137,77 +202,52 @@ public static class UpdateService
             }
         }
 
-        ZipFile.ExtractToDirectory(zipPath, ExtractedDir, overwriteFiles: true);
-        File.Delete(zipPath);
-
-        if (!File.Exists(Path.Combine(ExtractedDir, "Tasky.exe")))
+        // Nothing to unpack - the installer IS the payload. Sanity-check it looks like a real PE
+        // rather than an HTML error page GitHub served with a 200, which would otherwise only show
+        // up as a baffling failure when the user clicks Restart.
+        if (new FileInfo(installerPath).Length < 1_000_000)
         {
             Directory.Delete(StagingRoot, recursive: true);
-            throw new InvalidOperationException("The downloaded file doesn't look like a valid Tasky release.");
+            throw new InvalidOperationException("The downloaded file doesn't look like a valid Tasky installer.");
         }
 
+        File.WriteAllText(StagedInstallerFile, installerPath);
         File.WriteAllText(StagedVersionFile, info.Version.ToString());
     }
 
-    /// <summary>Launches a detached helper script that waits for this process to exit, copies the
-    /// staged files over the install folder, relaunches Tasky.exe, then deletes the staging folder
-    /// and itself. Caller is responsible for actually exiting right after (normal MainWindow.Close()
-    /// - this doesn't call Shutdown() itself so the existing autosave/Drive-sync-on-close path in
-    /// MainWindow's Closing handler still runs first, same as any other exit).</summary>
+    /// <summary>Runs the staged installer silently and returns. Inno Setup closes this process,
+    /// replaces the files, refreshes the shortcuts and the Apps &amp; Features entry, then relaunches
+    /// Tasky (see /LAUNCHAFTER in installer/Tasky.iss). The caller should exit right afterwards via
+    /// the normal MainWindow.Close() path so the existing autosave and Drive-sync-on-close work
+    /// still runs first - this deliberately doesn't call Shutdown() itself.</summary>
     public static void ApplyUpdateAndRestart()
     {
-        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-        var exePath = Path.Combine(installDir, "Tasky.exe");
-        var pid = Environment.ProcessId;
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"tasky-update-{Guid.NewGuid():N}.ps1");
+        if (!File.Exists(StagedInstallerFile))
+            throw new InvalidOperationException("No staged update to apply.");
 
-        // Wait-Process's own timeout throws rather than just returning, and Copy-Item can still
-        // hit the file a beat after the process object reports exited (handle teardown isn't
-        // instantaneous) - both are wrapped so the retry loop is what actually decides success,
-        // not a single racy attempt right after Wait-Process returns.
-        var script = $$"""
-$ErrorActionPreference = 'SilentlyContinue'
-try { Wait-Process -Id {{pid}} -Timeout 30 } catch {}
+        var installerPath = File.ReadAllText(StagedInstallerFile).Trim();
+        if (!File.Exists(installerPath))
+            throw new InvalidOperationException("The staged installer is missing - download the update again.");
 
-$deadline = (Get-Date).AddSeconds(20)
-$applied = $false
-while ((Get-Date) -lt $deadline -and -not $applied) {
-    try {
-        # Mirror, not just overwrite: remove any file already in the install folder that isn't
-        # part of this release before copying the new ones in. Otherwise a file a past release
-        # shipped but this one doesn't (e.g. the loose dependency DLLs from before Tasky switched
-        # to a single-file build) silently survives every update forever instead of going away
-        # once the release that stops shipping it is applied.
-        $newFiles = Get-ChildItem -LiteralPath '{{ExtractedDir}}' -Recurse -File |
-            ForEach-Object { $_.FullName.Substring('{{ExtractedDir}}'.Length + 1) }
-        Get-ChildItem -LiteralPath '{{installDir}}' -Recurse -File -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                $rel = $_.FullName.Substring('{{installDir}}'.Length + 1)
-                if ($newFiles -notcontains $rel) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-            }
-        Copy-Item -Path '{{ExtractedDir}}\*' -Destination '{{installDir}}' -Recurse -Force -ErrorAction Stop
-        $applied = $true
-    } catch {
-        Start-Sleep -Milliseconds 500
-    }
-}
-
-if ($applied) {
-    Remove-Item -LiteralPath '{{StagingRoot}}' -Recurse -Force -ErrorAction SilentlyContinue
-    Start-Process -FilePath '{{exePath}}'
-}
-# A running .ps1 can remove its own file directly - PowerShell parses the whole script into memory
-# before executing it, so (like Uninstall-Tasky.ps1) it never holds this file open.
-Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-""";
-        File.WriteAllText(scriptPath, script);
-
+        // /SILENT shows only a progress bar (no wizard) - the user already agreed in Tasky's own
+        // dialog, so re-asking would be redundant, but /VERYSILENT would leave a multi-second
+        // update looking like nothing happened.
+        // /CLOSEAPPLICATIONS lets Restart Manager close this instance rather than failing on a
+        // locked Tasky.exe, and /LAUNCHAFTER=1 is Tasky.iss's own flag telling it to start Tasky
+        // again once done (the normal post-install launch entry is skipped in silent mode).
+        // The staging folder is deliberately NOT cleaned up here: this process is about to be
+        // closed by the installer, so anything queued after this line may never run.
+        // GetPendingStagedUpdate's version check retires it instead, and the next StageUpdateAsync
+        // clears the folder outright.
         Process.Start(new ProcessStartInfo
         {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{scriptPath}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            FileName = installerPath,
+            // No /RESTARTAPPLICATIONS: that asks Restart Manager to restart what it closed, which
+            // together with /LAUNCHAFTER=1 is two independent relaunch paths for one update. Tasky
+            // has no single-instance mutex, so both firing means two copies running against the
+            // same data file. Tasky.iss sets RestartApplications=no for the same reason.
+            Arguments = "/SILENT /CLOSEAPPLICATIONS /LAUNCHAFTER=1",
+            UseShellExecute = true,
         });
     }
 }

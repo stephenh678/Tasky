@@ -2,7 +2,7 @@
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=29';
+import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=31';
 
 // ROADMAP.md #140: DeletedTasks used to grow unbounded on both platforms - every permanent delete
 // added a record that got merged and re-uploaded forever. Tombstones older than RETENTION_MS are
@@ -48,6 +48,9 @@ function applyTaskFields(target, source) {
   target.IsDone = source.IsDone;
   target.IsClosed = source.IsClosed;
   target.IsPinned = source.IsPinned;
+  // Mirrors TaskSyncMerge.ApplyTaskFields' `target.SortOrder = source.SortOrder`. Missing here
+  // meant a task whose content remote won kept this device's stale manual position.
+  target.SortOrder = Number(source.SortOrder) || 0;
   target.DueDate = source.DueDate;
   target.Recurrence = source.Recurrence;
   target.RecurrenceInterval = source.RecurrenceInterval ?? 1;
@@ -149,7 +152,40 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
     }
   }
 
+  // After the field updates above, so remote's arrangement wins over any SortOrder applyTaskFields
+  // just copied.
+  localState.TasksOrderModifiedAt = mergeTaskOrder(
+    localState.Tasks, remoteState.Tasks, localState.TasksOrderModifiedAt, remoteState.TasksOrderModifiedAt);
+
   return { added, updated, removed, conflicted, updatedIds, removedIds };
+}
+
+/**
+ * Port of TaskSyncMerge.MergeTaskOrder (Services/TaskSyncMerge.cs).
+ *
+ * Manual ordering is a property of the LIST, not of any one task, so it can't ride on a task's
+ * ModifiedAt: a drag renumbers every task, and bumping each one's ModifiedAt would make this device
+ * win a newer-wins merge on every field of every task. Desktop's Task_PropertyChanged therefore
+ * ignores SortOrder - which left the opposite hole, where a pure reorder made nothing "newer" and
+ * every device silently discarded it. AppState.TasksOrderModifiedAt closes that: whole-arrangement
+ * newer-wins, with null ("never reordered") losing to any real timestamp.
+ *
+ * Mutates the SortOrder of tasks in localTasks when remote wins. Returns the winning timestamp.
+ */
+export function mergeTaskOrder(localTasks, remoteTasks, localOrderModifiedAt, remoteOrderModifiedAt) {
+  if (!remoteOrderModifiedAt) return localOrderModifiedAt ?? null;
+  const remoteAt = parseDotNetDate(remoteOrderModifiedAt);
+  if (localOrderModifiedAt) {
+    const localAt = parseDotNetDate(localOrderModifiedAt);
+    if (localAt >= remoteAt) return localOrderModifiedAt;
+  }
+
+  const remoteOrderById = new Map(remoteTasks.map((t) => [t.Id, Number(t.SortOrder) || 0]));
+  for (const localTask of localTasks) {
+    if (remoteOrderById.has(localTask.Id)) localTask.SortOrder = remoteOrderById.get(localTask.Id);
+  }
+
+  return remoteOrderModifiedAt;
 }
 
 // Port of SavedViewSyncMerge.Merge (Services/SavedViewSyncMerge.cs) - much simpler than the task

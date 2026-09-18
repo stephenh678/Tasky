@@ -33,8 +33,8 @@
                  MouseDoubleClick="Suggestion_DoubleClick"/>
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Content="Add" Width="70" Height="26" Margin="0,0,8,0" IsDefault="True" Click="Add_Click"/>
-            <Button Content="Cancel" Width="70" Height="26" Click="Cancel_Click"/>
+            <Button Style="{StaticResource AccentButton}" Content="Add" Width="75" Height="28" Margin="0,0,8,0" IsDefault="True" Click="Add_Click"/>
+            <Button Content="Cancel" Width="75" Height="28" Click="Cancel_Click"/>
         </StackPanel>
     </Grid>
 </Window>

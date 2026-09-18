@@ -14,9 +14,9 @@ public class RelayCommand : ICommand
         _canExecute = canExecute;
     }
 
-    public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
+    public virtual bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
 
-    public void Execute(object? parameter) => _execute(parameter);
+    public virtual void Execute(object? parameter) => _execute(parameter);
 
     public event EventHandler? CanExecuteChanged
     {

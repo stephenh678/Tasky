@@ -3,7 +3,7 @@ bin/
 obj/
 publish/
 *.zip
-roadmap-artifact/out.html
+
 
 # Visual Studio / Rider / VS Code
 .vs/
@@ -28,3 +28,5 @@ client_secret*.json
 GoogleDriveToken/
 settings.json
 
+publish/
+installer-output/

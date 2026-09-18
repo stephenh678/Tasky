@@ -1,4 +1,4 @@
-﻿// Renders a task's Body as editable blocks. Rtf (WPF's rich-text format for a block) is
+// Renders a task's Body as editable blocks. Rtf (WPF's rich-text format for a block) is
 // desktop-only - there's no browser engine for it, so the web editor works purely off each
 // block's plain-text mirror. Reading a desktop-authored block still shows its Text fine; editing
 // it here just never repopulates Rtf, so the desktop app falls back to unformatted text for
@@ -13,11 +13,13 @@ import {
   newChecklistItem,
   extractInlineImageFileNames,
   extractInlineFileNames,
-} from './model.js?v=29';
-import { icon } from './icons.js?v=29';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=29';
-import { storage } from './storage.js?v=29';
-import { openDialog, trapFocus } from './dialog.js?v=29';
+  xamlToHtml,
+  htmlToXaml,
+} from './model.js?v=31';
+import { icon } from './icons.js?v=31';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=31';
+import { storage } from './storage.js?v=31';
+import { openDialog, trapFocus } from './dialog.js?v=31';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.
@@ -166,52 +168,45 @@ function renderTextBlock(block, task, index, onChange, readOnly) {
 
   const div = document.createElement('div');
   div.className = 'block-text';
-  div.textContent = block.Text;
+  const formattedHtml = xamlToHtml(block.Rtf);
+  if (formattedHtml) {
+    div.innerHTML = formattedHtml;
+  } else {
+    div.textContent = block.Text;
+  }
   if (readOnly) {
-    // A locked (Done/Trashed) task: plain text plus whatever inline attachments the Rtf still
+    // A locked (Done/Trashed) task: formatted/plain text plus whatever inline attachments the Rtf still
     // references, none of the edit wiring below.
     wrap.appendChild(div);
     for (const fileName of extractInlineImageFileNames(block.Rtf)) wrap.appendChild(renderPhotoByFileName(fileName));
     for (const fileName of extractInlineFileNames(block.Rtf)) wrap.appendChild(renderFileByFileName(fileName));
     return wrap;
   }
-  // plaintext-only keeps pasted content and Enter from producing styled HTML / nested <div>s.
-  // Detected by reading the property back after setting it (an unsupported value is either
-  // ignored or throws, depending on the engine - Firefox only gained it in 2025). The old check,
-  // `'plaintext-only' in div.style`, tested for a CSS property of that name and so was false in
-  // every browser, silently putting everyone on the rich-HTML fallback.
-  let plainTextOnly = false;
-  try {
-    div.contentEditable = 'plaintext-only';
-    plainTextOnly = div.contentEditable === 'plaintext-only';
-  } catch {
-    // SyntaxError from an engine that rejects the value outright.
+  // When formatted HTML is present, keep full contentEditable to support rich styles; otherwise
+  // plaintext-only keeps pasted content and Enter from producing unexpected nested HTML.
+  if (formattedHtml) {
+    div.contentEditable = 'true';
+  } else {
+    let plainTextOnly = false;
+    try {
+      div.contentEditable = 'plaintext-only';
+      plainTextOnly = div.contentEditable === 'plaintext-only';
+    } catch {
+      // SyntaxError from an engine that rejects the value outright.
+    }
+    if (!plainTextOnly) div.contentEditable = 'true';
   }
-  if (!plainTextOnly) div.contentEditable = 'true';
   div.dataset.placeholder = 'Type…';
   div.addEventListener('input', () => {
     block.Text = div.innerText;
-    // Desktop's loader checks Rtf first and, if present, displays THAT instead of Text - Rtf is
-    // the actual rendered content there, Text is only a search/word-count mirror. Leaving a
-    // desktop-authored block's old Rtf in place while only updating Text would make this edit
-    // silently disappear the next time the task is opened on desktop (it'd keep showing the
-    // stale pre-edit Rtf). Clearing Rtf makes desktop fall back to rendering Text directly -
-    // confirmed safe against RichTextBoxBehavior.LoadContent, which handles an empty Rtf by
-    // rendering Text as a plain paragraph. Net effect: any rich formatting on this specific
-    // paragraph is dropped once edited from the web, which is already a disclosed limitation -
-    // but the actual words are never lost or hidden.
-    //
-    // The attachments embedded in that Rtf are a different story: a pasted image or an inserted
-    // file chip lives ONLY there (see the two extract* loops below), so clearing Rtf used to
-    // silently drop them from the note on both platforms - and desktop's attachment-reference
-    // prune would then delete the now-unreferenced files from Drive for good. Hoist each one into
-    // a real Photo/File block first (desktop resolves those by bare filename across both its
-    // Attachments and InlineImages folders - RichTextBoxBehavior.ResolveLocalAttachmentPath - so
-    // the file stays referenced and keeps rendering there too).
+    // Hoist any inline attachment files (pasted images or file chips) into real Photo/File blocks
+    // before updating formatting, ensuring attachment references are preserved across sync.
     if (block.Rtf) {
       hoistInlineAttachments(task, block);
-      block.Rtf = '';
     }
+    // Convert edited HTML content into clean FlowDocument XAML so desktop continues to display
+    // formatting, bold/italics, lists and paragraphs cleanly rather than losing styling.
+    block.Rtf = htmlToXaml(div.innerHTML, block.Text);
     onChange({ rerenderBody: false });
   });
 
@@ -348,6 +343,47 @@ function renderChecklistBlock(block, onChange, readOnly) {
   const div = document.createElement('div');
   div.className = 'block-checklist';
 
+  // Mirrors desktop's Subtasks header (MainWindow.xaml: label + ProgressBar bound to
+  // SubtaskProgressPercent + "N of M completed"). Desktop shows it for the task's subtask block;
+  // here every checklist block is a subtask list, so each one carries its own. Hidden while the
+  // block is empty, matching desktop's `Visibility="{Binding HasSubtasks...}"` on the same two.
+  let refreshProgress = () => {};
+  if (block.ChecklistItems.length > 0) {
+    const header = document.createElement('div');
+    header.className = 'block-checklist-progress';
+
+    const bar = document.createElement('div');
+    bar.className = 'block-checklist-progress-bar';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-valuemin', '0');
+
+    const fill = document.createElement('span');
+    fill.className = 'block-checklist-progress-fill';
+    bar.appendChild(fill);
+
+    const label = document.createElement('span');
+    label.className = 'block-checklist-progress-label';
+
+    // Ticking an item deliberately re-renders nothing (rerenderBody: false keeps the caret and the
+    // input's own state), so the bar has to be patched in place or it would sit stale until some
+    // unrelated edit forced a body re-render.
+    refreshProgress = () => {
+      const total = block.ChecklistItems.length;
+      const done = block.ChecklistItems.filter((it) => it.IsChecked).length;
+      const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+      fill.style.width = `${percent}%`;
+      label.textContent = `${done} of ${total} completed`;
+      bar.setAttribute('aria-valuemax', String(total));
+      bar.setAttribute('aria-valuenow', String(done));
+      bar.setAttribute('aria-label', `${done} of ${total} completed`);
+      header.classList.toggle('complete', total > 0 && done === total);
+    };
+    refreshProgress();
+
+    header.append(bar, label);
+    div.appendChild(header);
+  }
+
   block.ChecklistItems.forEach((item, i) => {
     const row = document.createElement('div');
     row.className = 'block-checklist-item editable';
@@ -358,6 +394,7 @@ function renderChecklistBlock(block, onChange, readOnly) {
     checkbox.disabled = readOnly;
     checkbox.addEventListener('change', () => {
       item.IsChecked = checkbox.checked;
+      refreshProgress();
       onChange({ rerenderBody: false });
     });
     // See the matching comment in app.js's task-list checkbox: a <label> wrapper is the

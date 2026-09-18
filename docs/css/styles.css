@@ -888,6 +888,23 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-row-info { flex: 1; min-width: 0; }
 .task-list li:hover .task-content, .task-list li:has(.task-row-info:focus-visible) .task-content { background: var(--hover); }
 .task-row-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* Manual (drag-and-drop) reordering - the grip handle only exists on rows updateTaskRow marked
+   .reorderable, i.e. only under the Manual sort. The drop line is an inset box-shadow rather than
+   a border so the row doesn't change height and shove the list around mid-drag. */
+.task-drag-handle { display: none; flex-shrink: 0; align-items: center; color: var(--muted); margin-right: 2px; }
+/* touch-action: none is what makes this work on a phone - without it the browser claims the
+   gesture for scrolling and the pointermove stream stops after the first few events. */
+.task-list li.reorderable .task-drag-handle { display: inline-flex; cursor: grab; touch-action: none; }
+.task-list li.reorderable .task-drag-handle .icon { width: 16px; height: 16px; }
+.task-list li.dragging { opacity: 0.4; }
+.task-list li.dragging .task-drag-handle { cursor: grabbing; }
+.task-list li.drop-before .task-content { box-shadow: inset 0 3px 0 0 var(--accent); }
+.task-list li.drop-after .task-content { box-shadow: inset 0 -3px 0 0 var(--accent); }
+/* Phones get a wider grip: it is the one control here with no swipe or tap fallback. */
+@media (max-width: 767px) {
+  .task-list li.reorderable .task-drag-handle { min-width: 32px; justify-content: center; margin-left: -4px; }
+}
 .task-list li.selected .task-content { background: var(--selected); }
 .task-list li.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 2px 8px color-mix(in srgb, var(--accent) 15%, transparent); }
 .task-list li.pinned:not(.selected) {
@@ -910,6 +927,10 @@ html.hide-done-checkbox .editor-done-field { display: none; }
 .task-due-overdue { color: var(--danger-text); font-weight: 600; background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 1px 6px; border-radius: 6px; }
 .task-indicators { display: flex; align-items: center; gap: 4px; }
 .task-indicators .icon { width: 12px; height: 12px; }
+/* Subtask count next to the checklist glyph, mirroring desktop's ChecklistProgressTextConverter
+   ("2/5"). Goes accent-colored once every item is ticked. */
+.task-subtask-progress { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.task-subtask-progress.complete { color: var(--accent); }
 .task-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .task-tag-chip {
   background: color-mix(in srgb, var(--text) 5%, transparent);
@@ -1354,6 +1375,15 @@ kbd {
   padding: 4px 0;
   white-space: pre-wrap;
 }
+.block-text p { margin: 0 0 0.5em 0; }
+.block-text p:last-child { margin-bottom: 0; }
+.block-text strong { font-weight: 600; }
+.block-text em { font-style: italic; }
+.block-text u { text-decoration: underline; }
+.block-text a { color: var(--accent); text-decoration: underline; }
+.block-text ul, .block-text ol { margin: 0.25em 0 0.5em 1.5em; padding: 0; }
+.block-text table.note-table { border-collapse: collapse; margin: 0.5em 0; width: 100%; }
+.block-text table.note-table th, .block-text table.note-table td { border: 1px solid var(--border); padding: 4px 8px; }
 /* outline:none above drops the browser default with nothing replacing it - a keyboard/external-
    keyboard user editing text had no visual cue which block currently had focus. Outline doesn't
    take layout space, so this can't shift anything else on focus. */
@@ -1407,6 +1437,13 @@ kbd {
   cursor: pointer;
 }
 .block-file-link:hover { text-decoration: underline; }
+/* Checklist progress header - the Web counterpart of desktop's Subtasks section header (label +
+   ProgressBar + "N of M completed"). */
+.block-checklist-progress { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.block-checklist-progress-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; min-width: 40px; }
+.block-checklist-progress-fill { display: block; height: 100%; width: 0%; border-radius: 2px; background: var(--accent); transition: width 0.2s ease; }
+.block-checklist-progress-label { font-size: 11px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.block-checklist-progress.complete .block-checklist-progress-label { color: var(--accent); }
 .block-checklist-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .block-checklist-item.editable input[type="text"] {
   flex: 1;

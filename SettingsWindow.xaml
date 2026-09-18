@@ -27,7 +27,7 @@
             <ListBoxItem Content="General" Tag="General" Padding="10,8" FontSize="13"/>
             <ListBoxItem Content="Backup" Tag="Backup" Padding="10,8" FontSize="13"/>
             <ListBoxItem Content="Google Drive" Tag="GoogleDrive" Padding="10,8" FontSize="13"/>
-            <ListBoxItem Content="Advanced" Tag="Advanced" Padding="10,8" FontSize="13"/>
+            <ListBoxItem Content="Diagnostics" Tag="Advanced" Padding="10,8" FontSize="13"/>
         </ListBox>
 
         <!-- Section content -->
@@ -50,6 +50,9 @@
                         <CheckBox Content="Automatically check for updates" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding AutoCheckForUpdates}"/>
+                        <CheckBox Content="Minimize to system tray when closed (X)" FontSize="13" Margin="0,0,0,12"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding CloseToTray}"/>
                         <CheckBox Content="Enable reminders" FontSize="13" Margin="0,0,0,12"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding RemindersEnabled}"/>
@@ -59,6 +62,13 @@
                                   FontSize="13" Margin="0,0,0,16"
                                   Foreground="{DynamicResource PrimaryTextBrush}"
                                   IsChecked="{Binding ShowDoneCheckbox}"/>
+                        <CheckBox Content="Always show the Subtasks section in the editor"
+                                  FontSize="13" Margin="0,0,0,4"
+                                  Foreground="{DynamicResource PrimaryTextBrush}"
+                                  IsChecked="{Binding AlwaysShowSubtasks}"/>
+                        <TextBlock Text="When off, Subtasks stays hidden until you click &quot;Add subtasks&quot; - tasks that already have subtasks always show it."
+                                   FontSize="11" Margin="26,0,0,16" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
 
                         <!-- ROADMAP.md #135: mirrors Tasky Web's "Trash" settings section
                              (setting-auto-empty-trash / setting-auto-empty-trash-days). -->
@@ -130,20 +140,34 @@
                     <ContentControl x:Name="GoogleDriveHost"
                                      Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=GoogleDrive}"/>
 
-                    <!-- Advanced -->
+                    <!-- Diagnostics -->
                     <StackPanel x:Name="AdvancedPanel"
                                 Visibility="{Binding SelectedItem.Tag, ElementName=NavList, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Advanced}">
-                        <TextBlock Text="Advanced" FontSize="18" FontWeight="Bold" Margin="0,0,0,16"
+                        <TextBlock Text="Diagnostics" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"
                                    Foreground="{DynamicResource PrimaryTextBrush}"/>
-                        <CheckBox Content="Verbose logging" FontSize="13" Margin="0,0,0,16"
-                                  Foreground="{DynamicResource PrimaryTextBrush}"
-                                  IsChecked="{Binding IsVerboseLogging}"/>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="Open Debug Log File..." Padding="10,6"
-                                    Command="{Binding OpenDebugLogCommand}"/>
-                            <Button Content="Clear Debug Log File..." Padding="10,6" Margin="8,0,0,0"
-                                    Command="{Binding ClearDebugLogCommand}"/>
-                        </StackPanel>
+                        <TextBlock Text="Standard application logs are recorded automatically to help diagnose errors and sync events."
+                                   FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
+
+                        <Expander Header="Troubleshooting &amp; Debug Logs" IsExpanded="False"
+                                  Foreground="{DynamicResource PrimaryTextBrush}" FontSize="12.5" Margin="0,0,0,16">
+                            <Border Background="{DynamicResource SecondaryBrush}" CornerRadius="4" Padding="12" Margin="0,8,0,0">
+                                <StackPanel>
+                                    <CheckBox Content="Enable verbose debug logging" FontSize="12.5" Margin="0,0,0,8"
+                                              Foreground="{DynamicResource PrimaryTextBrush}"
+                                              IsChecked="{Binding IsVerboseLogging}"/>
+                                    <TextBlock Text="Produces detailed traces for debugging sync or storage issues. Keep disabled during normal use for optimal performance."
+                                               FontSize="11" Margin="0,0,0,14" TextWrapping="Wrap" FontStyle="Italic"
+                                               Foreground="{DynamicResource TertiaryBrush}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="Open Debug Log File..." Padding="10,6"
+                                                Command="{Binding OpenDebugLogCommand}"/>
+                                        <Button Content="Clear Debug Log File..." Padding="10,6" Margin="8,0,0,0"
+                                                Command="{Binding ClearDebugLogCommand}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

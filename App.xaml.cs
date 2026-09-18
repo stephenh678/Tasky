@@ -24,13 +24,33 @@ public partial class App : Application
         };
     }
 
-    // Uninstall-Tasky.ps1 launches "Tasky.exe --cleanup-notifications" (and waits for it to exit)
-    // right before deleting the app's files, so the registry-based toast notification
-    // registration ToastNotificationService.Initialize() sets up on first run doesn't get left
-    // behind. Deliberately checked before base.OnStartup - StartupUri would otherwise create and
-    // show MainWindow (and its tray icon) for what's meant to be a silent, instant cleanup pass.
+    // The uninstaller (installer/Tasky.iss [UninstallRun]) runs
+    // "Tasky.exe --uninstall-cleanup [--remove-data]" and waits for it, while Tasky.exe still
+    // exists and before Inno deletes the program files. That removes the per-user state living
+    // outside the install folder - see UninstallCleanupService for why the app owns this rather
+    // than the installer.
+    //
+    // --cleanup-notifications is the narrower predecessor, kept because copies installed before
+    // the Inno installer existed still shipped a PowerShell uninstaller that calls it by name.
+    //
+    // Both are checked before base.OnStartup: StartupUri would otherwise create and show
+    // MainWindow (and its tray icon) for what's meant to be a silent, instant cleanup pass.
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (Array.IndexOf(e.Args, "--uninstall-cleanup") >= 0)
+        {
+            var removeData = Array.IndexOf(e.Args, "--remove-data") >= 0;
+            // Flush BEFORE the cleanup: AppLogger writes into Documents\Tasky, so draining the
+            // queue afterwards could recreate the very folder this pass just removed.
+            AppLogger.Flush();
+            var result = UninstallCleanupService.CleanUp(removeData);
+            ReportUninstallCleanup(result, removeData);
+            // Environment.Exit, not Shutdown(): Shutdown returns through OnExit, which flushes
+            // AppLogger again and would undo the ordering above.
+            Environment.Exit(0);
+            return;
+        }
+
         if (Array.IndexOf(e.Args, "--cleanup-notifications") >= 0)
         {
             try
@@ -46,6 +66,44 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
+    }
+
+    // Reports the outcome of an uninstall cleanup pass. Neither half can go through AppLogger:
+    // it writes into Documents\Tasky, which this pass may have just deleted, and its queued writes
+    // are dropped by the Environment.Exit above. Failures go to a file in %TEMP% - outside every
+    // folder the cleanup touches - so an uninstall that couldn't remove something leaves a trace
+    // instead of nothing.
+    private static void ReportUninstallCleanup(UninstallCleanupResult result, bool removeData)
+    {
+        if (result.Failures.Count > 0)
+        {
+            try
+            {
+                var logPath = Path.Combine(Path.GetTempPath(), "tasky-uninstall-cleanup.log");
+                File.WriteAllText(logPath,
+                    $"Tasky uninstall cleanup, {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}" +
+                    string.Join(Environment.NewLine, result.Failures) + Environment.NewLine);
+            }
+            catch (IOException)
+            {
+                // Nowhere left to write. Not worth failing the uninstall over.
+            }
+        }
+
+        // "Save Data File As..." lets a .tasky file live outside Documents\Tasky, where an
+        // uninstall has no business deleting anything - but the user asked for their data to be
+        // removed and would otherwise never learn that the file they actually use is still there.
+        // Plain MessageBox, not ThemedMessageBox: this path returns before base.OnStartup, so the
+        // theme resource dictionaries App.xaml would have merged aren't loaded.
+        if (removeData && !string.IsNullOrEmpty(result.ExternalDataFilePath))
+        {
+            MessageBox.Show(
+                "Your Tasky data file is stored outside the default folder, so it was left in " +
+                $"place along with any attachments beside it:{Environment.NewLine}{Environment.NewLine}" +
+                $"{result.ExternalDataFilePath}{Environment.NewLine}{Environment.NewLine}" +
+                "Delete it yourself if you no longer want it.",
+                "Tasky", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     // ROADMAP #127: AppLogger now queues writes through a background consumer instead of writing

@@ -31,7 +31,9 @@ public class MainViewModel : INotifyPropertyChanged
     private string _currentFilePath = null!;
 
     private readonly SidebarFilterItem _todayItem = new(SidebarFilterKind.Today, "Today");
+    private readonly SidebarFilterItem _tomorrowItem = new(SidebarFilterKind.Tomorrow, "Tomorrow");
     private readonly SidebarFilterItem _allItem = new(SidebarFilterKind.All, "All Tasks");
+    private readonly SidebarFilterItem _somedayItem = new(SidebarFilterKind.Someday, "Someday");
     private readonly SidebarFilterItem _doneItem = new(SidebarFilterKind.Done, "Completed");
     private readonly SidebarFilterItem _trashItem = new(SidebarFilterKind.Trash, "Trash");
     private readonly SidebarFilterItem _recurringItem = new(SidebarFilterKind.Recurring, "Recurring");
@@ -237,6 +239,10 @@ public class MainViewModel : INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(SearchText) || HasActiveQuickFilters)
                 return "No tasks match your search or filter.";
+            if (SelectedSidebarItem.Kind == SidebarFilterKind.Tomorrow)
+                return "No tasks scheduled for tomorrow.";
+            if (SelectedSidebarItem.Kind == SidebarFilterKind.Someday)
+                return "No unscheduled tasks.";
             if (SelectedSidebarItem.Kind == SidebarFilterKind.Tag)
                 return "No open or completed tasks have this tag. Check Trash?";
             return "No tasks here yet.";
@@ -259,7 +265,8 @@ public class MainViewModel : INotifyPropertyChanged
             SelectedTaskDetail?.Detach();
             SelectedTaskDetail = value is null
                 ? null
-                : new TaskDetailViewModel(value, OnTaskChanged, GetAllTagNames, RequestDebouncedSave, PushUndo);
+                : new TaskDetailViewModel(value, OnTaskChanged, GetAllTagNames, RequestDebouncedSave, PushUndo,
+                    () => _settings.AlwaysShowSubtasks, () => FocusSubtaskRequested?.Invoke());
         }
     }
 
@@ -312,9 +319,61 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // Off by default: most tasks never need subtasks, so the editor stays uncluttered and the
+    // section is one click away via "Add subtasks". TaskDetailViewModel reads this through a
+    // callback rather than a snapshot, so the open task has to be told the answer changed.
+    public bool AlwaysShowSubtasks
+    {
+        get => _settings.AlwaysShowSubtasks;
+        set
+        {
+            if (_settings.AlwaysShowSubtasks == value) return;
+            _settings.AlwaysShowSubtasks = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+            SelectedTaskDetail?.NotifySubtasksVisibilityChanged();
+        }
+    }
+
     // Only gates the once-a-day silent background check MainWindow runs after Loaded - Help >
     // Check for Updates always works regardless of this setting, same relationship
     // AutoBackupEnabled has to the manual Export/Import commands.
+    public bool CloseToTray
+    {
+        get => _settings.CloseToTray;
+        set
+        {
+            if (_settings.CloseToTray == value) return;
+            _settings.CloseToTray = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasSeenCloseToTrayNotice
+    {
+        get => _settings.HasSeenCloseToTrayNotice;
+        set
+        {
+            if (_settings.HasSeenCloseToTrayNotice == value) return;
+            _settings.HasSeenCloseToTrayNotice = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool HasSeenUnmanagedInstallNotice
+    {
+        get => _settings.HasSeenUnmanagedInstallNotice;
+        set
+        {
+            if (_settings.HasSeenUnmanagedInstallNotice == value) return;
+            _settings.HasSeenUnmanagedInstallNotice = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
     public bool AutoCheckForUpdates
     {
         get => _settings.AutoCheckForUpdates;
@@ -487,19 +546,12 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    // Focus Mode used to hide the sidebar entirely (width 0) - now it shows the same compact
-    // icon-only rail the manual collapse toggle produces instead, so All Tasks/Tags/etc. stay one
-    // click away without dragging the full 220px sidebar back in. The manual toggle (see
-    // IsSidebarCollapsed) still tracks its own persisted state underneath; Focus Mode only forces
-    // the icon-rail width while it's active and reverts to whatever that state was once it ends.
+    // When collapsed (or in Focus Mode), the sidebar displays a clean 56px icon rail
+    // with centered icons and tooltips, keeping quick navigation accessible.
     public GridLength SidebarWidth => (IsFocusMode || IsSidebarCollapsed)
-        ? new GridLength(46)
+        ? new GridLength(56)
         : new GridLength(220);
 
-    // Drives every "hide the label, icon only" binding in the sidebar (see SidebarItemTemplate,
-    // and the TASKY/TAGS/VIEWS section headers in MainWindow.xaml) - true whenever the sidebar is
-    // rendered at the 46px icon-rail width, whether that's from the user's own collapse toggle or
-    // from Focus Mode forcing it.
     public bool IsSidebarShowingIconsOnly => IsFocusMode || IsSidebarCollapsed;
 
     public bool HasSeenWelcomeTour
@@ -591,9 +643,9 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand NextMonthCommand { get; private set; } = null!;
     public RelayCommand TodayCommand { get; private set; } = null!;
     public RelayCommand SelectCalendarTaskCommand { get; private set; } = null!;
-    public RelayCommand NewFileCommand { get; private set; } = null!;
+    public AsyncRelayCommand NewFileCommand { get; private set; } = null!;
     public RelayCommand OpenFileCommand { get; private set; } = null!;
-    public RelayCommand SaveFileAsCommand { get; private set; } = null!;
+    public AsyncRelayCommand SaveFileAsCommand { get; private set; } = null!;
     public RelayCommand UndoCommand { get; private set; } = null!;
     public RelayCommand BulkMarkDoneCommand { get; private set; } = null!;
     public RelayCommand BulkTrashCommand { get; private set; } = null!;
@@ -602,16 +654,16 @@ public class MainViewModel : INotifyPropertyChanged
     public RelayCommand BulkTogglePinCommand { get; private set; } = null!;
     public RelayCommand BulkSetDueDateCommand { get; private set; } = null!;
     public RelayCommand BulkAddTagCommand { get; private set; } = null!;
-    public RelayCommand RestoreBackupCommand { get; private set; } = null!;
-    public RelayCommand ExportBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand RestoreBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand ExportBackupCommand { get; private set; } = null!;
     public RelayCommand ExportCalendarCommand { get; private set; } = null!;
     public RelayCommand ExportAllTasksCommand { get; private set; } = null!;
-    public RelayCommand ImportBackupCommand { get; private set; } = null!;
+    public AsyncRelayCommand ImportBackupCommand { get; private set; } = null!;
     public RelayCommand ClearDebugLogCommand { get; private set; } = null!;
     public RelayCommand OpenDebugLogCommand { get; private set; } = null!;
     public RelayCommand GoogleDriveCommand { get; private set; } = null!;
     public RelayCommand SettingsCommand { get; private set; } = null!;
-    public RelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
+    public AsyncRelayCommand SyncGoogleDriveNowCommand { get; private set; } = null!;
 
     public bool IsGoogleDriveConnected => _googleDrive.IsAuthenticated;
 
@@ -620,6 +672,10 @@ public class MainViewModel : INotifyPropertyChanged
         : "Google Drive: Disconnected (Click to configure)";
 
     public event Action? FocusTitleRequested;
+
+    // Same ViewModel-signals/code-behind-focuses split as FocusTitleRequested: clicking "Add
+    // subtasks" reveals the section, and the caret should land in its input without a second click.
+    public event Action? FocusSubtaskRequested;
 
     // MainWindow.xaml.cs owns showing SaveViewPromptWindow (dialogs are a View concern, same as
     // LinkPromptWindow/TablePromptWindow are only ever constructed from code-behind) - this just
@@ -648,7 +704,9 @@ public class MainViewModel : INotifyPropertyChanged
         AppLogger.IsVerbose = _settings.IsVerboseLogging;
 
         SidebarItems.Add(_todayItem);
+        SidebarItems.Add(_tomorrowItem);
         SidebarItems.Add(_allItem);
+        SidebarItems.Add(_somedayItem);
         SidebarItems.Add(_recurringItem);
         SidebarItems.Add(_doneItem);
         SidebarItems.Add(_trashItem);
@@ -662,6 +720,7 @@ public class MainViewModel : INotifyPropertyChanged
         AllTasks.CollectionChanged += (_, _) =>
         {
             if (ViewMode == ViewMode.Calendar) RefreshCalendarDays();
+            UpdateTrayStatus();
         };
 
         var initialPath = ResolveInitialFilePath();
@@ -689,6 +748,38 @@ public class MainViewModel : INotifyPropertyChanged
         _reminders = new ReminderScheduler(() => AllTasks, () => RemindersEnabled, _tray,
             initialNotifiedIds, PersistNotifiedTaskIds);
         _reminders.Start();
+
+        _tray.MenuInfoProvider = () =>
+        {
+            var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
+            var today = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today);
+            var overdue = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date < DateTime.Today);
+            return new TrayMenuInfo(open, today, overdue, IsGoogleDriveConnected, GoogleDriveStatusTooltip);
+        };
+        _tray.ShowTodayRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                SelectedSidebarItem = _todayItem;
+                _tray.RaiseShowRequested();
+            });
+        };
+        _tray.SyncGoogleDriveRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                if (SyncGoogleDriveNowCommand.CanExecute(null))
+                    SyncGoogleDriveNowCommand.Execute(null);
+            });
+        };
+        _tray.SettingsRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                if (SettingsCommand.CanExecute(null))
+                    SettingsCommand.Execute(null);
+            });
+        };
 
         _autoSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _autoSyncTimer.Tick += async (_, _) =>
@@ -724,6 +815,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         LoadFile(initialPath, restoreSelection: true);
         _reminders.CheckReminders();
+        UpdateTrayStatus();
 
         if (_settings.IsGoogleDriveEnabled)
         {
@@ -753,7 +845,26 @@ public class MainViewModel : INotifyPropertyChanged
     {
         AddTaskCommand = new RelayCommand(_ =>
         {
+            if (SelectedSidebarItem?.Kind == SidebarFilterKind.Done || SelectedSidebarItem?.Kind == SidebarFilterKind.Trash)
+            {
+                SelectedSidebarItem = _allItem;
+            }
+
             var task = new TaskItem { Text = "New Task" };
+            if (SelectedSidebarItem?.Kind == SidebarFilterKind.Today)
+            {
+                task.DueDate = DateTime.Today;
+            }
+            else if (SelectedSidebarItem?.Kind == SidebarFilterKind.Tomorrow)
+            {
+                task.DueDate = DateTime.Today.AddDays(1);
+            }
+            else if (SelectedSidebarItem?.Kind == SidebarFilterKind.Tag && SelectedSidebarItem.TagName is { } tagName)
+            {
+                task.Tags.Add(tagName);
+            }
+
+            task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
             AllTasks.Add(task);
             AttachTask(task);
             OnTaskChanged();
@@ -836,6 +947,78 @@ public class MainViewModel : INotifyPropertyChanged
                 CleanupTaskAttachments(task);
                 if (SelectedTask == task) SelectedTask = null;
             }
+            OnTaskChanged();
+        });
+    }
+
+    public void ReorderTask(TaskItem sourceTask, TaskItem targetTask, bool insertAfter)
+    {
+        if (sourceTask is null || targetTask is null || ReferenceEquals(sourceTask, targetTask)) return;
+
+        int sourceIndex = AllTasks.IndexOf(sourceTask);
+        int targetIndex = AllTasks.IndexOf(targetTask);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+
+        bool wasPinned = sourceTask.IsPinned;
+        if (targetTask.IsPinned && !sourceTask.IsPinned && !insertAfter)
+        {
+            sourceTask.IsPinned = true;
+        }
+        else if (!targetTask.IsPinned && sourceTask.IsPinned && insertAfter)
+        {
+            sourceTask.IsPinned = false;
+        }
+
+        if (CurrentSort != SortOption.Manual)
+        {
+            CurrentSort = SortOption.Manual;
+        }
+
+        int newIndex = targetIndex;
+        if (insertAfter)
+        {
+            if (sourceIndex > targetIndex)
+                newIndex = targetIndex + 1;
+        }
+        else
+        {
+            if (sourceIndex < targetIndex)
+                newIndex = targetIndex - 1;
+        }
+
+        if (newIndex < 0) newIndex = 0;
+        if (newIndex >= AllTasks.Count) newIndex = AllTasks.Count - 1;
+        if (newIndex == sourceIndex && wasPinned == sourceTask.IsPinned) return;
+
+        var oldSnapshot = AllTasks.Select((t, i) => (Task: t, Index: i, Pinned: t.IsPinned)).ToList();
+
+        AllTasks.Move(sourceIndex, newIndex);
+
+        for (int i = 0; i < AllTasks.Count; i++)
+        {
+            AllTasks[i].SortOrder = i;
+        }
+
+        sourceTask.ModifiedAt = DateTime.UtcNow;
+        // Ordering is list-level state with its own timestamp - without this a reorder makes no
+        // task "newer", so every device that merged silently threw the new arrangement away. See
+        // AppState.TasksOrderModifiedAt and TaskSyncMerge.MergeTaskOrder.
+        _state.TasksOrderModifiedAt = DateTime.UtcNow;
+        FilteredTasksView.Refresh();
+        OnTaskChanged();
+
+        PushUndo($"Reorder \"{sourceTask.Text}\"", () =>
+        {
+            sourceTask.IsPinned = wasPinned;
+            var sorted = AllTasks.OrderBy(t => oldSnapshot.FirstOrDefault(x => x.Task == t).Index).ToList();
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                var cur = AllTasks.IndexOf(sorted[i]);
+                if (cur != i) AllTasks.Move(cur, i);
+                AllTasks[i].SortOrder = i;
+            }
+            _state.TasksOrderModifiedAt = DateTime.UtcNow;
+            FilteredTasksView.Refresh();
             OnTaskChanged();
         });
     }
@@ -1018,7 +1201,7 @@ public class MainViewModel : INotifyPropertyChanged
     // touch the file on disk directly, rather than mutating in-memory task state.
     private void InitializeFileCommands()
     {
-        NewFileCommand = new RelayCommand(async _ => await CreateNewLocalFileForSyncAsync());
+        NewFileCommand = new AsyncRelayCommand(async _ => await CreateNewLocalFileForSyncAsync());
 
         OpenFileCommand = new RelayCommand(_ =>
         {
@@ -1045,7 +1228,7 @@ public class MainViewModel : INotifyPropertyChanged
             }
         });
 
-        SaveFileAsCommand = new RelayCommand(async _ =>
+        SaveFileAsCommand = new AsyncRelayCommand(async _ =>
         {
             FlushPendingSave();
             var dialog = new SaveFileDialog
@@ -1067,11 +1250,8 @@ public class MainViewModel : INotifyPropertyChanged
             _settingsStore.Save(_settings);
         });
 
-        RestoreBackupCommand = new RelayCommand(async _ =>
+        RestoreBackupCommand = new AsyncRelayCommand(async _ =>
         {
-            // Wrapping an async lambda in RelayCommand's Action<object?> makes this effectively
-            // async void - CanExecute below is what actually stops a second invocation from
-            // re-entering RestoreBackup/LoadFile while the first is still awaiting.
             _isRestoringBackup = true;
             try
             {
@@ -1110,7 +1290,7 @@ public class MainViewModel : INotifyPropertyChanged
         // references, for moving everything to a new machine or just keeping an offline copy.
         // Distinct from Save As (data only, no attachments) and Restore from Backup (data only,
         // and only ever from this same machine's own Backups\ history).
-        ExportBackupCommand = new RelayCommand(async _ =>
+        ExportBackupCommand = new AsyncRelayCommand(async _ =>
         {
             await FlushPendingSaveAsync();
             var dialog = new SaveFileDialog
@@ -1170,18 +1350,14 @@ public class MainViewModel : INotifyPropertyChanged
             var dialog = new SaveFileDialog
             {
                 Title = "Export All Tasks",
-                Filter = "Markdown Document (*.md)|*.md|HTML Document (*.html)|*.html",
+                Filter = "Markdown Document (*.md)|*.md",
                 FileName = $"Tasky Export {DateTime.Now:yyyy-MM-dd}.md"
             };
             if (dialog.ShowDialog() != true) return;
 
             try
             {
-                var ext = Path.GetExtension(dialog.FileName)?.ToLowerInvariant() ?? string.Empty;
-                if (ext == ".html" || ext == ".htm")
-                    ExportService.ExportAllToHtml(AllTasks, dialog.FileName);
-                else
-                    ExportService.ExportAllToMarkdown(AllTasks, dialog.FileName);
+                ExportService.ExportAllToMarkdown(AllTasks, dialog.FileName);
                 ThemedMessageBox.Show($"Exported all tasks to:\n{dialog.FileName}", "Export All Tasks", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -1191,7 +1367,7 @@ public class MainViewModel : INotifyPropertyChanged
             }
         });
 
-        ImportBackupCommand = new RelayCommand(async _ =>
+        ImportBackupCommand = new AsyncRelayCommand(async _ =>
         {
             var dialog = new OpenFileDialog
             {
@@ -1200,18 +1376,10 @@ public class MainViewModel : INotifyPropertyChanged
             };
             if (dialog.ShowDialog() != true) return;
 
-            string extractedDataFile;
-            IReadOnlyList<string> attachmentFiles;
-            int backupTaskCount;
+            ExtractedBackupPackage package;
             try
             {
-                (extractedDataFile, attachmentFiles) = BackupService.ExtractToTemp(dialog.FileName);
-                // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
-                // the backup's - reading the extracted backup itself is the only way to show its
-                // real count here, same as how the Drive sync merge peeks at a downloaded remote
-                // file. Kept in this same try/catch since a corrupt backup can fail either step.
-                // ROADMAP.md #124: awaited directly instead of the blocking Load()/GetResult() bridge - safe here since ImportBackupCommand's handler is already async.
-                backupTaskCount = (await _store.LoadAsync(extractedDataFile)).Tasks.Count;
+                package = BackupService.ExtractToTemp(dialog.FileName);
             }
             catch (Exception ex)
             {
@@ -1219,33 +1387,54 @@ public class MainViewModel : INotifyPropertyChanged
                     MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            var confirm = ThemedMessageBox.Show(
-                $"This will replace your currently open task list with the backup's {backupTaskCount} " +
-                $"task(s) and restore its {attachmentFiles.Count} attachment(s).\n\n" +
-                "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
-                "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.Yes) return;
 
-            _isRestoringBackup = true;
-            try
+            using (package)
             {
-                await FlushPendingSaveAsync();
-                BackupService.RestoreAttachments(attachmentFiles);
-                _store.RestoreBackup(extractedDataFile, _currentFilePath);
-                LoadFile(_currentFilePath);
-                MarkAllTasksRestoredAndSave();
+                int backupTaskCount;
+                try
+                {
+                    // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
+                    // the backup's - reading the extracted backup itself is the only way to show its
+                    // real count here, same as how the Drive sync merge peeks at a downloaded remote
+                    // file. Kept in this same try/catch since a corrupt backup can fail either step.
+                    // ROADMAP.md #124: awaited directly instead of the blocking Load()/GetResult() bridge - safe here since ImportBackupCommand's handler is already async.
+                    backupTaskCount = (await _store.LoadAsync(package.DataFilePath)).Tasks.Count;
+                }
+                catch (Exception ex)
+                {
+                    ThemedMessageBox.Show($"Couldn't read this backup:\n{ex.Message}", "Import Full Backup",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
 
-                ThemedMessageBox.Show($"Imported {attachmentFiles.Count} attachment(s) and restored your tasks.",
-                    "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                App.LogException(ex);
-                ThemedMessageBox.Show($"Couldn't import: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                _isRestoringBackup = false;
+                var confirm = ThemedMessageBox.Show(
+                    $"This will replace your currently open task list with the backup's {backupTaskCount} " +
+                    $"task(s) and restore its {package.AttachmentFiles.Count} attachment(s).\n\n" +
+                    "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
+                    "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes) return;
+
+                _isRestoringBackup = true;
+                try
+                {
+                    await FlushPendingSaveAsync();
+                    BackupService.RestoreAttachments(package.AttachmentFiles);
+                    _store.RestoreBackup(package.DataFilePath, _currentFilePath);
+                    LoadFile(_currentFilePath);
+                    MarkAllTasksRestoredAndSave();
+
+                    ThemedMessageBox.Show($"Imported {package.AttachmentFiles.Count} attachment(s) and restored your tasks.",
+                        "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    App.LogException(ex);
+                    ThemedMessageBox.Show($"Couldn't import: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    _isRestoringBackup = false;
+                }
             }
         }, _ => !_isRestoringBackup);
 
@@ -1279,7 +1468,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         GoogleDriveCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.GoogleDrive));
 
-        SyncGoogleDriveNowCommand = new RelayCommand(async _ => await PerformGoogleDriveSyncAsync());
+        SyncGoogleDriveNowCommand = new AsyncRelayCommand(async _ => await PerformGoogleDriveSyncAsync());
 
         SettingsCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.General));
     }
@@ -1686,6 +1875,12 @@ public class MainViewModel : INotifyPropertyChanged
 
         _state.DeletedTasks.AddRange(plan.TombstonesToAdd);
 
+        // After the field updates above, so remote's arrangement wins over any SortOrder
+        // ApplyTaskFields just copied. Safe to run on attached tasks: Task_PropertyChanged returns
+        // early for SortOrder, so this can't stamp ModifiedAt on the whole list.
+        _state.TasksOrderModifiedAt = TaskSyncMerge.MergeTaskOrder(
+            AllTasks, remoteState.Tasks, _state.TasksOrderModifiedAt, remoteState.TasksOrderModifiedAt);
+
         var (mergedViews, mergedDeletedViewIds) = SavedViewSyncMerge.Merge(
             _state.SavedViews, remoteState.SavedViews, _state.DeletedSavedViewIds, remoteState.DeletedSavedViewIds);
         _state.SavedViews = mergedViews;
@@ -1783,7 +1978,7 @@ public class MainViewModel : INotifyPropertyChanged
     // two-way bound and saves on every keystroke, so there's no equivalent safe commit point:
     // stripping a "#tag" out from under the user while they're still mid-word typing it would be
     // actively wrong, not just unnecessary.
-    public void AddQuickTask(string title)
+    public TaskItem AddQuickTask(string title)
     {
         var parsed = QuickEntryParser.Parse(title);
         var text = string.IsNullOrWhiteSpace(parsed.Text) ? title : parsed.Text;
@@ -1791,9 +1986,17 @@ public class MainViewModel : INotifyPropertyChanged
         var task = new TaskItem { Text = text, DueDate = parsed.DueDate };
         foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
 
+        if (SelectedSidebarItem?.Kind == SidebarFilterKind.Done || SelectedSidebarItem?.Kind == SidebarFilterKind.Trash)
+        {
+            SelectedSidebarItem = _allItem;
+        }
+
+        task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
+        SelectedTask = task;
+        return task;
     }
 
     // Welcome tour's sample tasks (WelcomeWindow). Unlike AddQuickTask, the title is kept verbatim
@@ -1811,6 +2014,7 @@ public class MainViewModel : INotifyPropertyChanged
             task.DueDate = parsed.DueDate;
             foreach (var tag in parsed.Tags) task.Tags.Add(tag.ToLowerInvariant());
         }
+        task.SortOrder = AllTasks.Count > 0 ? AllTasks.Max(t => t.SortOrder) + 1 : 0;
         AllTasks.Add(task);
         AttachTask(task);
         OnTaskChanged();
@@ -1972,6 +2176,19 @@ public class MainViewModel : INotifyPropertyChanged
         _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
 
         AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
+        _state.TasksOrderModifiedAt = loaded.TasksOrderModifiedAt;
+        // Pre-SortOrder data (and files written by a Tasky Web build older than the one that learned
+        // to stamp SortOrder) arrive all-zero - lay down a sequential order so a first drag has
+        // something to move within. Deliberately does NOT stamp TasksOrderModifiedAt: this is a
+        // local backfill of an arbitrary order, not a user's arrangement, and letting it win a merge
+        // would overwrite a real ordering made on another device.
+        if (AllTasks.Count > 0 && AllTasks.All(t => t.SortOrder == 0))
+        {
+            for (int i = 0; i < AllTasks.Count; i++)
+            {
+                AllTasks[i].SortOrder = i;
+            }
+        }
 
         SelectedTask = null;
         SelectedSidebarItem = _allItem;
@@ -2028,6 +2245,10 @@ public class MainViewModel : INotifyPropertyChanged
         {
             SidebarFilterKind.Today => !t.IsClosed && !t.IsDone
                 && (t.IsPinned || (t.DueDate.HasValue && t.DueDate.Value.Date <= DateTime.Today)),
+            SidebarFilterKind.Tomorrow => !t.IsClosed && !t.IsDone
+                && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today.AddDays(1),
+            SidebarFilterKind.Someday => !t.IsClosed && !t.IsDone
+                && !t.DueDate.HasValue,
             SidebarFilterKind.Trash => t.IsClosed,
             SidebarFilterKind.Done => !t.IsClosed && t.IsDone,
             SidebarFilterKind.Recurring => !t.IsClosed && !t.IsDone && t.Recurrence != RecurrenceRule.None,
@@ -2089,7 +2310,7 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void Task_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TaskItem.ModifiedAt)) return;
+        if (e.PropertyName == nameof(TaskItem.ModifiedAt) || e.PropertyName == nameof(TaskItem.SortOrder)) return;
         if (sender is not TaskItem task) return;
         task.ModifiedAt = DateTime.UtcNow;
 
@@ -2170,6 +2391,14 @@ public class MainViewModel : INotifyPropertyChanged
         await _pendingSaveTask;
     }
 
+    public void UpdateTrayStatus()
+    {
+        var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
+        var today = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Today);
+        var overdue = AllTasks.Count(t => !t.IsDone && !t.IsClosed && t.DueDate.HasValue && t.DueDate.Value.Date < DateTime.Today);
+        _tray.UpdateTrayTooltip(open, today, overdue);
+    }
+
     public void OnTaskChanged()
     {
         Save();
@@ -2191,6 +2420,7 @@ public class MainViewModel : INotifyPropertyChanged
             RefreshViews();
         }));
         FilteredTasksView.Refresh();
+        UpdateTrayStatus();
     }
 
     // Diffs TagItems in place instead of Clear()-then-rebuild. Clear() raises a Reset

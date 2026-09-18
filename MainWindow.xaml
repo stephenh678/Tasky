@@ -54,6 +54,8 @@
         <conv:NoteBlockToPhotoSourceConverter x:Key="NoteBlockToPhotoSource"/>
         <conv:QuickFilterActiveConverter x:Key="QuickFilterActive"/>
         <conv:QuickFilterLabelConverter x:Key="QuickFilterLabel"/>
+        <conv:ChecklistProgressTextConverter x:Key="ChecklistProgressText"/>
+        <conv:ChecklistProgressToolTipConverter x:Key="ChecklistProgressToolTip"/>
 
         <!-- Plain TextBoxes with no ContextMenu of their own fall back to WPF's own
              auto-generated Cut/Copy/Paste(/spelling) menu - which, like every other piece of
@@ -140,13 +142,18 @@
         </ContextMenu>
 
         <DataTemplate x:Key="SidebarItemTemplate">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Background="Transparent"
-                        ToolTip="{Binding Label}"
-                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
-                <TextBlock Text="{Binding Icon}" FontFamily="{StaticResource IconFont}" FontSize="13"
-                           Width="18" TextAlignment="Center" Foreground="{DynamicResource PrimaryTextBrush}"/>
-                <TextBlock Text="{Binding Label}" FontSize="13.5" Margin="8,0,0,0"
-                           Foreground="{DynamicResource PrimaryTextBrush}"
+            <Grid Background="Transparent" HorizontalAlignment="Stretch"
+                  ToolTip="{Binding Label}"
+                  Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="48"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Icon}" FontFamily="{StaticResource FluentIconFont}" FontSize="13"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                           Foreground="{DynamicResource PrimaryTextBrush}"/>
+                <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13.5" Margin="0,0,8,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PrimaryTextBrush}"
                            Visibility="{Binding DataContext.IsSidebarShowingIconsOnly, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBoolToVis}}"/>
                 <!-- Selection is driven by this MouseBinding, not by SelectedItem's TwoWay binding
                      below (the ListBox still declares SelectedItem for keyboard/arrow-key nav and
@@ -156,20 +163,24 @@
                      whatever the ListBox's own internal (and, per that history, occasionally stale)
                      notion of "already selected" is - so a click here is guaranteed to reach the VM
                      even in the exact state that previously made re-clicking silently do nothing. -->
-                <StackPanel.InputBindings>
+                <Grid.InputBindings>
                     <MouseBinding MouseAction="LeftClick"
                                   Command="{Binding DataContext.SelectSidebarItemCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                   CommandParameter="{Binding}"/>
-                </StackPanel.InputBindings>
+                </Grid.InputBindings>
 
                 <!-- ContextMenu opens in its own popup, disconnected from the main visual tree, so
                      RelativeSource AncestorType=Window can't find the ancestor from in here. Instead,
-                     the MainViewModel was stashed on the StackPanel's Tag above (where AncestorType=Window
+                     the MainViewModel was stashed on the Grid's Tag above (where AncestorType=Window
                      still works), and each item reaches it via ContextMenu.PlacementTarget.Tag. -->
-                <StackPanel.ContextMenu>
+                <Grid.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="SORT BY" IsEnabled="False" FontSize="11" FontWeight="Bold"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"/>
+                        <MenuItem Header="Custom Order"
+                                  Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
+                                  Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{x:Static vm:SortOption.Manual}"/>
                         <MenuItem Header="Name (A-Z)"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Trash}"
                                   Command="{Binding PlacementTarget.Tag.SetSortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -208,10 +219,10 @@
                         <MenuItem Header="Delete Tag"
                                   Visibility="{Binding Kind, Converter={StaticResource EnumEqualsVis}, ConverterParameter=Tag}"
                                   Command="{Binding PlacementTarget.Tag.DeleteTagCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                  CommandParameter="{Binding}"/>
+                                  CommandParameter="{Binding TagName}"/>
                     </ContextMenu>
-                </StackPanel.ContextMenu>
-            </StackPanel>
+                </Grid.ContextMenu>
+            </Grid>
         </DataTemplate>
 
     </Window.Resources>
@@ -230,16 +241,19 @@
                     <MenuItem Header="_Quick Add..." InputGestureText="Ctrl+Alt+T" Click="QuickAdd_Click"/>
                     <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
                     <Separator/>
-                    <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
-                    <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
-                    <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
                     <MenuItem Header="_Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>
                     <MenuItem Header="Export All _Tasks..." Command="{Binding ExportAllTasksCommand}"/>
-                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
                     <Separator/>
                     <MenuItem Header="Export _Full Backup..." Command="{Binding ExportBackupCommand}"/>
                     <MenuItem Header="_Import Full Backup..." Command="{Binding ImportBackupCommand}"/>
-                    <MenuItem Header="Export Due Dates to _Calendar (.ics)..." Command="{Binding ExportCalendarCommand}"/>
+                    <MenuItem Header="_Restore from Backup..." Command="{Binding RestoreBackupCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Data_base Files">
+                        <MenuItem Header="Ne_w Data File..." Command="{Binding NewFileCommand}"/>
+                        <MenuItem Header="_Open Data File..." InputGestureText="Ctrl+O" Command="{Binding OpenFileCommand}"/>
+                        <MenuItem Header="Save Data File _As..." InputGestureText="Ctrl+Shift+S" Command="{Binding SaveFileAsCommand}"/>
+                    </MenuItem>
                     <Separator/>
                     <MenuItem Header="Sync _Google Drive Now" InputGestureText="Ctrl+Shift+G" Command="{Binding SyncGoogleDriveNowCommand}"/>
                     <Separator/>
@@ -255,6 +269,8 @@
                     <MenuItem Header="_Paste" Command="Paste"/>
                 </MenuItem>
                 <MenuItem Header="_View" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
+                    <MenuItem Header="_Toggle Sidebar" Command="{Binding ToggleSidebarCommand}"/>
+                    <Separator/>
                     <MenuItem Header="_All Tasks" Command="{Binding ShowAllCommand}"/>
                     <MenuItem Header="_Completed" Command="{Binding ShowClosedCommand}"/>
                     <MenuItem Header="_Trash" Command="{Binding ShowTrashCommand}"/>
@@ -304,146 +320,65 @@
         <ToolBar DockPanel.Dock="Top" ToolBarTray.IsLocked="True"
                  Background="{DynamicResource SidebarBackgroundBrush}">
             <Button ToolTip="New Task (Ctrl+N)" Command="{Binding AddTaskCommand}" Padding="6,3">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="&#x2795;" FontSize="12" Margin="0,0,5,0"/>
-                    <TextBlock Text="New"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="New" VerticalAlignment="Center"/>
                 </StackPanel>
             </Button>
             <Button ToolTip="Quick Add (Ctrl+Alt+T) - jot down a task in a small floating box, without leaving what you're doing"
                     Click="QuickAdd_Click" Padding="6,3">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="&#x26A1;" FontSize="12" Margin="0,0,5,0"/>
-                    <TextBlock Text="Quick Add"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE945;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Quick Add" VerticalAlignment="Center"/>
                 </StackPanel>
             </Button>
             <Button ToolTip="Delete Task (Del)" Command="{Binding DeleteSelectedCommand}" Padding="6,3">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="&#x1F5D1;" FontSize="12" Margin="0,0,5,0"/>
-                    <TextBlock Text="Delete"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE74D;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Delete" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+
+            <Separator/>
+            <Button ToolTip="List view" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.List}" Padding="6,3">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE8FD;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="List" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.List}">
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Button>
+            <Button ToolTip="Calendar view (F12)" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.Calendar}" Padding="6,3">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE787;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Calendar" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.Calendar}">
+                                        <Setter Property="FontWeight" Value="Bold"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </StackPanel>
             </Button>
             <Separator/>
-            <Button ToolTip="Show all open tasks" Command="{Binding ShowAllCommand}" Padding="6,3">
-                <TextBlock Text="All Tasks"/>
-            </Button>
-            <Button ToolTip="Show completed tasks" Command="{Binding ShowClosedCommand}" Padding="6,3">
-                <TextBlock Text="Completed"/>
-            </Button>
-            <Button ToolTip="Show trash" Command="{Binding ShowTrashCommand}" Padding="6,3">
-                <TextBlock Text="Trash"/>
-            </Button>
-            <Separator/>
-            <Button ToolTip="List view" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.List}" Padding="6,3">
-                <TextBlock Text="&#x1F4CB; List">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.List}">
-                                    <Setter Property="FontWeight" Value="Bold"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </Button>
-            <Button ToolTip="Calendar view (F12)" Command="{Binding SetViewModeCommand}" CommandParameter="{x:Static vm:ViewMode.Calendar}" Padding="6,3">
-                <TextBlock Text="&#x1F4C5; Calendar">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding ViewMode}" Value="{x:Static vm:ViewMode.Calendar}">
-                                    <Setter Property="FontWeight" Value="Bold"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </Button>
-            <Separator/>
             <Button ToolTip="Focus mode (F11)" Command="{Binding ToggleFocusModeCommand}" Padding="6,3">
-                <TextBlock Text="&#x26F6; Focus"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE740;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Focus" VerticalAlignment="Center"/>
+                </StackPanel>
             </Button>
-            <Separator x:Name="FormattingGroupSeparator" Visibility="Collapsed"/>
-            <!-- Only meaningful while a text block's RichTextBox has focus - starts disabled and
-                 is toggled from code-behind (RichTextBox_GotFocus/LostFocus, and reset whenever
-                 the selected task changes) since _activeEditor is code-behind state, not a bound
-                 view-model property.
-
-                 ToolBar normally auto-applies its flat ToolBar.*StyleKey styles to its DIRECT
-                 Items automatically (see ControlStyles.xaml) - but that only walks ToolBar.Items
-                 itself, not descendants nested inside a child panel. Now that this StackPanel is
-                 the direct item instead of these controls, each one needs that style applied
-                 explicitly or it'd silently fall back to the app-wide bordered Button/ComboBox
-                 style instead of the flat toolbar look. -->
-            <StackPanel x:Name="FormattingGroup" Orientation="Horizontal" IsEnabled="False" Visibility="Collapsed">
-                <ComboBox x:Name="FontFamilyCombo" Width="115" SelectedIndex="0"
-                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
-                          SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
-                    <ComboBoxItem>Segoe UI</ComboBoxItem>
-                    <ComboBoxItem>Calibri</ComboBoxItem>
-                    <ComboBoxItem>Arial</ComboBoxItem>
-                    <ComboBoxItem>Georgia</ComboBoxItem>
-                    <ComboBoxItem>Times New Roman</ComboBoxItem>
-                    <ComboBoxItem>Consolas</ComboBoxItem>
-                </ComboBox>
-                <ComboBox Width="55" Margin="4,0,0,0" SelectedIndex="2"
-                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
-                          SelectionChanged="FontSizeCombo_SelectionChanged" ToolTip="Font size">
-                    <ComboBoxItem>10</ComboBoxItem>
-                    <ComboBoxItem>12</ComboBoxItem>
-                    <ComboBoxItem>13.5</ComboBoxItem>
-                    <ComboBoxItem>16</ComboBoxItem>
-                    <ComboBoxItem>18</ComboBoxItem>
-                    <ComboBoxItem>24</ComboBoxItem>
-                    <ComboBoxItem>32</ComboBoxItem>
-                </ComboBox>
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
-                <Button x:Name="BoldButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
-                        Click="Bold_Click" ToolTip="Bold (applies to the last text block you clicked into)" Padding="7,3">
-                    <TextBlock Text="B" FontWeight="Bold" FontSize="13"/>
-                </Button>
-                <Button x:Name="ItalicButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
-                        Click="Italic_Click" ToolTip="Italic" Padding="7,3">
-                    <TextBlock Text="I" FontStyle="Italic" FontSize="13"/>
-                </Button>
-                <Button x:Name="UnderlineButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
-                        Click="Underline_Click" ToolTip="Underline" Padding="7,3">
-                    <TextBlock Text="U" TextDecorations="Underline" FontSize="13"/>
-                </Button>
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
-                <TextBlock Text="A" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="2,0,3,0"
-                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Text color"/>
-                <ComboBox Width="46" SelectedIndex="0"
-                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
-                          SelectionChanged="TextColorCombo_SelectionChanged" ToolTip="Text color">
-                    <ComboBoxItem Tag="#2C3338"><Border Background="#2C3338" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#D63638"><Border Background="#D63638" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#E68A00"><Border Background="#E68A00" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#00A32A"><Border Background="#00A32A" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#3361CC"><Border Background="#3361CC" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#8C4FE0"><Border Background="#8C4FE0" Width="16" Height="16"/></ComboBoxItem>
-                </ComboBox>
-                <TextBlock Text="&#x1F58D;" FontFamily="{StaticResource IconFont}" FontSize="13" VerticalAlignment="Center" Margin="8,0,3,0"
-                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Highlight"/>
-                <ComboBox Width="50" SelectedIndex="0"
-                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
-                          SelectionChanged="HighlightCombo_SelectionChanged" ToolTip="Highlight">
-                    <ComboBoxItem Tag="Transparent"><TextBlock Text="None" FontSize="10"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#FFF3B0"><Border Background="#FFF3B0" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#C8F0C8"><Border Background="#C8F0C8" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#CEE0FA"><Border Background="#CEE0FA" Width="16" Height="16"/></ComboBoxItem>
-                    <ComboBoxItem Tag="#FAD1E0"><Border Background="#FAD1E0" Width="16" Height="16"/></ComboBoxItem>
-                </ComboBox>
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
-                <TextBlock Text="&#x2261;" FontSize="15" VerticalAlignment="Center" Margin="2,0,3,0"
-                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="List style"/>
-                <ComboBox Width="80" SelectedIndex="-1"
-                          Style="{StaticResource {x:Static ToolBar.ComboBoxStyleKey}}"
-                          SelectionChanged="ListStyleCombo_SelectionChanged" ToolTip="List style">
-                    <ComboBoxItem Tag="Bullets"><TextBlock Text="&#x2022; Bullets" FontSize="11"/></ComboBoxItem>
-                    <ComboBoxItem Tag="Numbering"><TextBlock Text="1. Numbered" FontSize="11"/></ComboBoxItem>
-                </ComboBox>
-            </StackPanel>
         </ToolBar>
 
         <Border DockPanel.Dock="Bottom" Background="{DynamicResource SidebarBackgroundBrush}"
@@ -482,21 +417,29 @@
                 <RowDefinition Height="1*"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="10,10,10,6">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
-                           Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
-                           Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}"/>
-                <!-- Hidden in Focus Mode: the sidebar's icon-rail width there is forced (see
-                     SidebarWidth), not a persisted choice, so there's nothing for this toggle to
-                     do until Focus Mode ends. -->
-                <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
-                        ToolTip="Collapse/expand sidebar" AutomationProperties.Name="Collapse or expand sidebar"
-                        Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}">
-                    <TextBlock Text="&#x2630;" Style="{StaticResource IconGlyph}"/>
+            <Grid Grid.Row="0" Margin="0,10,0,6" Height="32">
+                <!-- Expanded header: "TASKY" title and collapse button on right -->
+                <Grid Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource InverseBoolToVis}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="TASKY" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ForegroundBrush}" Margin="16,0,0,0"/>
+                    <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                            ToolTip="Collapse sidebar" AutomationProperties.Name="Collapse sidebar"
+                            Visibility="{Binding IsFocusMode, Converter={StaticResource InverseBoolToVis}}"
+                            Margin="0,0,10,0">
+                        <TextBlock Text="&#xE700;" Style="{StaticResource IconGlyph}"/>
+                    </Button>
+                </Grid>
+
+                <!-- Collapsed header: centered hamburger button to expand -->
+                <Button Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}"
+                        ToolTip="Expand sidebar" AutomationProperties.Name="Expand sidebar"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding IsSidebarShowingIconsOnly, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="&#xE700;" Style="{StaticResource IconGlyph}"/>
                 </Button>
             </Grid>
 
@@ -537,10 +480,11 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="8,10,8,8">
+            <Grid Grid.Row="0" Margin="8,10,8,6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -550,7 +494,7 @@
                 <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="New Task (Ctrl+N)"
                         AutomationProperties.Name="New task"
                         Command="{Binding AddTaskCommand}">
-                    <TextBlock Text="&#x2795;" Style="{StaticResource IconGlyph}"/>
+                    <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" Style="{StaticResource IconGlyph}"/>
                 </Button>
 
                 <Grid Grid.Column="1" Margin="6,0">
@@ -560,8 +504,9 @@
                             <TextBox x:Name="SearchTextBox" Padding="26,6,8,6" FontSize="13" Foreground="{DynamicResource PrimaryTextBrush}"
                                      Background="Transparent" BorderThickness="0"
                                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     PreviewKeyDown="SearchTextBox_PreviewKeyDown"
                                      ToolTip="Search tasks, notes, and tags. Operators: tag:name, is:overdue, is:pinned, is:recurring, is:done, has:link, has:attachment, due:today - combine with plain text or each other. Ctrl+F to jump here."/>
-                            <TextBlock Text="&#x1F50D;" FontFamily="{StaticResource IconFont}" FontSize="11"
+                            <TextBlock Text="&#xE721;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
                                        Foreground="{DynamicResource TertiaryBrush}" IsHitTestVisible="False"
                                        VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
@@ -641,11 +586,53 @@
                 </Popup>
             </Grid>
 
+            <!-- Inline Quick Add Row -->
+            <Border Grid.Row="1" Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
+                    BorderThickness="1" CornerRadius="8" Margin="8,0,8,6" Padding="2">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}"
+                                   FontSize="11" Foreground="{DynamicResource TertiaryBrush}"
+                                   VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        <Grid Grid.Column="1">
+                            <TextBox x:Name="QuickAddInput" Padding="6,5,6,5" FontSize="13"
+                                     Foreground="{DynamicResource PrimaryTextBrush}" Background="Transparent"
+                                     BorderThickness="0"
+                                     PreviewKeyDown="QuickAddInput_PreviewKeyDown"
+                                     TextChanged="QuickAddInput_TextChanged"/>
+                            <TextBlock Text="Add a task... (#tag !due:today @3pm)"
+                                       FontSize="12.5" Foreground="{DynamicResource PlaceholderBrush}"
+                                       VerticalAlignment="Center" Margin="6,0,0,0" IsHitTestVisible="False"
+                                       Visibility="{Binding Text.IsEmpty, ElementName=QuickAddInput, Converter={StaticResource BoolToVis}}"/>
+                        </Grid>
+                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="24" Height="24" Margin="0,0,4,0"
+                                ToolTip="Add task (Enter)" Click="QuickAddInput_CommitClick"
+                                Visibility="{Binding Text.IsEmpty, ElementName=QuickAddInput, Converter={StaticResource InverseBoolToVis}}">
+                            <TextBlock Text="&#xE73E;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Foreground="{DynamicResource AccentBrush}"/>
+                        </Button>
+                    </Grid>
+                    <!-- Live token preview strip -->
+                    <Border x:Name="QuickAddPreviewBorder" Grid.Row="1" Visibility="Collapsed"
+                            Background="{DynamicResource SecondaryHighlightBrush}" CornerRadius="4" Margin="6,0,6,4" Padding="6,3">
+                        <TextBlock x:Name="QuickAddPreviewText" FontSize="11" Foreground="{DynamicResource PrimaryTextBrush}" TextTrimming="CharacterEllipsis"/>
+                    </Border>
+                </Grid>
+            </Border>
+
             <!-- Active-filter chip row - "what's currently applied" needs to be visible at a
                  glance without reopening the popup, and each chip removes just that one filter
                  without resetting the rest (same pattern as the per-task tag chips elsewhere in
                  this file). Collapses to nothing when no quick filters are active. -->
-            <ItemsControl Grid.Row="1" Margin="8,0,8,8" ItemsSource="{Binding ActiveQuickFilterChips}"
+            <ItemsControl Grid.Row="2" Margin="8,0,8,8" ItemsSource="{Binding ActiveQuickFilterChips}"
                           Visibility="{Binding HasActiveQuickFilters, Converter={StaticResource BoolToVis}}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -672,13 +659,20 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <ListBox x:Name="TaskListBox" Grid.Row="2" Background="Transparent" BorderThickness="0,1,0,0"
+            <ListBox x:Name="TaskListBox" Grid.Row="3" Background="Transparent" BorderThickness="0,1,0,0"
                       BorderBrush="{DynamicResource SecondaryBrush}" SelectionMode="Extended"
                       ItemsSource="{Binding FilteredTasksView}" SelectedItem="{Binding SelectedTask}"
                       ItemContainerStyle="{StaticResource TaskListItemStyle}"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                       SelectionChanged="TaskListBox_SelectionChanged"
                       PreviewMouseRightButtonDown="TaskListBox_PreviewMouseRightButtonDown"
+                      PreviewMouseLeftButtonDown="TaskListBox_PreviewMouseLeftButtonDown"
+                      PreviewMouseMove="TaskListBox_PreviewMouseMove"
+                      AllowDrop="True"
+                      DragOver="TaskListBox_DragOver"
+                      DragLeave="TaskListBox_DragLeave"
+                      Drop="TaskListBox_Drop"
+                      KeyDown="TaskListBox_KeyDown"
                       Tag="{Binding}">
                 <ListBox.ContextMenu>
                     <ContextMenu>
@@ -708,7 +702,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="14"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
@@ -719,15 +713,18 @@
                                       IsEnabled="{Binding IsClosed, Converter={StaticResource InverseBool}}"
                                       Visibility="{Binding DataContext.ShowDoneCheckbox, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolToVis}}"/>
 
-                            <TextBlock Grid.Column="1" Text="&#x1F4CC;" FontSize="11" VerticalAlignment="Top"
-                                       Margin="0,2,6,0" Cursor="Hand" ToolTip="Pin to top"
+                            <TextBlock Grid.Column="1" Text="&#xE718;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" VerticalAlignment="Top"
+                                       Margin="0,3,6,0" Cursor="Hand" ToolTip="Pin to top"
                                        AutomationProperties.Name="{Binding IsPinned, Converter={StaticResource PinLabel}}">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
-                                        <Setter Property="Opacity" Value="0.15"/>
+                                        <Setter Property="Opacity" Value="0"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsPinned}" Value="True">
                                                 <Setter Property="Opacity" Value="1"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                <Setter Property="Opacity" Value="0.45"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -739,7 +736,7 @@
                                 </TextBlock.InputBindings>
                             </TextBlock>
 
-                            <Ellipse Grid.Column="2" Width="8" Height="8" VerticalAlignment="Top" Margin="0,4,6,0"
+                            <Ellipse Grid.Column="2" Width="7" Height="7" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="1,6,6,0"
                                      ToolTip="{Binding Priority}"
                                      Fill="{Binding Priority, Converter={StaticResource PriorityColor}}"
                                      Visibility="{Binding Priority, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
@@ -770,22 +767,30 @@
                                 </TextBlock>
 
                                 <WrapPanel Margin="0,3,0,0">
-                                    <TextBlock Text="&#x1F5BC;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                    <TextBlock Text="&#xEB9F;" FontFamily="{StaticResource FluentIconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has photo"
                                                Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Photo}"/>
-                                    <TextBlock Text="&#x1F4CE;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                    <TextBlock Text="&#xE723;" FontFamily="{StaticResource FluentIconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has file attachment"
                                                Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=File}"/>
-                                    <TextBlock Text="&#x1F517;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                    <TextBlock Text="&#xE71B;" FontFamily="{StaticResource FluentIconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
                                                ToolTip="Has link"
                                                Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Link}"/>
-                                    <TextBlock Text="&#x2611;" FontFamily="{StaticResource IconFont}" FontSize="10"
-                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0"
-                                               ToolTip="Has checklist"
-                                               Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}"/>
+                                    <Border Background="{DynamicResource SecondaryBrush}" CornerRadius="4" Padding="4,1" Margin="0,0,6,0"
+                                            VerticalAlignment="Center"
+                                            ToolTip="{Binding Converter={StaticResource ChecklistProgressToolTip}}"
+                                            Visibility="{Binding Converter={StaticResource HasBlockTypeToVis}, ConverterParameter=Checklist}">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="&#xEA37;" FontFamily="{StaticResource FluentIconFont}" FontSize="9.5"
+                                                       Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                            <TextBlock Text="{Binding Converter={StaticResource ChecklistProgressText}}" FontSize="10"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
                                     <ItemsControl ItemsSource="{Binding Tags}" Margin="0,0,6,0">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
@@ -803,7 +808,7 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <TextBlock Text="&#x1F501;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                    <TextBlock Text="&#xE72C;" FontFamily="{StaticResource FluentIconFont}" FontSize="10"
                                                Foreground="{DynamicResource TertiaryBrush}"
                                                ToolTip="Recurring"
                                                Visibility="{Binding Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
@@ -814,11 +819,21 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <TextBlock Grid.Row="2" Text="{Binding EmptyStateMessage}"
-                       Visibility="{Binding FilteredTasksView.IsEmpty, Converter={StaticResource BoolToVis}}"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                       FontSize="13" Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
-                       MaxWidth="180" IsHitTestVisible="False"/>
+            <StackPanel Grid.Row="3"
+                        Visibility="{Binding FilteredTasksView.IsEmpty, Converter={StaticResource BoolToVis}}"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" IsHitTestVisible="False">
+                <Border Width="48" Height="48" CornerRadius="24"
+                        Background="{DynamicResource SecondaryHighlightBrush}"
+                        HorizontalAlignment="Center" Margin="0,0,0,12">
+                    <TextBlock Text="&#xE73E;" FontFamily="{StaticResource FluentIconFont}" FontSize="20"
+                               Foreground="{DynamicResource TertiaryBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="{Binding EmptyStateMessage}"
+                           TextAlignment="Center"
+                           FontSize="13" Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
+                           MaxWidth="200"/>
+            </StackPanel>
         </Grid>
 
         <GridSplitter Grid.Column="2" Width="5" HorizontalAlignment="Stretch" Background="{DynamicResource SecondaryBrush}"
@@ -843,11 +858,11 @@
                 </Grid.ColumnDefinitions>
                 <Button Grid.Column="0" Style="{StaticResource IconButton}" ToolTip="Previous month"
                         AutomationProperties.Name="Previous month" Command="{Binding PreviousMonthCommand}">
-                    <TextBlock Text="&#x2039;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                    <TextBlock Text="&#xE76B;" Style="{StaticResource IconGlyph}" FontSize="11"/>
                 </Button>
                 <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="Next month"
                         AutomationProperties.Name="Next month" Command="{Binding NextMonthCommand}">
-                    <TextBlock Text="&#x203A;" Style="{StaticResource IconGlyph}" FontSize="18"/>
+                    <TextBlock Text="&#xE76C;" Style="{StaticResource IconGlyph}" FontSize="11"/>
                 </Button>
                 <TextBlock Grid.Column="2" Text="{Binding CalendarMonthLabel}" FontSize="16" FontWeight="Bold"
                            VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{DynamicResource PrimaryTextBrush}"/>
@@ -939,10 +954,23 @@
         <!-- Editor -->
         <Grid Grid.Column="3" Background="{DynamicResource BackgroundBrush}"
               Visibility="{Binding ViewMode, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=Calendar}">
-            <TextBlock Text="Select a task, or create a new one."
-                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                       FontSize="14" Foreground="{DynamicResource TertiaryBrush}"
-                       Visibility="{Binding SelectedTaskDetail, Converter={StaticResource InverseNullToVis}}"/>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding SelectedTaskDetail, Converter={StaticResource InverseNullToVis}}"
+                        IsHitTestVisible="False">
+                <Border Width="56" Height="56" CornerRadius="28"
+                        Background="{DynamicResource SecondaryHighlightBrush}"
+                        HorizontalAlignment="Center" Margin="0,0,0,14">
+                    <TextBlock Text="&#xE70F;" FontFamily="{StaticResource FluentIconFont}" FontSize="22"
+                               Foreground="{DynamicResource TertiaryBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="Select a task to view details"
+                           FontWeight="SemiBold" FontSize="15"
+                           Foreground="{DynamicResource PrimaryTextBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="Or press Ctrl+N to create a new task"
+                           FontSize="12.5" Foreground="{DynamicResource TertiaryBrush}"
+                           HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            </StackPanel>
 
             <!-- A DataContext binding and a Visibility binding on the SAME element both referencing
                  SelectedTaskDetail is a classic WPF trap: once DataContext resolves to the
@@ -976,7 +1004,7 @@
                             <Button.ToolTip>
                                 <Binding Path="Task.IsPinned" Converter="{StaticResource PinLabel}"/>
                             </Button.ToolTip>
-                            <TextBlock Text="&#x1F4CC;">
+                            <TextBlock Text="&#xE718;">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource IconGlyph}">
                                         <Setter Property="Opacity" Value="0.35"/>
@@ -997,23 +1025,23 @@
                         <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
                             <Button Style="{StaticResource IconButton}" Click="AddPhoto_Click" ToolTip="Add photo inline (Ctrl+Shift+P)"
                                     AutomationProperties.Name="Add photo">
-                                <TextBlock Text="&#x1F5BC;" Style="{StaticResource IconGlyph}"/>
+                                <TextBlock Text="&#xEB9F;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button Style="{StaticResource IconButton}" Click="AddLink_Click" ToolTip="Add link inline (Ctrl+Shift+L)"
                                     AutomationProperties.Name="Add link">
-                                <TextBlock Text="&#x1F517;" Style="{StaticResource IconGlyph}"/>
+                                <TextBlock Text="&#xE71B;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button Style="{StaticResource IconButton}" Click="AddChecklist_Click" ToolTip="Add checklist item (Ctrl+Shift+C)"
                                     AutomationProperties.Name="Add checklist">
-                                <TextBlock Text="&#x2611;" Style="{StaticResource IconGlyph}"/>
+                                <TextBlock Text="&#xEA37;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button Style="{StaticResource IconButton}" Click="AddTable_Click" ToolTip="Insert Table (Ctrl+Shift+K)"
                                     AutomationProperties.Name="Insert table">
-                                <TextBlock Text="&#x229E;" Style="{StaticResource IconGlyph}"/>
+                                <TextBlock Text="&#xE80A;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                             <Button Style="{StaticResource IconButton}" Click="AddFile_Click" ToolTip="Add file inline (Ctrl+Shift+F)"
                                     AutomationProperties.Name="Add file">
-                                <TextBlock Text="&#x1F4CE;" Style="{StaticResource IconGlyph}"/>
+                                <TextBlock Text="&#xE723;" Style="{StaticResource IconGlyph}"/>
                             </Button>
                         </StackPanel>
 
@@ -1023,11 +1051,11 @@
                         <!-- Group 3: Utilities & Export -->
                         <Button Style="{StaticResource IconButton}" Click="ExportNote_Click" ToolTip="Export / Print Note (Ctrl+E)"
                                 AutomationProperties.Name="Export note">
-                            <TextBlock Text="&#x1F4E4;" Style="{StaticResource IconGlyph}"/>
+                            <TextBlock Text="&#xEDE1;" Style="{StaticResource IconGlyph}"/>
                         </Button>
                         <Button Style="{StaticResource IconButton}" ToolTip="Task Info" AutomationProperties.Name="Task Info"
                                 Command="{Binding ToggleInfoPanelCommand}">
-                            <TextBlock Text="&#x24D8;" Style="{StaticResource IconGlyph}"/>
+                            <TextBlock Text="&#xE946;" Style="{StaticResource IconGlyph}"/>
                         </Button>
 
                         <!-- Group Divider -->
@@ -1050,7 +1078,7 @@
                         <Button Style="{StaticResource IconButton}" ToolTip="Delete permanently"
                                 AutomationProperties.Name="Delete permanently"
                                 Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}">
-                            <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}" Foreground="{DynamicResource DangerBrush}"/>
+                            <TextBlock Text="&#xE711;" Style="{StaticResource IconGlyph}" Foreground="{DynamicResource DangerBrush}"/>
                         </Button>
                     </StackPanel>
 
@@ -1084,58 +1112,142 @@
                     <!-- Content only - excludes the status action row above (checkmark/pin/trash/delete/info),
                          which must stay usable even on a Completed or Trashed task. -->
                     <StackPanel IsEnabled="{Binding IsEditable}">
-                        <!-- Task metadata fields: Due date/Priority/Repeat share one compact row since
-                             each is just a label+control pair; Tags stays on its own row below,
-                             both because its chips wrap onto following lines and to keep it last. -->
-                        <Grid Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Due date:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"/>
-                            <DatePicker Grid.Column="1" SelectedDate="{Binding Task.DueDate}" HorizontalAlignment="Left" Width="130"/>
-                            <TextBlock Grid.Column="2" Text="Priority:" VerticalAlignment="Center" FontSize="13" Margin="16,0,8,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"/>
-                            <ComboBox Grid.Column="3" ItemsSource="{Binding PriorityOptions}" SelectedItem="{Binding Task.Priority}"
-                                      HorizontalAlignment="Left" Width="100"/>
-                            <TextBlock Grid.Column="4" Text="Repeat:" VerticalAlignment="Center" FontSize="13" Margin="16,0,8,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"/>
-                            <ComboBox Grid.Column="5" ItemsSource="{Binding RecurrenceOptions}" SelectedItem="{Binding Task.Recurrence}"
-                                      HorizontalAlignment="Left" Width="100"/>
-                            <!-- ROADMAP.md #31: "every N" interval, only meaningful once a recurrence unit is
-                                 actually selected - hidden entirely for None instead of shown-but-disabled, since
-                                 the ComboBox column preceding it already communicates on/off. -->
-                            <TextBlock Grid.Column="6" Text="every" VerticalAlignment="Center" FontSize="13" Margin="10,0,6,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"
-                                       Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
-                            <ComboBox Grid.Column="7" ItemsSource="{Binding RecurrenceIntervalOptions}" SelectedItem="{Binding Task.RecurrenceInterval}"
-                                      HorizontalAlignment="Left" Width="55"
-                                      Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
-                        </Grid>
+                        <!-- Task metadata: every field is one item in a single WrapPanel, so at a wide
+                             editor pane they all sit on one row and they reflow onto a second and
+                             third row as the pane narrows (splitter drag, sidebar collapse, window
+                             resize) rather than each field claiming a fixed row of its own.
 
-                        <TextBlock Text="{Binding RecurrenceSummary}" FontSize="11" FontStyle="Italic" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
+                             Two things make the single row actually reachable: Tags and the subtasks
+                             entry point are items in this same panel instead of separate stacked
+                             rows below it, and the optional controls (due time, clear-date, the
+                             "every N" interval) collapse when they don't apply, so an untouched task
+                             asks for the least width. Widths are fixed per control so wrapping
+                             happens at predictable points instead of controls squeezing. -->
+                        <WrapPanel Margin="0,14,0,0">
+                            <WrapPanel.Resources>
+                                <Style x:Key="EditorFieldLabel" TargetType="TextBlock">
+                                    <Setter Property="FontSize" Value="13"/>
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="Margin" Value="0,0,7,0"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+                                </Style>
+                                <!-- The gap between fields lives here so every item wraps with the
+                                     same rhythm; the bottom margin is the gutter between wrapped rows. -->
+                                <Style x:Key="EditorField" TargetType="StackPanel">
+                                    <Setter Property="Orientation" Value="Horizontal"/>
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="Margin" Value="0,0,16,8"/>
+                                </Style>
+                            </WrapPanel.Resources>
+
+                            <!-- Due date & time -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Due date:" Style="{StaticResource EditorFieldLabel}"/>
+                                <DatePicker SelectedDate="{Binding Task.DueDate}" Width="122" VerticalAlignment="Center"/>
+                                <!-- Collapsed rather than merely disabled without a date: a greyed,
+                                     empty combo box next to the picker read as a broken control, and
+                                     it cost ~110px of the width the single row needs. -->
+                                <ComboBox IsEditable="True" Width="100" Margin="6,0,0,0" VerticalAlignment="Center"
+                                          ItemsSource="{Binding DueTimeOptions}"
+                                          Text="{Binding SelectedDueTime, UpdateSourceTrigger=LostFocus}"
+                                          SelectedItem="{Binding SelectedDueTime}"
+                                          ToolTip="Due time (e.g. 09:00 AM, 3:00 PM, or All Day)"
+                                          Visibility="{Binding HasDueDate, Converter={StaticResource BoolToVis}}"/>
+                                <Button Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Clear due date &amp; time"
+                                        Command="{Binding ClearDueDateCommand}"
+                                        Visibility="{Binding HasDueDate, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="&#xE711;" FontSize="9" Style="{StaticResource IconGlyph}"/>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- Priority -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Priority:" Style="{StaticResource EditorFieldLabel}"/>
+                                <ComboBox Width="96" VerticalAlignment="Center"
+                                          ItemsSource="{Binding PriorityOptions}" SelectedItem="{Binding Task.Priority}"/>
+                            </StackPanel>
+
+                            <!-- Repeat -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Repeat:" Style="{StaticResource EditorFieldLabel}"/>
+                                <ComboBox Width="96" VerticalAlignment="Center"
+                                          ItemsSource="{Binding RecurrenceOptions}" SelectedItem="{Binding Task.Recurrence}"/>
+                                <TextBlock Text="every" VerticalAlignment="Center" FontSize="13" Margin="8,0,6,0"
+                                           Foreground="{DynamicResource ForegroundBrush}"
+                                           Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                                <ComboBox Width="55" VerticalAlignment="Center"
+                                          ItemsSource="{Binding RecurrenceIntervalOptions}" SelectedItem="{Binding Task.RecurrenceInterval}"
+                                          Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                            </StackPanel>
+
+                            <!-- Tags -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Tags:" Style="{StaticResource EditorFieldLabel}"/>
+                                <Button x:Name="TagPickerButton" Padding="8,4" VerticalAlignment="Center"
+                                        Command="{Binding ToggleTagPopupCommand}" ToolTip="Select or create tags"
+                                        AutomationProperties.Name="Select or create tags">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xE8EC;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Tags" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="&#xE70D;" FontFamily="{StaticResource FluentIconFont}" FontSize="8" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- Subtasks entry point - shown only while the section itself is hidden
+                                 (Settings > "Always show the Subtasks section in the editor" off, and
+                                 this task has no subtasks yet), so an unused feature costs no row of
+                                 its own. Collapsing it lets the remaining fields reflow. -->
+                            <Button Margin="0,0,16,8" Padding="0" VerticalAlignment="Center"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Command="{Binding ShowSubtasksCommand}"
+                                    Visibility="{Binding ShowAddSubtasksButton, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="Add subtasks to this task">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Add subtasks" FontSize="12.5"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </WrapPanel>
+
+                        <!-- Full width below the wrap row: both of these are variable-length and would
+                             otherwise force an early wrap on the fields above. -->
+                        <TextBlock Text="{Binding RecurrenceSummary}"
+                                   FontSize="11" FontStyle="Italic" Margin="0,0,0,6" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TertiaryBrush}"
                                    Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
 
-                        <Grid Margin="0,10,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Tags:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"/>
-                            <Button Grid.Column="1" x:Name="TagPickerButton" Content="Select tags &#x25BE;"
-                                    HorizontalAlignment="Left" Width="110"
-                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Select or create tags"
-                                    AutomationProperties.Name="Select or create tags"/>
-                        </Grid>
+                        <!-- No Visibility binding needed: with no tags the ItemsControl has zero
+                             desired size, so it takes no space. The gutter below the chips lives on
+                             the chips themselves. -->
+                        <ItemsControl ItemsSource="{Binding Task.Tags}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding}" FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                            <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
+                                                       Cursor="Hand" VerticalAlignment="Center">
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <Popup PlacementTarget="{Binding ElementName=TagPickerButton}" Placement="Bottom"
                                IsOpen="{Binding IsTagPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
                             <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
@@ -1184,30 +1296,165 @@
                                 </StackPanel>
                             </Border>
                         </Popup>
-                        <ItemsControl ItemsSource="{Binding Task.Tags}" Margin="0,6,0,0">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding}" FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}"/>
-                                            <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
-                                                       Cursor="Hand" VerticalAlignment="Center">
-                                                <TextBlock.InputBindings>
-                                                    <MouseBinding MouseAction="LeftClick"
-                                                                  Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                  CommandParameter="{Binding}"/>
-                                                </TextBlock.InputBindings>
-                                            </TextBlock>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+
+                        <!-- Subtasks / Checklist Section -->
+                        <Border Background="{DynamicResource SidebarBackgroundBrush}" CornerRadius="6"
+                                Padding="12,10" Margin="0,8,0,8" BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1"
+                                Visibility="{Binding IsSubtasksVisible, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xEA37;" FontFamily="{StaticResource FluentIconFont}" FontSize="12"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Subtasks" FontSize="12.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <ProgressBar Grid.Column="1" Height="4" Margin="14,0" VerticalAlignment="Center"
+                                                 Minimum="0" Maximum="100" Value="{Binding SubtaskProgressPercent, Mode=OneWay}"
+                                                 Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding SubtaskProgressText}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"
+                                               Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
+                                    <!-- Disabled rather than hidden when there's nothing to do (no
+                                         subtasks and the "always show" setting pinning the section
+                                         open) - see DismissSubtasksCommand's CanExecute. -->
+                                    <Button Grid.Column="3" Style="{StaticResource IconButton}" Width="20" Height="20" Margin="8,0,0,0"
+                                            Command="{Binding DismissSubtasksCommand}" ToolTip="Remove subtasks from this task"
+                                            AutomationProperties.Name="Remove subtasks from this task">
+                                        <TextBlock Text="&#xE711;" FontSize="8" Style="{StaticResource IconGlyph}"/>
+                                    </Button>
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding Subtasks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox Grid.Column="0" IsChecked="{Binding IsChecked}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <TextBox Grid.Column="1" Text="{Binding Text, UpdateSourceTrigger=LostFocus}"
+                                                         Background="Transparent" BorderThickness="0" FontSize="13" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                                <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="20" Height="20"
+                                                        Command="{Binding DataContext.RemoveSubtaskCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" ToolTip="Delete subtask">
+                                                    <TextBlock Text="&#xE711;" FontSize="8" Style="{StaticResource IconGlyph}"/>
+                                                </Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center" Margin="2,0,8,0"/>
+                                    <TextBox Grid.Column="1" x:Name="NewSubtaskTextBox"
+                                             Text="{Binding NewSubtaskText, UpdateSourceTrigger=PropertyChanged}"
+                                             Padding="4,3" FontSize="12.5"
+                                             Background="Transparent" BorderThickness="0,0,0,1"
+                                             BorderBrush="{DynamicResource SecondaryBrush}"
+                                             Foreground="{DynamicResource PrimaryTextBrush}"
+                                             KeyDown="NewSubtaskTextBox_KeyDown"
+                                             ToolTip="Add a subtask (press Enter)"/>
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                            Command="{Binding AddSubtaskCommand}" ToolTip="Add subtask">
+                                        <TextBlock Text="&#xE710;" FontSize="10" Style="{StaticResource IconGlyph}"/>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Note Formatting Toolbar (Contextual to Note Editor) -->
+                        <Border x:Name="FormattingGroup"
+                                Background="{DynamicResource SecondaryHighlightBrush}"
+                                BorderBrush="{DynamicResource SecondaryBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="6,3"
+                                Margin="0,10,0,4"
+                                HorizontalAlignment="Left"
+                                Visibility="Collapsed"
+                                IsEnabled="False">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ComboBox x:Name="FontFamilyCombo" Width="110" SelectedIndex="0"
+                                          SelectionChanged="FontFamilyCombo_SelectionChanged" ToolTip="Font">
+                                    <ComboBoxItem>Segoe UI</ComboBoxItem>
+                                    <ComboBoxItem>Calibri</ComboBoxItem>
+                                    <ComboBoxItem>Arial</ComboBoxItem>
+                                    <ComboBoxItem>Georgia</ComboBoxItem>
+                                    <ComboBoxItem>Times New Roman</ComboBoxItem>
+                                    <ComboBoxItem>Consolas</ComboBoxItem>
+                                </ComboBox>
+                                <ComboBox Width="55" Margin="4,0,0,0" SelectedIndex="2"
+                                          SelectionChanged="FontSizeCombo_SelectionChanged" ToolTip="Font size">
+                                    <ComboBoxItem>10</ComboBoxItem>
+                                    <ComboBoxItem>12</ComboBoxItem>
+                                    <ComboBoxItem>13.5</ComboBoxItem>
+                                    <ComboBoxItem>16</ComboBoxItem>
+                                    <ComboBoxItem>18</ComboBoxItem>
+                                    <ComboBoxItem>24</ComboBoxItem>
+                                    <ComboBoxItem>32</ComboBoxItem>
+                                </ComboBox>
+                                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="6,2"/>
+                                <Button x:Name="BoldButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                                        Click="Bold_Click" ToolTip="Bold (Ctrl+B)" Padding="7,3">
+                                    <TextBlock Text="B" FontWeight="Bold" FontSize="13"/>
+                                </Button>
+                                <Button x:Name="ItalicButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                                        Click="Italic_Click" ToolTip="Italic (Ctrl+I)" Padding="7,3">
+                                    <TextBlock Text="I" FontStyle="Italic" FontSize="13"/>
+                                </Button>
+                                <Button x:Name="UnderlineButton" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                                        Click="Underline_Click" ToolTip="Underline (Ctrl+U)" Padding="7,3">
+                                    <TextBlock Text="U" TextDecorations="Underline" FontSize="13"/>
+                                </Button>
+                                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="6,2"/>
+                                <TextBlock Text="A" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="2,0,3,0"
+                                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Text color"/>
+                                <ComboBox Width="46" SelectedIndex="0"
+                                          SelectionChanged="TextColorCombo_SelectionChanged" ToolTip="Text color">
+                                    <ComboBoxItem Tag="#2C3338"><Border Background="#2C3338" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#D63638"><Border Background="#D63638" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#E68A00"><Border Background="#E68A00" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#00A32A"><Border Background="#00A32A" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#3361CC"><Border Background="#3361CC" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#8C4FE0"><Border Background="#8C4FE0" Width="16" Height="16"/></ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="&#xE7E6;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" VerticalAlignment="Center" Margin="8,0,3,0"
+                                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="Highlight"/>
+                                <ComboBox Width="50" SelectedIndex="0"
+                                          SelectionChanged="HighlightCombo_SelectionChanged" ToolTip="Highlight">
+                                    <ComboBoxItem Tag="Transparent"><TextBlock Text="None" FontSize="10"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#FFF3B0"><Border Background="#FFF3B0" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#C8F0C8"><Border Background="#C8F0C8" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#CEE0FA"><Border Background="#CEE0FA" Width="16" Height="16"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="#FAD1E0"><Border Background="#FAD1E0" Width="16" Height="16"/></ComboBoxItem>
+                                </ComboBox>
+                                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="6,2"/>
+                                <TextBlock Text="&#xE8FD;" FontFamily="{StaticResource FluentIconFont}" FontSize="12" VerticalAlignment="Center" Margin="2,0,3,0"
+                                           Foreground="{DynamicResource PrimaryTextBrush}" ToolTip="List style"/>
+                                <ComboBox Width="80" SelectedIndex="-1"
+                                          SelectionChanged="ListStyleCombo_SelectionChanged" ToolTip="List style">
+                                    <ComboBoxItem Tag="Bullets"><TextBlock Text="&#x2022; Bullets" FontSize="11"/></ComboBoxItem>
+                                    <ComboBoxItem Tag="Numbering"><TextBlock Text="1. Numbered" FontSize="11"/></ComboBoxItem>
+                                </ComboBox>
+                                <Separator x:Name="FormattingGroupSeparator" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </Border>
 
                         <!-- Unified note body: single continuous inline Word-like document canvas -->
                         <Grid x:Name="NoteBody" Background="Transparent" MinHeight="200" Margin="0,12,0,0"
@@ -1303,7 +1550,7 @@
                                                 <Button Grid.Column="1" Style="{StaticResource IconButton}" VerticalAlignment="Top"
                                                         Command="{Binding DataContext.RemoveAdditionalBlockCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding}" ToolTip="Remove" AutomationProperties.Name="Remove">
-                                                    <TextBlock Text="&#x2715;" Style="{StaticResource IconGlyph}"/>
+                                                    <TextBlock Text="&#xE711;" Style="{StaticResource IconGlyph}"/>
                                                 </Button>
                                             </Grid>
                                         </Border>

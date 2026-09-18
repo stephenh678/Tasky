@@ -3,10 +3,51 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using TodoApp.Behaviors;
 using TodoApp.Models;
 
 namespace TodoApp.Services;
+
+/// <summary>
+/// Disposable wrapper around a temporary backup extraction folder ensuring that all extracted
+/// files and directories are cleaned up when disposed.
+/// </summary>
+public sealed class ExtractedBackupPackage : IDisposable
+{
+    private bool _disposed;
+
+    public string TempDirectory { get; }
+    public string DataFilePath { get; }
+    public IReadOnlyList<string> AttachmentFiles { get; }
+
+    public ExtractedBackupPackage(string tempDirectory, string dataFilePath, IReadOnlyList<string> attachmentFiles)
+    {
+        TempDirectory = tempDirectory;
+        DataFilePath = dataFilePath;
+        AttachmentFiles = attachmentFiles;
+    }
+
+    public void Deconstruct(out string dataFilePath, out IReadOnlyList<string> attachmentFiles)
+    {
+        dataFilePath = DataFilePath;
+        attachmentFiles = AttachmentFiles;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        try
+        {
+            if (Directory.Exists(TempDirectory))
+                Directory.Delete(TempDirectory, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("BackupService", $"Failed to clean up temporary backup folder '{TempDirectory}': {ex.Message}");
+        }
+    }
+}
 
 /// <summary>
 /// Exports the current data file plus every attachment it actually references into a single
@@ -63,15 +104,22 @@ public static class BackupService
         return (included, missing);
     }
 
-    // Checks the current MediaPathResolver-resolved Attachments/InlineImages folders first, then
-    // falls back to the legacy per-task Attachments\{taskId}\ subfolder layout that older Tasky
-    // versions wrote next to the data file, so backups created back then still restore correctly.
+    // Checks the current MediaPathResolver-resolved Attachments/InlineImages folders (both relative
+    // to the specified data file and globally), then falls back to the legacy per-task Attachments\{taskId}\
+    // subfolder layout that older Tasky versions wrote next to the data file, so backups created back then
+    // still restore correctly.
     private static string? ResolveAnyLocalPath(string dataFilePath, string fileName)
     {
-        var attachmentsPath = Path.Combine(RichTextBoxBehavior.GetAttachmentsDirectory(), fileName);
+        var dataFileAttachments = Path.Combine(MediaPathResolver.DirectoryFor(dataFilePath, "Attachments"), fileName);
+        if (File.Exists(dataFileAttachments)) return dataFileAttachments;
+
+        var dataFileInline = Path.Combine(MediaPathResolver.DirectoryFor(dataFilePath, "InlineImages"), fileName);
+        if (File.Exists(dataFileInline)) return dataFileInline;
+
+        var attachmentsPath = Path.Combine(MediaPathResolver.AttachmentsDirectory, fileName);
         if (File.Exists(attachmentsPath)) return attachmentsPath;
 
-        var inlinePath = Path.Combine(RichTextBoxBehavior.GetInlineAttachmentDirectory(), fileName);
+        var inlinePath = Path.Combine(MediaPathResolver.InlineImagesDirectory, fileName);
         if (File.Exists(inlinePath)) return inlinePath;
 
         var perTaskRoot = Path.Combine(Path.GetDirectoryName(dataFilePath) ?? ".", "Attachments");
@@ -87,25 +135,33 @@ public static class BackupService
     }
 
     /// <summary>
-    /// Extracts a backup zip to a temp folder and returns the path to the .tasky file inside it
-    /// plus every attachment file that came with it. Caller decides whether/how to actually apply
-    /// it (RestoreAttachments + TodoStore.RestoreBackup) once the user confirms.
+    /// Extracts a backup zip to a temp folder and returns an ExtractedBackupPackage handle
+    /// containing the path to the .tasky file inside it plus every attachment file that came with it.
+    /// Dispose the package to clean up all temporary extracted files.
     /// </summary>
-    public static (string dataFilePath, IReadOnlyList<string> attachmentFiles) ExtractToTemp(string zipPath)
+    public static ExtractedBackupPackage ExtractToTemp(string zipPath)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "TaskyImport_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        ZipFile.ExtractToDirectory(zipPath, tempDir);
+        try
+        {
+            ZipFile.ExtractToDirectory(zipPath, tempDir);
 
-        var dataFile = Directory.GetFiles(tempDir, "*.tasky").FirstOrDefault()
-            ?? throw new InvalidDataException("This .zip doesn't contain a .tasky data file - it may not be a Tasky backup.");
+            var dataFile = Directory.GetFiles(tempDir, "*.tasky").FirstOrDefault()
+                ?? throw new InvalidDataException("This .zip doesn't contain a .tasky data file - it may not be a Tasky backup.");
 
-        var attachmentsDir = Path.Combine(tempDir, "Attachments");
-        var attachmentFiles = Directory.Exists(attachmentsDir)
-            ? Directory.GetFiles(attachmentsDir)
-            : Array.Empty<string>();
+            var attachmentsDir = Path.Combine(tempDir, "Attachments");
+            var attachmentFiles = Directory.Exists(attachmentsDir)
+                ? Directory.GetFiles(attachmentsDir)
+                : Array.Empty<string>();
 
-        return (dataFile, attachmentFiles);
+            return new ExtractedBackupPackage(tempDir, dataFile, attachmentFiles);
+        }
+        catch
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); } catch { }
+            throw;
+        }
     }
 
     /// <summary>
@@ -114,9 +170,12 @@ public static class BackupService
     /// one place is fine even for files that started out in InlineImages or a per-task folder -
     /// ResolveLocalAttachmentPath already checks both Attachments and InlineImages for any file.
     /// </summary>
-    public static void RestoreAttachments(IEnumerable<string> attachmentFiles)
+    public static void RestoreAttachments(IEnumerable<string> attachmentFiles, string? targetDataFilePath = null)
     {
-        var dest = RichTextBoxBehavior.GetAttachmentsDirectory();
+        var dest = targetDataFilePath != null
+            ? MediaPathResolver.DirectoryFor(targetDataFilePath, "Attachments")
+            : MediaPathResolver.AttachmentsDirectory;
+        Directory.CreateDirectory(dest);
         foreach (var file in attachmentFiles)
             File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), overwrite: true);
     }

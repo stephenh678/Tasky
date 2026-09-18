@@ -67,9 +67,9 @@ public static class ToastNotificationService
     }
 
     // Non-MSIX apps register some registry-based COM/AUMID plumbing the first time OnActivated is
-    // subscribed to (see Initialize) - Uninstall() reverses that. Called from a short-lived
-    // "--cleanup-notifications" process launched by Uninstall-Tasky.ps1 right before it deletes
-    // Tasky.exe, so nothing about toast registration is left behind after uninstall.
+    // subscribed to (see Initialize) - Uninstall() reverses that. Reached via
+    // UninstallCleanupService, which the Inno uninstaller runs as "Tasky.exe --uninstall-cleanup"
+    // while Tasky.exe still exists, so nothing about toast registration is left behind afterwards.
     public static void Uninstall() => ToastNotificationManagerCompat.Uninstall();
 
     private static void OnActivated(ToastNotificationActivatedEventArgsCompat e)

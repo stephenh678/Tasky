@@ -19,8 +19,13 @@ public partial class QuickAddWindow : Window
     public QuickAddWindow()
     {
         InitializeComponent();
-        ThemeService.ApplyTitleBar(this);
         Loaded += (_, _) => TitleBox.Focus();
+    }
+
+    private void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left)
+            DragMove();
     }
 
     // ROADMAP.md #135: shows what #tag/!due:/@time will actually parse to (title, due date, tags)

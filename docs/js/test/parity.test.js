@@ -29,10 +29,17 @@ import {
   extractInlineFileNames,
   collectTaskFileNames,
   normalizeTask,
+  nextSortOrder,
+  reorderTargetIndex,
+  pinStateAfterReorder,
+  checklistProgress,
   taskHasLink,
   taskHasChecklist,
+  escapeXml,
+  xamlToHtml,
+  htmlToXaml,
 } from '../model.js';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from '../sync.js';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, mergeTaskOrder, reconcileLocalSnapshot } from '../sync.js';
 
 // --- parseDotNetDate / formatDotNetDate round-trips (mirrors the .NET JSON date shape) ---------
 
@@ -904,5 +911,225 @@ describe('reconcileLocalSnapshot', () => {
     const snapshot = newAppState();
     reconcileLocalSnapshot(snapshot, remote, null);
     assert.deepEqual(snapshot.SavedViews.map((v) => v.Id), ['v1']);
+  });
+});
+
+// --- xamlToHtml / htmlToXaml (Note formatting parity between Desktop and Web) --------------------
+
+describe('xamlToHtml / htmlToXaml', () => {
+  test('escapeXml escapes dangerous characters', () => {
+    assert.equal(escapeXml('Foo & "Bar" <Baz> \'Quux\''), 'Foo &amp; &quot;Bar&quot; &lt;Baz&gt; &apos;Quux&apos;');
+    assert.equal(escapeXml(null), '');
+  });
+
+  test('xamlToHtml converts paragraphs, bold, italic, and links', () => {
+    const xaml = '<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">' +
+      '<Paragraph><Bold>Bold text</Bold> and <Italic>italic text</Italic></Paragraph>' +
+      '<Paragraph><Hyperlink NavigateUri="https://example.com">Example</Hyperlink></Paragraph>' +
+      '</FlowDocument>';
+    const html = xamlToHtml(xaml);
+    assert.ok(html.includes('<p><strong>Bold text</strong> and <em>italic text</em></p>'));
+    assert.ok(html.includes('<p><a href="https://example.com" target="_blank" rel="noopener">Example</a></p>'));
+  });
+
+  test('xamlToHtml converts lists', () => {
+    const xaml = '<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">' +
+      '<List><ListItem><Paragraph>Item 1</Paragraph></ListItem><ListItem><Paragraph>Item 2</Paragraph></ListItem></List>' +
+      '</FlowDocument>';
+    const html = xamlToHtml(xaml);
+    assert.ok(html.includes('<ul>'));
+    assert.ok(html.includes('<li><p>Item 1</p></li>'));
+    assert.ok(html.includes('<li><p>Item 2</p></li>'));
+  });
+
+  test('htmlToXaml converts HTML paragraphs, formatting, and hyperlinks to valid FlowDocument XAML', () => {
+    const html = '<p><strong>Bold</strong> and <em>italic</em></p><p><a href="https://example.com">Link</a></p>';
+    const xaml = htmlToXaml(html, 'fallback');
+    assert.ok(xaml.startsWith('<FlowDocument'));
+    assert.ok(xaml.endsWith('</FlowDocument>'));
+    assert.ok(xaml.includes('<Bold>Bold</Bold>'));
+    assert.ok(xaml.includes('<Italic>italic</Italic>'));
+    // htmlToXaml wraps every inline run in an explicit <Run Text="..."/> rather than emitting bare
+    // text content. Both forms are valid FlowDocument XAML and XamlReader on the desktop side
+    // accepts either; this assertion was written against the bare-text shape the converter has
+    // never produced, so it failed on a converter that was working correctly.
+    assert.ok(xaml.includes('<Hyperlink NavigateUri="https://example.com"><Run Text="Link"/></Hyperlink>'));
+  });
+
+  test('htmlToXaml with empty html returns empty or fallback', () => {
+    assert.equal(htmlToXaml(''), '');
+    assert.ok(htmlToXaml('', 'Fallback').includes('<Paragraph>Fallback</Paragraph>'));
+  });
+});
+
+
+// --- SortOrder / manual ordering parity (TaskSyncMerge.MergeTaskOrder, AppState.TasksOrderModifiedAt)
+// Manual ordering is list-level state: a drag renumbers every task, so it can't ride on a task's
+// ModifiedAt without spraying conflicted copies, and desktop's Task_PropertyChanged therefore
+// ignores SortOrder. These pin the JS half of the timestamp-based scheme that closes the resulting
+// hole, plus the two places SortOrder used to fall out of the file entirely on this side.
+describe('manual ordering (SortOrder)', () => {
+  test('newTaskItem carries SortOrder so desktop does not read a missing int as 0', () => {
+    const task = newTaskItem({ text: 'x' });
+    assert.equal(task.SortOrder, 0);
+    assert.ok(Object.prototype.hasOwnProperty.call(task, 'SortOrder'));
+  });
+
+  test('nextSortOrder puts a new task at the end, matching desktop Max(SortOrder) + 1', () => {
+    assert.equal(nextSortOrder([]), 0);
+    assert.equal(nextSortOrder([{ SortOrder: 0 }, { SortOrder: 4 }, { SortOrder: 2 }]), 5);
+    // A file from a client that never wrote SortOrder must not produce NaN.
+    assert.equal(nextSortOrder([{ SortOrder: undefined }]), 1);
+  });
+
+  test('normalizeTask coerces a missing SortOrder to 0', () => {
+    const task = normalizeTask({ ...newTaskItem({ text: 'x' }), SortOrder: undefined });
+    assert.equal(task.SortOrder, 0);
+  });
+
+  test('newAppState exposes TasksOrderModifiedAt', () => {
+    assert.ok(Object.prototype.hasOwnProperty.call(newAppState(), 'TasksOrderModifiedAt'));
+    assert.equal(newAppState().TasksOrderModifiedAt, null);
+  });
+
+  // Mirrors TaskSyncMerge_ApplyTaskFields_CopiesSortOrder on the C# side - the omission this
+  // covers meant a task whose content remote won kept the local device's stale position.
+  test('mergeRemoteState applies remote SortOrder to an updated task', () => {
+    const local = newAppState();
+    const remote = newAppState();
+    const task = newTaskItem({ text: 'shared' });
+    task.SortOrder = 9;
+    local.Tasks.push(task);
+    remote.Tasks.push({ ...task, SortOrder: 3, Text: 'shared edited', ModifiedAt: formatDotNetDate(new Date(Date.now() + 60000)) });
+
+    mergeRemoteState(local, remote, null);
+
+    assert.equal(local.Tasks[0].Text, 'shared edited');
+    assert.equal(local.Tasks[0].SortOrder, 3);
+  });
+
+  test('mergeTaskOrder: newer remote ordering wins the whole arrangement', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    const localTasks = [a];
+    const remoteTasks = [{ Id: 'a', SortOrder: 0 }];
+    const localAt = formatDotNetDate(new Date('2026-01-01T00:00:00Z'));
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    assert.equal(mergeTaskOrder(localTasks, remoteTasks, localAt, remoteAt), remoteAt);
+    assert.equal(a.SortOrder, 0);
+  });
+
+  test('mergeTaskOrder: older remote ordering loses', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    const localAt = formatDotNetDate(new Date('2026-03-01T00:00:00Z'));
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], localAt, remoteAt), localAt);
+    assert.equal(a.SortOrder, 5);
+  });
+
+  // null is "never reordered", not "epoch" - treating it as epoch would let an unordered file
+  // wipe out a real arrangement made on another device.
+  test('mergeTaskOrder: null timestamps', () => {
+    const a = { Id: 'a', SortOrder: 5 };
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], null, null), null);
+    assert.equal(a.SortOrder, 5);
+
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+    assert.equal(mergeTaskOrder([a], [{ Id: 'a', SortOrder: 0 }], null, remoteAt), remoteAt);
+    assert.equal(a.SortOrder, 0);
+  });
+
+  test('mergeTaskOrder leaves a local-only task at its own position', () => {
+    const shared = { Id: 'a', SortOrder: 5 };
+    const localOnly = { Id: 'b', SortOrder: 7 };
+    const remoteAt = formatDotNetDate(new Date('2026-02-01T00:00:00Z'));
+
+    mergeTaskOrder([shared, localOnly], [{ Id: 'a', SortOrder: 2 }], null, remoteAt);
+
+    assert.equal(shared.SortOrder, 2);
+    assert.equal(localOnly.SortOrder, 7);
+  });
+});
+
+// --- checklistProgress (TaskMediaHelper.GetChecklistProgress) -----------------------------------
+describe('checklistProgress', () => {
+  test('counts real Checklist blocks', () => {
+    const task = newTaskItem({ text: 'x' });
+    task.Body.push(newNoteBlock(NoteBlockType.Checklist, {
+      checklistItems: [{ Text: 'a', IsChecked: true }, { Text: 'b', IsChecked: false }],
+    }));
+    assert.deepEqual(checklistProgress(task), { completed: 1, total: 2 });
+  });
+
+  // Desktop's "Insert Checklist" embeds <CheckBox/> runs inside a Text block's Rtf rather than
+  // creating a Checklist block, so a task authored that way has to count the same on both sides.
+  test('counts inline <CheckBox> runs in a desktop-authored Rtf', () => {
+    const task = newTaskItem({ text: 'x' });
+    task.Body[0].Rtf = '<Paragraph><CheckBox IsChecked="True"/>done<CheckBox IsChecked="False"/>todo</Paragraph>';
+    assert.deepEqual(checklistProgress(task), { completed: 1, total: 2 });
+  });
+
+  test('no checklist anywhere reports zeroes', () => {
+    assert.deepEqual(checklistProgress(newTaskItem({ text: 'x' })), { completed: 0, total: 0 });
+    assert.deepEqual(checklistProgress(null), { completed: 0, total: 0 });
+  });
+});
+
+// --- reorder index math (MainViewModel.ReorderTask) ---------------------------------------------
+// The returned index is interpreted after the source is spliced out, matching
+// ObservableCollection.Move. These mirror MainViewModel_ReorderTask_MovesTaskAndSetsSortOrder.
+describe('reorderTargetIndex', () => {
+  const move = (list, sourceIndex, targetIndex, insertAfter) => {
+    const out = [...list];
+    const newIndex = reorderTargetIndex(sourceIndex, targetIndex, insertAfter, out.length);
+    const [moved] = out.splice(sourceIndex, 1);
+    out.splice(newIndex, 0, moved);
+    return out;
+  };
+
+  test('dragging down onto the lower half lands after the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 2, true), ['b', 'c', 'a']);
+  });
+
+  test('dragging down onto the upper half lands before the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 2, false), ['b', 'a', 'c']);
+  });
+
+  test('dragging up onto the upper half lands before the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 2, 0, false), ['c', 'a', 'b']);
+  });
+
+  test('dragging up onto the lower half lands after the target', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 2, 0, true), ['a', 'c', 'b']);
+  });
+
+  test('an adjacent no-op drag leaves the order unchanged', () => {
+    assert.deepEqual(move(['a', 'b', 'c'], 0, 1, false), ['a', 'b', 'c']);
+    assert.deepEqual(move(['a', 'b', 'c'], 1, 0, true), ['a', 'b', 'c']);
+  });
+
+  test('clamps into range rather than producing a hole', () => {
+    assert.equal(reorderTargetIndex(0, 5, true, 3), 2);
+    assert.equal(reorderTargetIndex(5, 0, false, 3), 0);
+  });
+});
+
+// Pinned tasks always sort first, so a drop across the pinned boundary has to change the pin or
+// the task snaps back to where it started.
+describe('pinStateAfterReorder', () => {
+  test('dropping above a pinned task pins the source', () => {
+    assert.equal(pinStateAfterReorder(false, true, false), true);
+  });
+
+  test('dropping below an unpinned task unpins the source', () => {
+    assert.equal(pinStateAfterReorder(true, false, true), false);
+  });
+
+  test('a drop that does not cross the boundary leaves the pin alone', () => {
+    assert.equal(pinStateAfterReorder(false, false, true), false);
+    assert.equal(pinStateAfterReorder(true, true, false), true);
+    assert.equal(pinStateAfterReorder(false, true, true), false);
+    assert.equal(pinStateAfterReorder(true, false, false), true);
   });
 });

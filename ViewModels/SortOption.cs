@@ -2,6 +2,7 @@ namespace TodoApp.ViewModels;
 
 public enum SortOption
 {
+    Manual,
     ModifiedNewest,
     CreatedNewest,
     NameAZ,

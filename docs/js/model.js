@@ -108,6 +108,11 @@ export function newTaskItem({ text = '' } = {}) {
     CreatedAt: now,
     ModifiedAt: now,
     IsPinned: false,
+    // Manual (drag-and-drop) position. Callers that have the current list pass the real value via
+    // nextSortOrder(); the 0 here is only the standalone default. Omitting the field entirely (as
+    // this did before) isn't harmless: desktop's JsonSerializer reads a missing int as 0, so every
+    // task made on Web or a phone landed at the very top of desktop's manual order.
+    SortOrder: 0,
     Text: clamp(text, MAX_TASK_TEXT),
     IsDone: false,
     IsClosed: false,
@@ -124,7 +129,55 @@ export function newTaskItem({ text = '' } = {}) {
 }
 
 export function newAppState() {
-  return { Tasks: [], DeletedTasks: [], SavedViews: [], DeletedSavedViewIds: [] };
+  // TasksOrderModifiedAt mirrors AppState.cs: when any device last changed the manual ordering.
+  // null means "never reordered" and loses to any real timestamp in mergeTaskOrder.
+  return { Tasks: [], DeletedTasks: [], SavedViews: [], DeletedSavedViewIds: [], TasksOrderModifiedAt: null };
+}
+
+// The SortOrder a newly created task should get: the end of the list, matching what desktop's
+// MainViewModel does at its three creation sites (`AllTasks.Max(t => t.SortOrder) + 1`). New tasks
+// belong at the bottom of a manual arrangement, not the top.
+export function nextSortOrder(tasks) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return 0;
+  // reduce, not Math.max(...spread): the spread passes one argument per task, which throws
+  // RangeError once a synced file grows past the engine's argument limit.
+  let max = 0;
+  for (const t of tasks) {
+    const order = Number(t.SortOrder) || 0;
+    if (order > max) max = order;
+  }
+  return max + 1;
+}
+
+/**
+ * The index a dragged task should land on, given its current index, the drop target's index and
+ * which half of the target row was dropped on. Split out of app.js's reorderTask so the arithmetic
+ * - the piece most likely to drift from MainViewModel.ReorderTask - is reachable from the parity
+ * tests; app.js still owns the DOM and appState side of the drag.
+ *
+ * The returned index is interpreted AFTER the source has been removed from the list, matching
+ * ObservableCollection.Move's contract on the desktop side.
+ */
+export function reorderTargetIndex(sourceIndex, targetIndex, insertAfter, length) {
+  let newIndex = targetIndex;
+  if (insertAfter) {
+    if (sourceIndex > targetIndex) newIndex = targetIndex + 1;
+  } else if (sourceIndex < targetIndex) {
+    newIndex = targetIndex - 1;
+  }
+  return Math.max(0, Math.min(newIndex, length - 1));
+}
+
+/**
+ * Pin changes implied by dropping `source` onto `target` - pinned tasks always sort first, so
+ * dropping above the pinned block's floor has to mean "pin me" and dropping below it "unpin me",
+ * or the task visibly snaps back to where it was. Mirrors the two branches at the top of
+ * MainViewModel.ReorderTask. Returns the pin state the source should end up with.
+ */
+export function pinStateAfterReorder(sourcePinned, targetPinned, insertAfter) {
+  if (targetPinned && !sourcePinned && !insertAfter) return true;
+  if (!targetPinned && sourcePinned && insertAfter) return false;
+  return sourcePinned;
 }
 
 export function newTaskSyncRecord(taskId, timestamp = nowDotNet()) {
@@ -232,6 +285,27 @@ export function taskHasChecklist(task) {
   });
 }
 
+// Port of TaskMediaHelper.GetChecklistProgress - {completed, total} across every checklist in the
+// task, counting both real Checklist blocks and the <CheckBox .../> runs desktop embeds inline in
+// a Text block's Rtf, so a task authored either way reports the same numbers on both platforms.
+export function checklistProgress(task) {
+  if (!task) return { completed: 0, total: 0 };
+  let completed = 0;
+  let total = 0;
+  for (const block of task.Body ?? []) {
+    if (Array.isArray(block.ChecklistItems) && block.ChecklistItems.length > 0) {
+      total += block.ChecklistItems.length;
+      completed += block.ChecklistItems.filter((ci) => ci.IsChecked).length;
+    } else if (block.Rtf && /<CheckBox/i.test(block.Rtf)) {
+      for (const match of block.Rtf.matchAll(/<CheckBox\b([^>]*)>/gi)) {
+        total++;
+        if (/IsChecked\s*=\s*"True"/i.test(match[1])) completed++;
+      }
+    }
+  }
+  return { completed, total };
+}
+
 // Fills in whatever a task read from a .tasky file might be missing, in place, and returns it.
 // A pre-Body legacy desktop file, or a hand-edited one, can lack Tags/Body/Priority entirely -
 // every render path here assumes those exist (renderList's `t.Tags.some(...)` threw and blanked
@@ -249,6 +323,9 @@ export function normalizeTask(task) {
   task.Recurrence = Number(task.Recurrence) || RecurrenceRule.None;
   task.RecurrenceInterval = Math.max(1, Number(task.RecurrenceInterval) || 1);
   task.Priority = Number(task.Priority) || TaskPriority.None;
+  // A file written by desktop before drag-reordering existed, or by an older Tasky Web build, has
+  // no SortOrder at all - coerce to 0 so comparisons and Math.max never see undefined/NaN.
+  task.SortOrder = Number(task.SortOrder) || 0;
   for (const block of task.Body) {
     block.Type = Number(block.Type) || NoteBlockType.Text;
     if (block.Type === NoteBlockType.Checklist && !Array.isArray(block.ChecklistItems)) block.ChecklistItems = [];
@@ -437,4 +514,121 @@ function addDays(d, n) {
   const r = new Date(d);
   r.setDate(r.getDate() + n);
   return r;
+}
+
+export function escapeXml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+export function xamlToHtml(xaml) {
+  if (!xaml || typeof xaml !== 'string' || !xaml.trim()) return '';
+  if (xaml.startsWith('{\\rtf')) {
+    return xaml.replace(/\\[a-z0-9-]+ ?/gi, '').replace(/[{}]/g, '').trim();
+  }
+
+  // Remove XML declaration and FlowDocument namespaces
+  let clean = xaml.replace(/<\?[^>]*\?>/g, '').replace(/xmlns="[^"]*"/g, '');
+
+  // Strip complex embedded UI containers that are handled as separate attachments
+  clean = clean.replace(/<BlockUIContainer>[\s\S]*?<\/BlockUIContainer>/gi, '');
+  clean = clean.replace(/<InlineUIContainer>[\s\S]*?<\/InlineUIContainer>/gi, '');
+
+  // Map FlowDocument structural tags to HTML
+  clean = clean
+    .replace(/<FlowDocument[^>]*>/gi, '')
+    .replace(/<\/FlowDocument>/gi, '')
+    .replace(/<Paragraph[^>]*>/gi, '<p>')
+    .replace(/<\/Paragraph>/gi, '</p>')
+    .replace(/<Bold[^>]*>/gi, '<strong>')
+    .replace(/<\/Bold>/gi, '</strong>')
+    .replace(/<Italic[^>]*>/gi, '<em>')
+    .replace(/<\/Italic>/gi, '</em>')
+    .replace(/<Underline[^>]*>/gi, '<u>')
+    .replace(/<\/Underline>/gi, '</u>')
+    .replace(/<LineBreak\s*\/?>/gi, '<br>')
+    .replace(/<Hyperlink[^>]*NavigateUri="([^"]*)"[^>]*>([\s\S]*?)<\/Hyperlink>/gi, '<a href="$1" target="_blank" rel="noopener">$2</a>')
+    // The (?=[\s>]) lookaheads matter: without them `<List[^>]*>` also matches `<ListItem>` (the
+    // "Item" is just more [^>]*), so every list item was rewritten to a second `<ul>` before the
+    // ListItem rule below ever saw it - a one-item list came out as the malformed
+    // `<ul><ul><p>x</p></li></ul>`, which browsers then re-nested into a stray empty bullet.
+    .replace(/<List(?=[\s>])[^>]*MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
+    .replace(/<List(?=[\s>])[^>]*>/gi, '<ul>')
+    .replace(/<\/List>/gi, '</ul>')
+    .replace(/<ListItem(?=[\s>])[^>]*>/gi, '<li>')
+    .replace(/<\/ListItem>/gi, '</li>')
+    .replace(/<Table[^>]*>/gi, '<table class="note-table">')
+    .replace(/<\/Table>/gi, '</table>')
+    .replace(/<TableRowGroup[^>]*>/gi, '<tbody>')
+    .replace(/<\/TableRowGroup>/gi, '</tbody>')
+    .replace(/<TableRow[^>]*>/gi, '<tr>')
+    .replace(/<\/TableRow>/gi, '</tr>')
+    .replace(/<TableCell[^>]*>/gi, '<td>')
+    .replace(/<\/TableCell>/gi, '</td>');
+
+  // Convert Run elements: <Run Text="..." FontWeight="..." /> and <Run ...>content</Run>
+  clean = clean.replace(/<Run\s+([^>]*?)\s*\/>/gi, (_, attrs) => {
+    const textMatch = /Text="([^"]*)"/i.exec(attrs);
+    let res = textMatch ? textMatch[1] : '';
+    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
+    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
+    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
+    return res;
+  });
+  clean = clean.replace(/<Run\s+([^>]*?)>([\s\S]*?)<\/Run>/gi, (_, attrs, content) => {
+    let res = content;
+    if (/FontWeight="Bold"/i.test(attrs)) res = `<strong>${res}</strong>`;
+    if (/FontStyle="Italic"/i.test(attrs)) res = `<em>${res}</em>`;
+    if (/TextDecorations="Underline"/i.test(attrs)) res = `<u>${res}</u>`;
+    return res;
+  });
+
+  // Strip any remaining structural wrapper tags like Section, Span
+  clean = clean.replace(/<\/?(Section|Span)[^>]*>/gi, '');
+
+  return clean.trim();
+}
+
+export function htmlToXaml(html, fallbackText = '') {
+  if (!html || !html.trim()) {
+    if (!fallbackText || !fallbackText.trim()) return '';
+    return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left"><Paragraph>${escapeXml(fallbackText)}</Paragraph></FlowDocument>`;
+  }
+
+  let xaml = html
+    .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '<Bold>$1</Bold>')
+    .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '<Bold>$1</Bold>')
+    .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '<Italic>$1</Italic>')
+    .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '<Italic>$1</Italic>')
+    .replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, '<Underline>$1</Underline>')
+    .replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '<Hyperlink NavigateUri="$1"><Run Text="$2"/></Hyperlink>')
+    .replace(/<br\s*\/?>/gi, '<LineBreak/>')
+    .replace(/<ol[^>]*>/gi, '<List MarkerStyle="Decimal">')
+    .replace(/<\/ol>/gi, '</List>')
+    .replace(/<ul[^>]*>/gi, '<List>')
+    .replace(/<\/ul>/gi, '</List>')
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '<ListItem><Paragraph>$1</Paragraph></ListItem>')
+    .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '<Paragraph>$1</Paragraph>')
+    .replace(/<div[^>]*>([\s\S]*?)<\/div>/gi, '<Paragraph>$1</Paragraph>')
+    .replace(/<table[^>]*>/gi, '<Table><TableRowGroup>')
+    .replace(/<\/table>/gi, '</TableRowGroup></Table>')
+    .replace(/<tbody[^>]*>|<\/tbody>/gi, '')
+    .replace(/<tr[^>]*>/gi, '<TableRow>')
+    .replace(/<\/tr>/gi, '</TableRow>')
+    .replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '<TableCell><Paragraph>$1</Paragraph></TableCell>');
+
+  // Ensure content is wrapped in Paragraph if needed
+  if (!xaml.includes('<Paragraph') && !xaml.includes('<List') && !xaml.includes('<Table')) {
+    xaml = `<Paragraph>${xaml}</Paragraph>`;
+  }
+
+  // Clean empty paragraphs
+  xaml = xaml.replace(/<Paragraph>\s*<\/Paragraph>/gi, '<Paragraph><LineBreak/></Paragraph>');
+
+  return `<FlowDocument xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TextAlignment="Left">${xaml}</FlowDocument>`;
 }

@@ -37,7 +37,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Tasky" />
-  <link rel="stylesheet" href="css/styles.css?v=29" />
+  <link rel="stylesheet" href="css/styles.css?v=31" />
 </head>
 <body>
   <div id="offline-banner" class="offline-banner hidden" role="status">No internet connection — Tasky will keep working, but changes won't sync until you're back online.</div>
@@ -142,10 +142,13 @@
           <div class="chip-group-block">
             <div class="chip-group-label">Sort</div>
             <div id="sort-chip-group" class="chip-group" role="group" aria-label="Sort by">
+              <button type="button" class="chip" data-sort="manual" title="Your drag-and-drop order">Manual</button>
               <button type="button" class="chip active" data-sort="modified">Modified</button>
               <button type="button" class="chip" data-sort="created">Created</button>
-              <button type="button" class="chip" data-sort="name">Name</button>
+              <button type="button" class="chip" data-sort="name">Name A-Z</button>
+              <button type="button" class="chip" data-sort="nameDesc">Name Z-A</button>
               <button type="button" class="chip" data-sort="due">Due date</button>
+              <button type="button" class="chip" data-sort="priority">Priority</button>
             </div>
           </div>
           <div class="chip-group-block">
@@ -158,6 +161,7 @@
               <button type="button" class="chip" data-filter="recurring">Recurring</button>
               <button type="button" class="chip" data-filter="hasLink">With Link</button>
               <button type="button" class="chip" data-filter="hasAttachment">With Attachment</button>
+              <button type="button" class="chip" data-filter="highPriority">High Priority</button>
             </div>
           </div>
           <div class="chip-group-block">
@@ -504,7 +508,7 @@
        module below fails to parse at all, and it's what turns that silent failure into a visible
        "this browser is too old" message. Must stay ahead of the module tag so its error listener
        is armed before the module graph starts evaluating. -->
-  <script src="js/boot-guard.js?v=29"></script>
-  <script type="module" src="js/app.js?v=29"></script>
+  <script src="js/boot-guard.js?v=31"></script>
+  <script type="module" src="js/app.js?v=31"></script>
 </body>
 </html>

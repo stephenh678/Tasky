@@ -7,14 +7,14 @@ on:
 
 jobs:
   desktop:
-    # net9.0-windows10.0.19041.0 (WPF/WinForms) only builds on Windows.
+    # net10.0-windows10.0.19041.0 (WPF/WinForms) only builds on Windows.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Restore
         run: dotnet restore TodoApp.csproj
@@ -24,6 +24,19 @@ jobs:
 
       - name: Test
         run: dotnet test TodoApp.Tests/TodoApp.Tests.csproj --configuration Release
+
+      - name: Build the installer
+        # Proves the Inno Setup script still compiles against the real publish output on every
+        # push, rather than finding out at release time. Also the closest thing to a test the
+        # installer has - ISCC fails on a missing source file or a bad [Code] section.
+        shell: pwsh
+        run: |
+          # Pinned: Tasky.iss uses ArchitecturesAllowed=x64compatible, which needs Inno 6.3+, and an
+          # unpinned install lets the toolchain change under the build without anyone choosing it.
+          choco install innosetup --version=6.7.3 --no-progress -y
+          # -SkipZip: the legacy zip is a release artifact no CI step consumes, and building it
+          # adds ~73MB of Compress-Archive churn to every push. Releases run this without the flag.
+          ./build-installer.ps1 -SkipZip
 
   web:
     runs-on: ubuntu-latest

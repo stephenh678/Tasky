@@ -102,6 +102,38 @@ public static class TaskMediaHelper
         return false;
     }
 
+    public static (int Completed, int Total) GetChecklistProgress(TaskItem? task)
+    {
+        if (task is null) return (0, 0);
+
+        int completed = 0;
+        int total = 0;
+
+        foreach (var block in task.Body)
+        {
+            if (block.ChecklistItems.Count > 0)
+            {
+                total += block.ChecklistItems.Count;
+                completed += block.ChecklistItems.Count(ci => ci.IsChecked);
+            }
+            else if (!string.IsNullOrWhiteSpace(block.Rtf) && block.Rtf.Contains("<CheckBox", StringComparison.OrdinalIgnoreCase))
+            {
+                var matches = Regex.Matches(block.Rtf, @"<CheckBox\b([^>]*)>", RegexOptions.IgnoreCase);
+                foreach (Match match in matches)
+                {
+                    total++;
+                    var attrs = match.Groups[1].Value;
+                    if (Regex.IsMatch(attrs, @"IsChecked\s*=\s*""True""", RegexOptions.IgnoreCase))
+                    {
+                        completed++;
+                    }
+                }
+            }
+        }
+
+        return (completed, total);
+    }
+
     // The saved Rtf is XamlWriter output of the live FlowDocument, so an inline pasted image or
     // inserted file chip shows up as a literal UriSource="..." (BitmapImage) or Tag="..."
     // (the file-card's FrameworkElement.Tag) attribute - see RichTextBoxBehavior.CreateFileCard

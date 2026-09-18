@@ -12,6 +12,10 @@ public class Settings
     // the setting is still offered here so preferences stay consistent across platforms - marking
     // done stays reachable via right-click > Mark Completed either way.
     public bool ShowDoneCheckbox { get; set; } = true;
+    // Off unless asked for: the editor's Subtasks section stays hidden behind an "Add subtasks"
+    // link on tasks that have none, so a feature most tasks never use costs no space. A task that
+    // already has subtasks shows them regardless - see TaskDetailViewModel.IsSubtasksVisible.
+    public bool AlwaysShowSubtasks { get; set; }
     public bool SidebarCollapsed { get; set; }
     public string? LastSelectedTaskId { get; set; }
     public double? WindowLeft { get; set; }
@@ -19,6 +23,12 @@ public class Settings
     public double WindowWidth { get; set; } = 1180;
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
+    public bool CloseToTray { get; set; } = true;
+    public bool HasSeenCloseToTrayNotice { get; set; } = false;
+
+    // One-shot: shown to a copy of Tasky running outside the folder the installer registered.
+    // See MainWindow.WarnIfUnmanagedInstall.
+    public bool HasSeenUnmanagedInstallNotice { get; set; }
     public bool IsVerboseLogging { get; set; } = false;
     // Automatic Backups\ snapshots (see TodoStore.BackupExistingFile) - originally fired on every
     // single save, which during active editing meant a new snapshot every ~700ms and only a

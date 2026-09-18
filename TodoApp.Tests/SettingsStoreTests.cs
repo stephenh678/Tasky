@@ -134,4 +134,24 @@ public class SettingsStoreTests : IDisposable
 
         Assert.Null(store.LastLoadWarning);
     }
+
+    [Fact]
+    public void Load_DefaultSettings_HasCloseToTrayTrue()
+    {
+        var store = new SettingsStore(_filePath);
+        var settings = store.Load();
+
+        Assert.True(settings.CloseToTray);
+    }
+
+    [Fact]
+    public void SaveThenLoad_RoundTripsCloseToTray()
+    {
+        var store = new SettingsStore(_filePath);
+        store.Save(new Settings { CloseToTray = false });
+
+        var loaded = store.Load();
+
+        Assert.False(loaded.CloseToTray);
+    }
 }

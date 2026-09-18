@@ -36,6 +36,11 @@ public partial class MainWindow : Window
     private HwndSource? _hwndSource;
     private bool _readyToClose;
     private bool _flushInProgress;
+    private bool _isExplicitExit;
+    private Point _dragStartPoint;
+    private TaskItem? _draggedTask;
+    private bool _isTaskDragging;
+    private TaskDropAdorner? _dropAdorner;
 
     public MainWindow()
     {
@@ -78,6 +83,13 @@ public partial class MainWindow : Window
                 TitleTextBox.Focus();
                 TitleTextBox.SelectAll();
             });
+        };
+
+        _viewModel.FocusSubtaskRequested += () =>
+        {
+            // Queued at Loaded priority rather than fired inline: the section is still collapsed
+            // when the command runs, and a control that isn't visible yet can't take focus.
+            Dispatcher.InvokeAsync(() => NewSubtaskTextBox.Focus(), DispatcherPriority.Loaded);
         };
 
         _viewModel.SaveViewRequested += () =>
@@ -147,10 +159,16 @@ public partial class MainWindow : Window
         _viewModel.Tray.ShowRequested += () => Dispatcher.Invoke(() =>
         {
             Show();
-            WindowState = WindowState.Normal;
+            if (WindowState == WindowState.Minimized)
+                WindowState = WindowState.Normal;
             Activate();
+            Focus();
         });
-        _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(Close);
+        _viewModel.Tray.ExitRequested += () => Dispatcher.Invoke(() =>
+        {
+            _isExplicitExit = true;
+            Close();
+        });
         _viewModel.Tray.TaskCompleteRequested += id => Dispatcher.Invoke(() => _viewModel.CompleteTaskById(id));
         _viewModel.Tray.TaskSnoozeRequested += (id, duration) => Dispatcher.Invoke(() => _viewModel.SnoozeTaskById(id, duration));
 
@@ -169,6 +187,40 @@ public partial class MainWindow : Window
         Closing += async (_, e) =>
         {
             if (_readyToClose) return;
+
+            // If user closed window (X or Alt+F4) and CloseToTray is enabled, minimize to tray instead of quitting
+            if (!_isExplicitExit && _viewModel.CloseToTray)
+            {
+                e.Cancel = true;
+
+                var wasMax = WindowState == WindowState.Maximized;
+                var isMin = WindowState == WindowState.Minimized;
+                var b = (wasMax || isMin) ? RestoreBounds : new Rect(Left, Top, Width, Height);
+                if (b.Width > 100 && b.Height > 100 && !double.IsNaN(b.Left) && !double.IsNaN(b.Top) && b.Left > -10000 && b.Top > -10000)
+                {
+                    _viewModel.SaveWindowState(b.Left, b.Top, b.Width, b.Height, wasMax);
+                }
+
+                Hide();
+
+                if (!_viewModel.HasSeenCloseToTrayNotice)
+                {
+                    _viewModel.HasSeenCloseToTrayNotice = true;
+                    _viewModel.Tray.ShowCloseToTrayBalloon();
+                }
+
+                try
+                {
+                    await _viewModel.FlushPendingSaveAsync();
+                }
+                catch (Exception ex)
+                {
+                    App.LogException(ex);
+                }
+
+                return;
+            }
+
             e.Cancel = true;
 
             if (_flushInProgress) return;
@@ -432,8 +484,8 @@ public partial class MainWindow : Window
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Export Task Note",
-            Filter = "HTML Document (*.html)|*.html|Markdown Document (*.md)|*.md|Print / PDF Document (*.*)|*.*",
-            FileName = $"{task.Text}.html"
+            Filter = "Markdown Document (*.md)|*.md|Print / PDF Document (*.*)|*.*",
+            FileName = $"{task.Text}.md"
         };
 
         if (dialog.ShowDialog() == true)
@@ -443,11 +495,6 @@ public partial class MainWindow : Window
             {
                 ExportService.ExportToMarkdown(task, NoteEditor.Document, dialog.FileName);
                 ThemedMessageBox.Show($"Task exported successfully to Markdown:\n{dialog.FileName}", "Export Note", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else if (ext == ".html" || ext == ".htm")
-            {
-                ExportService.ExportToHtml(task, NoteEditor.Document, dialog.FileName);
-                ThemedMessageBox.Show($"Task exported successfully to HTML:\n{dialog.FileName}", "Export Note", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
@@ -495,9 +542,361 @@ public partial class MainWindow : Window
         TaskListBox.SelectedItem = task;
     }
 
+    private void TaskListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var element = e.OriginalSource as DependencyObject;
+        while (element != null && element != TaskListBox)
+        {
+            if (element is CheckBox or Button)
+            {
+                _draggedTask = null;
+                return;
+            }
+            if (element is TextBlock tb && (tb.ToolTip as string == "Pin to top" || tb.ToolTip as string == "Unpin"))
+            {
+                _draggedTask = null;
+                return;
+            }
+            if (element is ListBoxItem item && item.DataContext is TaskItem task)
+            {
+                _dragStartPoint = e.GetPosition(TaskListBox);
+                _draggedTask = task;
+                return;
+            }
+            element = VisualTreeHelper.GetParent(element);
+        }
+        _draggedTask = null;
+    }
+
+    private void TaskListBox_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _draggedTask == null || _isTaskDragging) return;
+
+        Point pos = e.GetPosition(TaskListBox);
+        Vector diff = _dragStartPoint - pos;
+
+        if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+        {
+            _isTaskDragging = true;
+            try
+            {
+                var data = new DataObject("TaskItem", _draggedTask);
+                DragDrop.DoDragDrop(TaskListBox, data, DragDropEffects.Move);
+            }
+            finally
+            {
+                _isTaskDragging = false;
+                _draggedTask = null;
+                RemoveInsertionAdorner();
+            }
+        }
+    }
+
+    private void TaskListBox_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("TaskItem"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            RemoveInsertionAdorner();
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        Point pt = e.GetPosition(TaskListBox);
+        var targetItem = FindListBoxItemAt(pt);
+
+        if (targetItem != null)
+        {
+            Point itemPt = e.GetPosition(targetItem);
+            bool isAfter = itemPt.Y > targetItem.ActualHeight / 2.0;
+            UpdateInsertionAdorner(targetItem, isAfter);
+        }
+        else
+        {
+            var lastItem = GetLastVisibleListBoxItem();
+            if (lastItem != null)
+            {
+                UpdateInsertionAdorner(lastItem, true);
+            }
+            else
+            {
+                RemoveInsertionAdorner();
+            }
+        }
+    }
+
+    private void TaskListBox_DragLeave(object sender, DragEventArgs e)
+    {
+        Point pt = e.GetPosition(TaskListBox);
+        if (pt.X < 0 || pt.Y < 0 || pt.X > TaskListBox.ActualWidth || pt.Y > TaskListBox.ActualHeight)
+        {
+            RemoveInsertionAdorner();
+        }
+    }
+
+    private void TaskListBox_Drop(object sender, DragEventArgs e)
+    {
+        RemoveInsertionAdorner();
+
+        if (!e.Data.GetDataPresent("TaskItem")) return;
+        if (e.Data.GetData("TaskItem") is not TaskItem sourceTask) return;
+
+        Point pt = e.GetPosition(TaskListBox);
+        var targetItem = FindListBoxItemAt(pt);
+
+        TaskItem? targetTask = null;
+        bool isAfter = false;
+
+        if (targetItem != null)
+        {
+            targetTask = targetItem.DataContext as TaskItem;
+            Point itemPt = e.GetPosition(targetItem);
+            isAfter = itemPt.Y > targetItem.ActualHeight / 2.0;
+        }
+        else
+        {
+            var lastItem = GetLastVisibleListBoxItem();
+            if (lastItem != null)
+            {
+                targetTask = lastItem.DataContext as TaskItem;
+                isAfter = true;
+            }
+        }
+
+        if (targetTask != null && !ReferenceEquals(sourceTask, targetTask))
+        {
+            _viewModel.ReorderTask(sourceTask, targetTask, isAfter);
+            TaskListBox.SelectedItem = sourceTask;
+        }
+    }
+
+    private ListBoxItem? FindListBoxItemAt(Point pt)
+    {
+        var hit = TaskListBox.InputHitTest(pt) as DependencyObject;
+        while (hit != null && hit != TaskListBox)
+        {
+            if (hit is ListBoxItem lbi) return lbi;
+            hit = VisualTreeHelper.GetParent(hit);
+        }
+        return null;
+    }
+
+    private ListBoxItem? GetLastVisibleListBoxItem()
+    {
+        if (TaskListBox.Items.Count == 0) return null;
+        for (int i = TaskListBox.Items.Count - 1; i >= 0; i--)
+        {
+            if (TaskListBox.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
+                return item;
+        }
+        return null;
+    }
+
+    private void UpdateInsertionAdorner(ListBoxItem item, bool isAfter)
+    {
+        var layer = AdornerLayer.GetAdornerLayer(item);
+        if (layer == null) return;
+
+        if (_dropAdorner != null)
+        {
+            if (_dropAdorner.AdornedElement == item)
+            {
+                _dropAdorner.IsAfter = isAfter;
+                return;
+            }
+            var oldLayer = AdornerLayer.GetAdornerLayer(_dropAdorner.AdornedElement);
+            oldLayer?.Remove(_dropAdorner);
+            _dropAdorner = null;
+        }
+
+        _dropAdorner = new TaskDropAdorner(item, isAfter);
+        layer.Add(_dropAdorner);
+    }
+
+    private void RemoveInsertionAdorner()
+    {
+        if (_dropAdorner != null)
+        {
+            var layer = AdornerLayer.GetAdornerLayer(_dropAdorner.AdornedElement);
+            layer?.Remove(_dropAdorner);
+            _dropAdorner = null;
+        }
+    }
+
+    private void TaskListBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkMarkDoneCommand.CanExecute(null))
+                    _viewModel.BulkMarkDoneCommand.Execute(null);
+            }
+            else if (_viewModel.SelectedTask is { } task && !task.IsClosed)
+            {
+                task.IsDone = !task.IsDone;
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkTrashCommand.CanExecute(null))
+                    _viewModel.BulkTrashCommand.Execute(null);
+            }
+            else if (_viewModel.DeleteSelectedCommand.CanExecute(null))
+            {
+                _viewModel.DeleteSelectedCommand.Execute(null);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            if (_viewModel.SelectedTasks.Count > 1)
+            {
+                if (_viewModel.BulkTogglePinCommand.CanExecute(null))
+                    _viewModel.BulkTogglePinCommand.Execute(null);
+            }
+            else if (_viewModel.SelectedTask is { } task)
+            {
+                _viewModel.TogglePinCommand.Execute(task);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter)
+        {
+            if (_viewModel.SelectedTask is not null)
+            {
+                TitleTextBox.Focus();
+                TitleTextBox.SelectAll();
+                e.Handled = true;
+            }
+        }
+    }
+
+    private void SearchTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Down)
+        {
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            SearchTextBox.Text = string.Empty;
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+    }
+
+    private void MoveFocusToTaskList()
+    {
+        if (TaskListBox.Items.Count > 0)
+        {
+            if (TaskListBox.SelectedIndex < 0)
+                TaskListBox.SelectedIndex = 0;
+
+            TaskListBox.Focus();
+            if (TaskListBox.ItemContainerGenerator.ContainerFromIndex(TaskListBox.SelectedIndex) is ListBoxItem item)
+            {
+                item.Focus();
+            }
+        }
+    }
+
+    private void NewSubtaskTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            if (_viewModel.SelectedTaskDetail?.AddSubtaskCommand.CanExecute(null) == true)
+            {
+                _viewModel.SelectedTaskDetail.AddSubtaskCommand.Execute(null);
+                e.Handled = true;
+            }
+        }
+    }
+
     private void ShowShortcuts_Click(object sender, RoutedEventArgs e) => new ShortcutsWindow { Owner = this }.ShowDialog();
 
     private void QuickAdd_Click(object sender, RoutedEventArgs e) => ShowQuickAdd();
+
+    private void QuickAddInput_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            CommitInlineQuickAdd();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            QuickAddInput.Text = string.Empty;
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
+    }
+
+    private void QuickAddInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(QuickAddInput.Text))
+        {
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var parsed = QuickEntryParser.Parse(QuickAddInput.Text);
+        var parts = new List<string>();
+        if (parsed.DueDate is { } due)
+        {
+            parts.Add(due.TimeOfDay == TimeSpan.Zero
+                ? $"Due: {due:ddd, MMM d}"
+                : $"Due: {due:ddd, MMM d 'at' h:mmtt}");
+        }
+        if (parsed.Tags.Count > 0)
+        {
+            parts.Add(string.Join(" ", parsed.Tags.Select(t => $"#{t}")));
+        }
+
+        if (parts.Count > 0)
+        {
+            QuickAddPreviewText.Text = string.Join("  ·  ", parts);
+            QuickAddPreviewBorder.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void QuickAddInput_CommitClick(object sender, RoutedEventArgs e)
+    {
+        CommitInlineQuickAdd();
+        QuickAddInput.Focus();
+    }
+
+    private void CommitInlineQuickAdd()
+    {
+        var text = QuickAddInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var task = _viewModel.AddQuickTask(text);
+        QuickAddInput.Text = string.Empty;
+        QuickAddPreviewBorder.Visibility = Visibility.Collapsed;
+        if (task is not null)
+        {
+            TaskListBox.ScrollIntoView(task);
+        }
+    }
 
     // About Tasky's "Replay welcome tour" button (see ReplayTourRequested below) and the
     // first-run auto-show both land here. HasSeenWelcomeTour is set true regardless of how the
@@ -525,6 +924,14 @@ public partial class MainWindow : Window
         {
             SearchTextBox.Focus();
             SearchTextBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control && _viewModel.ViewMode != ViewMode.Calendar)
+        {
+            QuickAddInput.Focus();
+            QuickAddInput.SelectAll();
             e.Handled = true;
             return;
         }
@@ -765,7 +1172,11 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+    private void Exit_Click(object sender, RoutedEventArgs e)
+    {
+        _isExplicitExit = true;
+        Close();
+    }
 
     private void About_Click(object sender, RoutedEventArgs e)
     {
@@ -815,8 +1226,35 @@ public partial class MainWindow : Window
     // this is the once-a-day silent check gated by Settings > "Automatically check for updates".
     // Failures here are logged, not shown - a background check nagging the user with an error
     // dialog over a flaky connection would be worse than just trying again tomorrow.
+    // A copy of Tasky running outside the folder the installer registered - in practice one that
+    // updated itself from the legacy zip before the installer existed - works fine but is invisible
+    // to Windows, and its next update would install a second copy elsewhere rather than replacing
+    // it. Said once, then never again: this is a nudge, not a nag, and a deliberately portable copy
+    // is a legitimate thing to run.
+    private void WarnIfUnmanagedInstall()
+    {
+        if (_viewModel.HasSeenUnmanagedInstallNotice) return;
+        if (!UpdateService.IsRunningUnmanagedInstall()) return;
+
+        _viewModel.HasSeenUnmanagedInstallNotice = true;
+        ThemedMessageBox.Show(
+            "This copy of Tasky isn't registered with Windows, so it won't appear in the Start Menu "
+            + "or in Settings > Apps." + Environment.NewLine + Environment.NewLine
+            + "Download the latest installer from the releases page and run it once to fix that - "
+            + "it'll upgrade this copy in place and keep all your tasks.",
+            "Tasky isn't installed", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private async Task CheckForUpdatesInBackgroundAsync()
     {
+        // Sweeps the ~50MB installer a previous update left staged - see
+        // UpdateService.CleanUpStaleStaging for why nothing else is in a position to do it.
+        // Awaited rather than fire-and-forget: it reads and may delete the same staging folder
+        // GetPendingStagedUpdate reads on the very next line. This whole method is already
+        // fire-and-forget from the caller, so awaiting here costs the UI nothing.
+        await Task.Run(UpdateService.CleanUpStaleStaging);
+        WarnIfUnmanagedInstall();
+
         var pending = UpdateService.GetPendingStagedUpdate();
         if (pending is not null)
         {
@@ -1105,7 +1543,11 @@ public partial class MainWindow : Window
 
     private void TitleTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        // No action needed - just here to handle events
+        if (e.Key == Key.Escape)
+        {
+            MoveFocusToTaskList();
+            e.Handled = true;
+        }
     }
 
     private static FrameworkElement? FindFirstVisualDescendantWithContextMenu(DependencyObject root)

@@ -1112,22 +1112,49 @@
                     <!-- Content only - excludes the status action row above (checkmark/pin/trash/delete/info),
                          which must stay usable even on a Completed or Trashed task. -->
                     <StackPanel IsEnabled="{Binding IsEditable}">
-                        <!-- Task metadata fields: Due date/Priority/Repeat share one compact row since
-                             each is just a label+control pair; Tags stays on its own row below,
-                             both because its chips wrap onto following lines and to keep it last. -->
-                        <WrapPanel Margin="0,14,0,0" VerticalAlignment="Center">
-                            <!-- Due date & Time -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,16,8" VerticalAlignment="Center">
-                                <TextBlock Text="Due date:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                <DatePicker SelectedDate="{Binding Task.DueDate}" HorizontalAlignment="Left" Width="130"/>
-                                <ComboBox IsEditable="True" Width="105" Margin="6,0,0,0"
+                        <!-- Task metadata: every field is one item in a single WrapPanel, so at a wide
+                             editor pane they all sit on one row and they reflow onto a second and
+                             third row as the pane narrows (splitter drag, sidebar collapse, window
+                             resize) rather than each field claiming a fixed row of its own.
+
+                             Two things make the single row actually reachable: Tags and the subtasks
+                             entry point are items in this same panel instead of separate stacked
+                             rows below it, and the optional controls (due time, clear-date, the
+                             "every N" interval) collapse when they don't apply, so an untouched task
+                             asks for the least width. Widths are fixed per control so wrapping
+                             happens at predictable points instead of controls squeezing. -->
+                        <WrapPanel Margin="0,14,0,0">
+                            <WrapPanel.Resources>
+                                <Style x:Key="EditorFieldLabel" TargetType="TextBlock">
+                                    <Setter Property="FontSize" Value="13"/>
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="Margin" Value="0,0,7,0"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+                                </Style>
+                                <!-- The gap between fields lives here so every item wraps with the
+                                     same rhythm; the bottom margin is the gutter between wrapped rows. -->
+                                <Style x:Key="EditorField" TargetType="StackPanel">
+                                    <Setter Property="Orientation" Value="Horizontal"/>
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="Margin" Value="0,0,16,8"/>
+                                </Style>
+                            </WrapPanel.Resources>
+
+                            <!-- Due date & time -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Due date:" Style="{StaticResource EditorFieldLabel}"/>
+                                <DatePicker SelectedDate="{Binding Task.DueDate}" Width="122" VerticalAlignment="Center"/>
+                                <!-- Collapsed rather than merely disabled without a date: a greyed,
+                                     empty combo box next to the picker read as a broken control, and
+                                     it cost ~110px of the width the single row needs. -->
+                                <ComboBox IsEditable="True" Width="100" Margin="6,0,0,0" VerticalAlignment="Center"
                                           ItemsSource="{Binding DueTimeOptions}"
                                           Text="{Binding SelectedDueTime, UpdateSourceTrigger=LostFocus}"
                                           SelectedItem="{Binding SelectedDueTime}"
                                           ToolTip="Due time (e.g. 09:00 AM, 3:00 PM, or All Day)"
-                                          IsEnabled="{Binding HasDueDate}"/>
+                                          Visibility="{Binding HasDueDate, Converter={StaticResource BoolToVis}}"/>
                                 <Button Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                        VerticalAlignment="Center"
                                         ToolTip="Clear due date &amp; time"
                                         Command="{Binding ClearDueDateCommand}"
                                         Visibility="{Binding HasDueDate, Converter={StaticResource BoolToVis}}">
@@ -1136,50 +1163,91 @@
                             </StackPanel>
 
                             <!-- Priority -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,16,8" VerticalAlignment="Center">
-                                <TextBlock Text="Priority:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                <ComboBox ItemsSource="{Binding PriorityOptions}" SelectedItem="{Binding Task.Priority}"
-                                          HorizontalAlignment="Left" Width="100"/>
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Priority:" Style="{StaticResource EditorFieldLabel}"/>
+                                <ComboBox Width="96" VerticalAlignment="Center"
+                                          ItemsSource="{Binding PriorityOptions}" SelectedItem="{Binding Task.Priority}"/>
                             </StackPanel>
 
                             <!-- Repeat -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,16,8" VerticalAlignment="Center">
-                                <TextBlock Text="Repeat:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                <ComboBox ItemsSource="{Binding RecurrenceOptions}" SelectedItem="{Binding Task.Recurrence}"
-                                          HorizontalAlignment="Left" Width="100"/>
-                                <TextBlock Text="every" VerticalAlignment="Center" FontSize="13" Margin="10,0,6,0"
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Repeat:" Style="{StaticResource EditorFieldLabel}"/>
+                                <ComboBox Width="96" VerticalAlignment="Center"
+                                          ItemsSource="{Binding RecurrenceOptions}" SelectedItem="{Binding Task.Recurrence}"/>
+                                <TextBlock Text="every" VerticalAlignment="Center" FontSize="13" Margin="8,0,6,0"
                                            Foreground="{DynamicResource ForegroundBrush}"
                                            Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
-                                <ComboBox ItemsSource="{Binding RecurrenceIntervalOptions}" SelectedItem="{Binding Task.RecurrenceInterval}"
-                                          HorizontalAlignment="Left" Width="55"
+                                <ComboBox Width="55" VerticalAlignment="Center"
+                                          ItemsSource="{Binding RecurrenceIntervalOptions}" SelectedItem="{Binding Task.RecurrenceInterval}"
                                           Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
                             </StackPanel>
-                        </WrapPanel>
 
-                        <TextBlock Text="{Binding RecurrenceSummary}" FontSize="11" FontStyle="Italic" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"
-                                   Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+                            <!-- Tags -->
+                            <StackPanel Style="{StaticResource EditorField}">
+                                <TextBlock Text="Tags:" Style="{StaticResource EditorFieldLabel}"/>
+                                <Button x:Name="TagPickerButton" Padding="8,4" VerticalAlignment="Center"
+                                        Command="{Binding ToggleTagPopupCommand}" ToolTip="Select or create tags"
+                                        AutomationProperties.Name="Select or create tags">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xE8EC;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Tags" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="&#xE70D;" FontFamily="{StaticResource FluentIconFont}" FontSize="8" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
 
-                        <Grid Margin="0,10,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Tags:" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"
-                                       Foreground="{DynamicResource ForegroundBrush}"/>
-                            <Button Grid.Column="1" x:Name="TagPickerButton"
-                                    HorizontalAlignment="Left" Padding="8,4"
-                                    Command="{Binding ToggleTagPopupCommand}" ToolTip="Select or create tags"
-                                    AutomationProperties.Name="Select or create tags">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="&#xE8EC;" FontFamily="{StaticResource FluentIconFont}" FontSize="11" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="Tags" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                    <TextBlock Text="&#xE70D;" FontFamily="{StaticResource FluentIconFont}" FontSize="8" VerticalAlignment="Center"/>
+                            <!-- Subtasks entry point - shown only while the section itself is hidden
+                                 (Settings > "Always show the Subtasks section in the editor" off, and
+                                 this task has no subtasks yet), so an unused feature costs no row of
+                                 its own. Collapsing it lets the remaining fields reflow. -->
+                            <Button Margin="0,0,16,8" Padding="0" VerticalAlignment="Center"
+                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                    Command="{Binding ShowSubtasksCommand}"
+                                    Visibility="{Binding ShowAddSubtasksButton, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="Add subtasks to this task">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE710;" FontFamily="{StaticResource FluentIconFont}" FontSize="11"
+                                               Foreground="{DynamicResource TertiaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Add subtasks" FontSize="12.5"
+                                               Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
-                        </Grid>
+                        </WrapPanel>
+
+                        <!-- Full width below the wrap row: both of these are variable-length and would
+                             otherwise force an early wrap on the fields above. -->
+                        <TextBlock Text="{Binding RecurrenceSummary}"
+                                   FontSize="11" FontStyle="Italic" Margin="0,0,0,6" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TertiaryBrush}"
+                                   Visibility="{Binding Task.Recurrence, Converter={StaticResource EnumNotEqualsVis}, ConverterParameter=None}"/>
+
+                        <!-- No Visibility binding needed: with no tags the ItemsControl has zero
+                             desired size, so it takes no space. The gutter below the chips lives on
+                             the chips themselves. -->
+                        <ItemsControl ItemsSource="{Binding Task.Tags}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding}" FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                                            <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
+                                                       Cursor="Hand" VerticalAlignment="Center">
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <Popup PlacementTarget="{Binding ElementName=TagPickerButton}" Placement="Bottom"
                                IsOpen="{Binding IsTagPopupOpen, Mode=TwoWay}" StaysOpen="False" AllowsTransparency="True">
                             <Border Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource SecondaryBrush}"
@@ -1228,39 +1296,17 @@
                                 </StackPanel>
                             </Border>
                         </Popup>
-                        <ItemsControl ItemsSource="{Binding Task.Tags}" Margin="0,6,0,0">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="{DynamicResource TagChipBrush}" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding}" FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}"/>
-                                            <TextBlock Text=" &#x2715;" FontSize="10" Foreground="{DynamicResource ForegroundBrush}" Margin="4,0,0,0"
-                                                       Cursor="Hand" VerticalAlignment="Center">
-                                                <TextBlock.InputBindings>
-                                                    <MouseBinding MouseAction="LeftClick"
-                                                                  Command="{Binding DataContext.RemoveTagCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                  CommandParameter="{Binding}"/>
-                                                </TextBlock.InputBindings>
-                                            </TextBlock>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
 
                         <!-- Subtasks / Checklist Section -->
                         <Border Background="{DynamicResource SidebarBackgroundBrush}" CornerRadius="6"
-                                Padding="12,10" Margin="0,8,0,8" BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1">
+                                Padding="12,10" Margin="0,8,0,8" BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="1"
+                                Visibility="{Binding IsSubtasksVisible, Converter={StaticResource BoolToVis}}">
                             <StackPanel>
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
@@ -1275,6 +1321,14 @@
                                     <TextBlock Grid.Column="2" Text="{Binding SubtaskProgressText}" FontSize="11"
                                                Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"
                                                Visibility="{Binding HasSubtasks, Converter={StaticResource BoolToVis}}"/>
+                                    <!-- Disabled rather than hidden when there's nothing to do (no
+                                         subtasks and the "always show" setting pinning the section
+                                         open) - see DismissSubtasksCommand's CanExecute. -->
+                                    <Button Grid.Column="3" Style="{StaticResource IconButton}" Width="20" Height="20" Margin="8,0,0,0"
+                                            Command="{Binding DismissSubtasksCommand}" ToolTip="Remove subtasks from this task"
+                                            AutomationProperties.Name="Remove subtasks from this task">
+                                        <TextBlock Text="&#xE711;" FontSize="8" Style="{StaticResource IconGlyph}"/>
+                                    </Button>
                                 </Grid>
 
                                 <ItemsControl ItemsSource="{Binding Subtasks}">

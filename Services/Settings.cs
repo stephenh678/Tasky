@@ -12,6 +12,10 @@ public class Settings
     // the setting is still offered here so preferences stay consistent across platforms - marking
     // done stays reachable via right-click > Mark Completed either way.
     public bool ShowDoneCheckbox { get; set; } = true;
+    // Off unless asked for: the editor's Subtasks section stays hidden behind an "Add subtasks"
+    // link on tasks that have none, so a feature most tasks never use costs no space. A task that
+    // already has subtasks shows them regardless - see TaskDetailViewModel.IsSubtasksVisible.
+    public bool AlwaysShowSubtasks { get; set; }
     public bool SidebarCollapsed { get; set; }
     public string? LastSelectedTaskId { get; set; }
     public double? WindowLeft { get; set; }

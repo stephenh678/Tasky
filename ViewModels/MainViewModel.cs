@@ -265,7 +265,8 @@ public class MainViewModel : INotifyPropertyChanged
             SelectedTaskDetail?.Detach();
             SelectedTaskDetail = value is null
                 ? null
-                : new TaskDetailViewModel(value, OnTaskChanged, GetAllTagNames, RequestDebouncedSave, PushUndo);
+                : new TaskDetailViewModel(value, OnTaskChanged, GetAllTagNames, RequestDebouncedSave, PushUndo,
+                    () => _settings.AlwaysShowSubtasks, () => FocusSubtaskRequested?.Invoke());
         }
     }
 
@@ -315,6 +316,22 @@ public class MainViewModel : INotifyPropertyChanged
             _settings.ShowDoneCheckbox = value;
             _settingsStore.Save(_settings);
             OnPropertyChanged();
+        }
+    }
+
+    // Off by default: most tasks never need subtasks, so the editor stays uncluttered and the
+    // section is one click away via "Add subtasks". TaskDetailViewModel reads this through a
+    // callback rather than a snapshot, so the open task has to be told the answer changed.
+    public bool AlwaysShowSubtasks
+    {
+        get => _settings.AlwaysShowSubtasks;
+        set
+        {
+            if (_settings.AlwaysShowSubtasks == value) return;
+            _settings.AlwaysShowSubtasks = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+            SelectedTaskDetail?.NotifySubtasksVisibilityChanged();
         }
     }
 
@@ -643,6 +660,10 @@ public class MainViewModel : INotifyPropertyChanged
         : "Google Drive: Disconnected (Click to configure)";
 
     public event Action? FocusTitleRequested;
+
+    // Same ViewModel-signals/code-behind-focuses split as FocusTitleRequested: clicking "Add
+    // subtasks" reveals the section, and the caret should land in its input without a second click.
+    public event Action? FocusSubtaskRequested;
 
     // MainWindow.xaml.cs owns showing SaveViewPromptWindow (dialogs are a View concern, same as
     // LinkPromptWindow/TablePromptWindow are only ever constructed from code-behind) - this just

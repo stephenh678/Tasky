@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using TodoApp.Models;
@@ -248,8 +249,31 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     }
     public string SubtaskProgressText => $"{SubtasksCompleted} of {SubtasksTotal} completed";
 
+    private readonly Func<bool>? _alwaysShowSubtasks;
+    private readonly Action? _requestFocusSubtask;
+    private readonly Func<int, bool>? _confirmRemoveSubtasks;
+    private bool _isSubtasksVisible;
+
+    // Computed rather than a plain settable flag: the section shows if the user opened it for this
+    // task (_isSubtasksVisible), if Settings > "Always show subtasks" is on, or if the task already
+    // has subtasks - that last one keeps existing tasks' subtasks reachable no matter the setting.
+    // A public setter would be a trap here (SetField on the backing field can't tell whether the
+    // computed value actually changed), so the commands below flip the field directly instead.
+    public bool IsSubtasksVisible =>
+        _isSubtasksVisible || (_alwaysShowSubtasks?.Invoke() ?? false) || HasSubtasks;
+
+    public bool ShowAddSubtasksButton => !IsSubtasksVisible;
+
     public RelayCommand AddSubtaskCommand { get; }
     public RelayCommand RemoveSubtaskCommand { get; }
+    public RelayCommand ShowSubtasksCommand { get; }
+    public RelayCommand DismissSubtasksCommand { get; }
+
+    public void NotifySubtasksVisibilityChanged()
+    {
+        OnPropertyChanged(nameof(IsSubtasksVisible));
+        OnPropertyChanged(nameof(ShowAddSubtasksButton));
+    }
 
     // Completed and trashed tasks are meant to be reviewed, restored, or reopened - not edited in
     // place. "Open" (neither) is the only status where content should actually be changeable.
@@ -295,13 +319,18 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     }
 
     public TaskDetailViewModel(TaskItem task, Action onChanged,
-        Func<IEnumerable<string>> getAllTags, Action onTypingChanged, Action<string, Action> pushUndo)
+        Func<IEnumerable<string>> getAllTags, Action onTypingChanged, Action<string, Action> pushUndo,
+        Func<bool>? alwaysShowSubtasks = null, Action? requestFocusSubtask = null,
+        Func<int, bool>? confirmRemoveSubtasks = null)
     {
         Task = task;
         _onChanged = onChanged;
         _getAllTags = getAllTags;
         _onTypingChanged = onTypingChanged;
         _pushUndo = pushUndo;
+        _alwaysShowSubtasks = alwaysShowSubtasks;
+        _requestFocusSubtask = requestFocusSubtask;
+        _confirmRemoveSubtasks = confirmRemoveSubtasks;
 
         Task.PropertyChanged += Task_PropertyChanged;
         Task.Body.CollectionChanged += Body_CollectionChanged;
@@ -389,6 +418,73 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         ClearDueDateCommand = new RelayCommand(_ => Task.DueDate = null, _ => Task.DueDate.HasValue);
         AddSubtaskCommand = new RelayCommand(_ => AddSubtask());
         RemoveSubtaskCommand = new RelayCommand(p => RemoveSubtask(p as ChecklistItem));
+        ShowSubtasksCommand = new RelayCommand(_ =>
+        {
+            _isSubtasksVisible = true;
+            NotifySubtasksVisibilityChanged();
+            _requestFocusSubtask?.Invoke();
+        });
+        DismissSubtasksCommand = new RelayCommand(
+            _ =>
+            {
+                var block = Task.Body.FirstOrDefault(b => b.Type == NoteBlockType.Checklist);
+                var items = block?.ChecklistItems.Count ?? 0;
+
+                if (items > 0)
+                {
+                    // Named count, not a bare "Remove subtasks from this task?": this block lives at
+                    // Body index 1+ (EnsurePrimaryTextBlock keeps Body[0] Text-typed), which is the
+                    // range AdditionalBlocks renders as "More content (synced from Tasky Web)" - so
+                    // one Yes here can also clear a list the user last touched on another device.
+                    if (!ConfirmRemoveSubtasks(items)) return;
+
+                    var blockIndex = Task.Body.IndexOf(block!);
+                    Task.Body.RemoveAt(blockIndex);
+                    _isSubtasksVisible = false;
+                    RefreshSubtasks();
+                    _onChanged();
+
+                    _pushUndo("Remove subtasks", () =>
+                    {
+                        if (!Task.Body.Contains(block!))
+                            Task.Body.Insert(Math.Min(blockIndex, Task.Body.Count), block!);
+                        _isSubtasksVisible = true;
+                        RefreshSubtasks();
+                        _onChanged();
+                    });
+                    return;
+                }
+
+                // Nothing to delete - this is a pure collapse. Only touch the task (and so only
+                // Save()) if there was actually an empty leftover block to drop; otherwise a click
+                // on a task nobody edited would rewrite the whole data file.
+                if (block != null)
+                {
+                    Task.Body.Remove(block);
+                    _onChanged();
+                }
+                _isSubtasksVisible = false;
+                RefreshSubtasks();
+            },
+            // Without this the button is a dead control when "Always show subtasks" is on and the
+            // task has none: the click would clear _isSubtasksVisible, IsSubtasksVisible would keep
+            // returning true because the setting ORs in, and nothing on screen would move.
+            _ => HasSubtasks || !(_alwaysShowSubtasks?.Invoke() ?? false));
+    }
+
+    // Split out so the destructive branch of DismissSubtasksCommand is reachable from tests, which
+    // can't answer a real dialog - the same ViewModel-signals/View-prompts split MainViewModel uses
+    // for BulkSetDueDateRequested and SaveViewRequested.
+    private bool ConfirmRemoveSubtasks(int itemCount)
+    {
+        if (_confirmRemoveSubtasks is not null) return _confirmRemoveSubtasks(itemCount);
+
+        var noun = itemCount == 1 ? "subtask" : "subtasks";
+        return ThemedMessageBox.Show(
+            $"Remove all {itemCount} {noun} from this task?",
+            "Remove Subtasks",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question) == MessageBoxResult.Yes;
     }
 
     public void AddSubtask(string? text = null)
@@ -406,11 +502,16 @@ public class TaskDetailViewModel : INotifyPropertyChanged
         var item = new ChecklistItem { Text = input, IsChecked = false };
         block.ChecklistItems.Add(item);
         NewSubtaskText = string.Empty;
+        // Captured before the flip so undo restores the section's prior state too - undoing the
+        // first subtask on a task that wasn't showing the section shouldn't leave it open and empty.
+        var wasVisible = _isSubtasksVisible;
+        _isSubtasksVisible = true;
         RefreshSubtasks();
         _onChanged();
         _pushUndo($"Add subtask \"{input}\"", () =>
         {
             block.ChecklistItems.Remove(item);
+            _isSubtasksVisible = wasVisible;
             RefreshSubtasks();
         });
     }
@@ -438,6 +539,8 @@ public class TaskDetailViewModel : INotifyPropertyChanged
     {
         OnPropertyChanged(nameof(Subtasks));
         OnPropertyChanged(nameof(HasSubtasks));
+        OnPropertyChanged(nameof(IsSubtasksVisible));
+        OnPropertyChanged(nameof(ShowAddSubtasksButton));
         OnPropertyChanged(nameof(SubtasksTotal));
         OnPropertyChanged(nameof(SubtasksCompleted));
         OnPropertyChanged(nameof(SubtaskProgressPercent));

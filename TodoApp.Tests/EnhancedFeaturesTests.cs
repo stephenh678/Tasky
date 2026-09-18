@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using TodoApp.Converters;
 using TodoApp.Models;
@@ -10,14 +11,19 @@ namespace TodoApp.Tests;
 
 public class EnhancedFeaturesTests
 {
-    private static TaskDetailViewModel CreateDetail(TaskItem task, Action<string, Action>? pushUndo = null)
+    private static TaskDetailViewModel CreateDetail(TaskItem task, Action<string, Action>? pushUndo = null,
+        Func<bool>? alwaysShowSubtasks = null, Action? requestFocusSubtask = null,
+        Func<int, bool>? confirmRemoveSubtasks = null, Action? onChanged = null)
     {
         return new TaskDetailViewModel(
             task,
-            () => { },
+            onChanged ?? (() => { }),
             () => Enumerable.Empty<string>(),
             () => { },
-            pushUndo ?? ((_, _) => { })
+            pushUndo ?? ((_, _) => { }),
+            alwaysShowSubtasks,
+            requestFocusSubtask,
+            confirmRemoveSubtasks
         );
     }
 
@@ -114,6 +120,175 @@ public class EnhancedFeaturesTests
         Assert.Equal(0, vm.SubtasksCompleted);
         Assert.Equal(0.0, vm.SubtaskProgressPercent);
         Assert.Equal("0 of 1 completed", vm.SubtaskProgressText);
+    }
+
+    // Settings > "Always show the Subtasks section in the editor" defaults to off, so a fresh task
+    // hides the section entirely and offers "Add subtasks" in its place.
+    [Fact]
+    public void Subtasks_SettingOff_NewTaskHidesSectionAndOffersAddButton()
+    {
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false);
+
+        Assert.False(vm.IsSubtasksVisible);
+        Assert.True(vm.ShowAddSubtasksButton);
+    }
+
+    [Fact]
+    public void Subtasks_SettingOn_ShowsSectionEvenWithNoSubtasks()
+    {
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => true);
+
+        Assert.True(vm.IsSubtasksVisible);
+        Assert.False(vm.ShowAddSubtasksButton);
+    }
+
+    // A task that already has subtasks must keep showing them regardless of the setting - otherwise
+    // turning the setting off would hide existing data.
+    [Fact]
+    public void Subtasks_SettingOff_StillShowsSectionWhenTaskHasSubtasks()
+    {
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false);
+        vm.AddSubtask("Existing subtask");
+
+        Assert.True(vm.IsSubtasksVisible);
+        Assert.False(vm.ShowAddSubtasksButton);
+    }
+
+    [Fact]
+    public void Subtasks_ShowSubtasksCommand_RevealsSectionAndFocusesInput()
+    {
+        var focused = false;
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false,
+            requestFocusSubtask: () => focused = true);
+
+        vm.ShowSubtasksCommand.Execute(null);
+
+        Assert.True(vm.IsSubtasksVisible);
+        Assert.False(vm.ShowAddSubtasksButton);
+        Assert.True(focused);
+    }
+
+    // Dismissing an empty section needs no confirmation (nothing to lose), so it collapses straight
+    // back to the "Add subtasks" button.
+    [Fact]
+    public void Subtasks_DismissSubtasksCommand_WithNoItems_HidesSectionAgain()
+    {
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false);
+        vm.ShowSubtasksCommand.Execute(null);
+
+        vm.DismissSubtasksCommand.Execute(null);
+
+        Assert.False(vm.IsSubtasksVisible);
+        Assert.True(vm.ShowAddSubtasksButton);
+    }
+
+    // Collapsing an empty section changes nothing on the task, so it must not reach _onChanged and
+    // rewrite the data file - the same "merely interacting with a task must not mark it modified"
+    // invariant EnsurePrimaryTextBlock protects with _suppressModifiedBump.
+    [Fact]
+    public void Subtasks_DismissSubtasksCommand_WithNoBlock_DoesNotSave()
+    {
+        var saved = false;
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false, onChanged: () => saved = true);
+        vm.ShowSubtasksCommand.Execute(null);
+
+        vm.DismissSubtasksCommand.Execute(null);
+
+        Assert.False(saved);
+    }
+
+    [Fact]
+    public void Subtasks_DismissSubtasksCommand_WithItems_RemovesBlockAndSupportsUndo()
+    {
+        var task = new TaskItem();
+        Action? undoAction = null;
+        var confirmedCount = 0;
+        var vm = CreateDetail(task, (_, undo) => undoAction = undo,
+            alwaysShowSubtasks: () => false,
+            confirmRemoveSubtasks: count => { confirmedCount = count; return true; });
+        vm.AddSubtask("One");
+        vm.AddSubtask("Two");
+
+        vm.DismissSubtasksCommand.Execute(null);
+
+        Assert.Equal(2, confirmedCount);
+        Assert.DoesNotContain(task.Body, b => b.Type == NoteBlockType.Checklist);
+        Assert.False(vm.IsSubtasksVisible);
+
+        undoAction!();
+
+        Assert.Contains(task.Body, b => b.Type == NoteBlockType.Checklist);
+        Assert.Equal(2, vm.SubtasksTotal);
+        Assert.True(vm.IsSubtasksVisible);
+    }
+
+    [Fact]
+    public void Subtasks_DismissSubtasksCommand_WhenConfirmDeclined_KeepsSubtasks()
+    {
+        var task = new TaskItem();
+        var vm = CreateDetail(task, alwaysShowSubtasks: () => false,
+            confirmRemoveSubtasks: _ => false);
+        vm.AddSubtask("Keep me");
+
+        vm.DismissSubtasksCommand.Execute(null);
+
+        Assert.Equal(1, vm.SubtasksTotal);
+        Assert.True(vm.IsSubtasksVisible);
+    }
+
+    // With the setting pinning the section open and nothing to delete, the dismiss button would do
+    // nothing at all - CanExecute disables it rather than leaving a dead control on screen.
+    [Fact]
+    public void Subtasks_DismissSubtasksCommand_IsDisabledWhenNothingToDo()
+    {
+        var pinnedEmpty = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => true);
+        Assert.False(pinnedEmpty.DismissSubtasksCommand.CanExecute(null));
+
+        var pinnedWithItems = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => true);
+        pinnedWithItems.AddSubtask("Something to remove");
+        Assert.True(pinnedWithItems.DismissSubtasksCommand.CanExecute(null));
+
+        var unpinnedEmpty = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => false);
+        unpinnedEmpty.ShowSubtasksCommand.Execute(null);
+        Assert.True(unpinnedEmpty.DismissSubtasksCommand.CanExecute(null));
+    }
+
+    // Undo of the first subtask must put the section back the way it was, not leave it open and
+    // empty - DismissSubtasksCommand's undo restores visibility, so this one has to as well.
+    [Fact]
+    public void Subtasks_UndoingFirstSubtask_RestoresHiddenSection()
+    {
+        Action? undoAction = null;
+        var vm = CreateDetail(new TaskItem(), (_, undo) => undoAction = undo,
+            alwaysShowSubtasks: () => false);
+        vm.AddSubtask("Only subtask");
+
+        Assert.True(vm.IsSubtasksVisible);
+
+        undoAction!();
+
+        Assert.False(vm.IsSubtasksVisible);
+        Assert.True(vm.ShowAddSubtasksButton);
+    }
+
+    // The setting is read through a callback, not snapshotted at construction, so toggling it in
+    // Settings takes effect on the already-open task once MainViewModel nudges it.
+    [Fact]
+    public void Subtasks_NotifySubtasksVisibilityChanged_PicksUpToggledSetting()
+    {
+        var alwaysShow = false;
+        var vm = CreateDetail(new TaskItem(), alwaysShowSubtasks: () => alwaysShow);
+        var raised = new List<string>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? "");
+
+        Assert.False(vm.IsSubtasksVisible);
+
+        alwaysShow = true;
+        vm.NotifySubtasksVisibilityChanged();
+
+        Assert.True(vm.IsSubtasksVisible);
+        Assert.Contains(nameof(TaskDetailViewModel.IsSubtasksVisible), raised);
+        Assert.Contains(nameof(TaskDetailViewModel.ShowAddSubtasksButton), raised);
     }
 
     [Fact]

@@ -85,6 +85,13 @@ public partial class MainWindow : Window
             });
         };
 
+        _viewModel.FocusSubtaskRequested += () =>
+        {
+            // Queued at Loaded priority rather than fired inline: the section is still collapsed
+            // when the command runs, and a control that isn't visible yet can't take focus.
+            Dispatcher.InvokeAsync(() => NewSubtaskTextBox.Focus(), DispatcherPriority.Loaded);
+        };
+
         _viewModel.SaveViewRequested += () =>
         {
             var prompt = new SaveViewPromptWindow { Owner = this };

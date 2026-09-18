@@ -476,10 +476,14 @@ export function xamlToHtml(xaml) {
     .replace(/<\/Underline>/gi, '</u>')
     .replace(/<LineBreak\s*\/?>/gi, '<br>')
     .replace(/<Hyperlink[^>]*NavigateUri="([^"]*)"[^>]*>([\s\S]*?)<\/Hyperlink>/gi, '<a href="$1" target="_blank" rel="noopener">$2</a>')
-    .replace(/<List MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
-    .replace(/<List[^>]*>/gi, '<ul>')
+    // The (?=[\s>]) lookaheads matter: without them `<List[^>]*>` also matches `<ListItem>` (the
+    // "Item" is just more [^>]*), so every list item was rewritten to a second `<ul>` before the
+    // ListItem rule below ever saw it - a one-item list came out as the malformed
+    // `<ul><ul><p>x</p></li></ul>`, which browsers then re-nested into a stray empty bullet.
+    .replace(/<List(?=[\s>])[^>]*MarkerStyle="Decimal"[^>]*>/gi, '<ol>')
+    .replace(/<List(?=[\s>])[^>]*>/gi, '<ul>')
     .replace(/<\/List>/gi, '</ul>')
-    .replace(/<ListItem[^>]*>/gi, '<li>')
+    .replace(/<ListItem(?=[\s>])[^>]*>/gi, '<li>')
     .replace(/<\/ListItem>/gi, '</li>')
     .replace(/<Table[^>]*>/gi, '<table class="note-table">')
     .replace(/<\/Table>/gi, '</table>')

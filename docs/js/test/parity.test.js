@@ -945,7 +945,11 @@ describe('xamlToHtml / htmlToXaml', () => {
     assert.ok(xaml.endsWith('</FlowDocument>'));
     assert.ok(xaml.includes('<Bold>Bold</Bold>'));
     assert.ok(xaml.includes('<Italic>italic</Italic>'));
-    assert.ok(xaml.includes('<Hyperlink NavigateUri="https://example.com">Link</Hyperlink>'));
+    // htmlToXaml wraps every inline run in an explicit <Run Text="..."/> rather than emitting bare
+    // text content. Both forms are valid FlowDocument XAML and XamlReader on the desktop side
+    // accepts either; this assertion was written against the bare-text shape the converter has
+    // never produced, so it failed on a converter that was working correctly.
+    assert.ok(xaml.includes('<Hyperlink NavigateUri="https://example.com"><Run Text="Link"/></Hyperlink>'));
   });
 
   test('htmlToXaml with empty html returns empty or fallback', () => {

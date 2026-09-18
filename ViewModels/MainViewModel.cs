@@ -362,6 +362,18 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool HasSeenUnmanagedInstallNotice
+    {
+        get => _settings.HasSeenUnmanagedInstallNotice;
+        set
+        {
+            if (_settings.HasSeenUnmanagedInstallNotice == value) return;
+            _settings.HasSeenUnmanagedInstallNotice = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+        }
+    }
+
     public bool AutoCheckForUpdates
     {
         get => _settings.AutoCheckForUpdates;

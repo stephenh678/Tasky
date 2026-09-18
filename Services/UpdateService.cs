@@ -92,6 +92,63 @@ public static class UpdateService
         return new UpdateInfo(latestVersion, htmlUrl, body, downloadUrl, assetName!);
     }
 
+    /// <summary>
+    /// True when this copy of Tasky is running from somewhere the installer didn't put it - no
+    /// Apps &amp; Features registration, or one pointing at a different folder.
+    ///
+    /// The case that matters is the migration: a copy predating the installer updates itself from
+    /// the legacy zip, which drops the new binary over the old folder (Desktop, Downloads,
+    /// wherever it was unpacked) and cannot register anything. That copy works, but Windows knows
+    /// nothing about it - no Start Menu entry, nothing in Settings &gt; Apps - and its next update
+    /// would install a SECOND copy under %LOCALAPPDATA%\Programs, orphaning this one. Telling the
+    /// user once is what turns a stranded install into a managed one.
+    /// </summary>
+    public static bool IsRunningUnmanagedInstall()
+    {
+        try
+        {
+            var current = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            // Inno registers a per-user install under HKCU, keyed on the AppId in
+            // installer/Tasky.iss with Inno's own "_is1" suffix.
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8F1C5A2E-4B3D-4C7A-9E6F-2A8D0B4E7C15}_is1");
+            var registered = key?.GetValue("InstallLocation") as string;
+            if (string.IsNullOrWhiteSpace(registered)) return true;
+            return !string.Equals(
+                registered.TrimEnd(Path.DirectorySeparatorChar), current, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            // Can't tell - say nothing rather than nag on a guess.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the staging folder when what's in it is no longer newer than what's running - i.e.
+    /// after an update was applied, or after this version was installed some other way. The
+    /// staged installer is ~50MB, and nothing else ever removes it: ApplyUpdateAndRestart can't
+    /// (the installer it just launched is about to close this process, and the file is in use),
+    /// and StageUpdateAsync only clears the folder when a NEXT update is downloaded. Without this
+    /// a user who updates once and never again keeps that 50MB forever.
+    /// Safe to call at startup on a background thread; failures are deliberately ignored.
+    /// </summary>
+    public static void CleanUpStaleStaging()
+    {
+        try
+        {
+            if (!Directory.Exists(StagingRoot)) return;
+            // Still-pending staged update: leave it, the user may click Restart to apply it.
+            if (GetPendingStagedUpdate() is not null) return;
+            Directory.Delete(StagingRoot, recursive: true);
+        }
+        catch (Exception)
+        {
+            // A locked file (the installer may still be finishing) or a permissions problem -
+            // there'll be another startup.
+        }
+    }
+
     /// <summary>A staged download left behind by a previous session's "Later" click - lets the
     /// caller offer to finish installing without hitting the network or re-downloading ~75MB.
     /// Returns null if nothing valid is staged (including a stale stage for a version that's no
@@ -185,7 +242,11 @@ public static class UpdateService
         Process.Start(new ProcessStartInfo
         {
             FileName = installerPath,
-            Arguments = "/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /LAUNCHAFTER=1",
+            // No /RESTARTAPPLICATIONS: that asks Restart Manager to restart what it closed, which
+            // together with /LAUNCHAFTER=1 is two independent relaunch paths for one update. Tasky
+            // has no single-instance mutex, so both firing means two copies running against the
+            // same data file. Tasky.iss sets RestartApplications=no for the same reason.
+            Arguments = "/SILENT /CLOSEAPPLICATIONS /LAUNCHAFTER=1",
             UseShellExecute = true,
         });
     }

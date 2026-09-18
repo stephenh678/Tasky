@@ -1,8 +1,25 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Microsoft.Win32;
 
 namespace TodoApp.Services;
+
+/// <summary>
+/// The locations <see cref="UninstallCleanupService"/> operates on. Defaults resolve to the real
+/// per-user folders; tests substitute temp directories so the deletion logic can be exercised
+/// without a machine's actual profile being at stake.
+/// </summary>
+public sealed record UninstallCleanupPaths(string SettingsFolder, string UpdateCacheFolder, string DataFolder)
+{
+    public static UninstallCleanupPaths Default { get; } = new(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tasky"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tasky"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky"));
+}
+
+/// <summary>What a cleanup pass did, so the caller can report failures somewhere durable.</summary>
+public sealed record UninstallCleanupResult(IReadOnlyList<string> Failures, string? ExternalDataFilePath);
 
 /// <summary>
 /// Removes the per-user state Tasky leaves outside its own install folder. Invoked as
@@ -23,45 +40,65 @@ public static class UninstallCleanupService
     /// asks the user; the default is to keep it, since it's the only genuinely irreplaceable thing
     /// here - everything else is a cache or a preference.
     /// </param>
-    public static void CleanUp(bool removeTaskData)
+    /// <param name="paths">Overridden by tests; production passes null for the real profile.</param>
+    /// <param name="removeStartupRegistration">
+    /// Overridden by tests so they never touch the real HKCU Run key.
+    /// </param>
+    public static UninstallCleanupResult CleanUp(
+        bool removeTaskData,
+        UninstallCleanupPaths? paths = null,
+        Action? removeStartupRegistration = null)
     {
-        // Ordered so that anything that could re-create a folder runs before that folder is
-        // deleted - notification cleanup in particular touches the registry, not the filesystem,
-        // but keeping it first matches the order the old uninstaller established.
+        paths ??= UninstallCleanupPaths.Default;
+        removeStartupRegistration ??= RemoveStartupRegistration;
+
+        // Captured before anything is deleted: it's read out of the settings file that the very
+        // next step removes.
+        var externalFile = GetExternalDataFilePath(paths);
+
+        var failures = new List<string>();
+        void TryStep(string what, Action step)
+        {
+            try
+            {
+                step();
+            }
+            catch (Exception ex)
+            {
+                // Collected rather than logged: AppLogger writes into the data folder this pass
+                // may be deleting, and its queued writes are dropped when the caller exits. The
+                // caller persists these somewhere that survives instead.
+                failures.Add($"{what}: {ex.Message}");
+            }
+        }
+
         TryStep("notification registration", ToastNotificationService.Uninstall);
-        TryStep("startup registration", RemoveStartupRegistration);
-        TryStep("settings and Google Drive sign-in cache",
-            () => DeleteDirectory(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tasky")));
-        TryStep("update staging cache",
-            () => DeleteDirectory(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tasky")));
+        TryStep("startup registration", removeStartupRegistration);
+        TryStep("settings and Google Drive sign-in cache", () => DeleteDirectory(paths.SettingsFolder));
+        TryStep("update staging cache", () => DeleteDirectory(paths.UpdateCacheFolder));
 
         if (removeTaskData)
         {
-            // Last, and nothing may log afterwards: AppLogger writes into this very folder, so a
-            // single log line after this point silently recreates it containing nothing but
-            // debug.log. The caller exits the process immediately rather than returning through
-            // OnExit's flush for the same reason.
-            TryStep("task data", () => DeleteDirectory(DataFolder));
+            // Last: AppLogger writes into this folder, so anything that logs after this point
+            // recreates it containing nothing but debug.log.
+            TryStep("task data", () => DeleteDirectory(paths.DataFolder));
         }
+
+        return new UninstallCleanupResult(failures, externalFile);
     }
 
-    private static string DataFolder =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
-
     /// <summary>
-    /// The one thing an uninstall can't clean up for the user, surfaced so the installer can say
-    /// so: "Save Data File As..." lets a .tasky file live anywhere, and only the most recent path
-    /// is remembered. Returns null when the current data file is inside the folder Tasky owns (so
-    /// removing that folder covers it) or when there's nothing recorded.
+    /// The one thing an uninstall can't clean up for the user: "Save Data File As..." lets a
+    /// .tasky file live anywhere, and only the most recent path is remembered. Returns null when
+    /// the current data file is inside the folder Tasky owns (so removing that folder covers it)
+    /// or when there's nothing recorded.
     /// </summary>
-    public static string? GetExternalDataFilePath()
+    public static string? GetExternalDataFilePath(UninstallCleanupPaths? paths = null)
     {
+        paths ??= UninstallCleanupPaths.Default;
         try
         {
-            var settingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tasky", "settings.json");
+            var settingsPath = Path.Combine(paths.SettingsFolder, "settings.json");
             if (!File.Exists(settingsPath)) return null;
 
             var settings = System.Text.Json.JsonSerializer.Deserialize<Settings>(File.ReadAllText(settingsPath));
@@ -73,7 +110,7 @@ public static class UninstallCleanupService
 
             // Compare with a trailing separator on both sides, or a sibling folder like
             // "Documents\Tasky2" counts as living inside "Documents\Tasky".
-            var owned = DataFolder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var owned = paths.DataFolder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             var candidate = directory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             return candidate.StartsWith(owned, StringComparison.OrdinalIgnoreCase) ? null : lastFile;
         }
@@ -97,20 +134,5 @@ public static class UninstallCleanupService
     private static void DeleteDirectory(string path)
     {
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
-    }
-
-    // A cleanup pass must never fail the uninstall: whatever can't be removed here is a leftover
-    // the user can delete by hand, whereas an exception would leave Inno reporting a failed
-    // uninstall for a file that was already going to be gone anyway.
-    private static void TryStep(string what, Action step)
-    {
-        try
-        {
-            step();
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Warn("UninstallCleanup", $"Could not remove {what}: {ex.Message}");
-        }
     }
 }

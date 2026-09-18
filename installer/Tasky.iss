@@ -60,7 +60,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Use Restart Manager to detect and close a running Tasky instead of failing on a locked
 ; Tasky.exe. Tasky has no single-instance mutex, so file locks are what identifies it.
 CloseApplications=yes
-RestartApplications=yes
+; ...but deliberately do NOT let Restart Manager restart it. Relaunching is handled explicitly
+; below - the postinstall entry interactively, /LAUNCHAFTER=1 when the in-app updater drives this
+; silently. With RestartApplications=yes BOTH could fire for the same update, and since Tasky has
+; no single-instance mutex that means two windows, two tray icons and two autosave loops writing
+; the same .tasky file.
+RestartApplications=no
 MinVersion=10.0.17763
 
 [Languages]
@@ -92,10 +97,15 @@ Source: "{#SourcePath}\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
-; Writes the same HKCU Run entry StartupService toggles from Settings, so the two agree. The app
-; reads that key fresh on every check (it keeps no cached copy), so ticking this box simply shows
-; up as "Start with Windows" already enabled.
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startupicon
+
+[Registry]
+; Auto-start MUST go through the HKCU Run value, not a {userstartup} shortcut: StartupService
+; (Services/StartupService.cs) reads this exact key to decide what Settings > "Start with Windows"
+; shows, and keeps no cached copy. A Startup-folder shortcut is invisible to it, so the box would
+; read unchecked while Tasky started anyway - and ticking it to make them agree would add this
+; value on top, launching Tasky twice at every sign-in.
+; The value is the quoted exe path, byte-for-byte what StartupService.SetEnabled writes.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppExe}"""; Tasks: startupicon; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

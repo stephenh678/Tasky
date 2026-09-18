@@ -25,6 +25,10 @@ public class Settings
     public bool WindowMaximized { get; set; }
     public bool CloseToTray { get; set; } = true;
     public bool HasSeenCloseToTrayNotice { get; set; } = false;
+
+    // One-shot: shown to a copy of Tasky running outside the folder the installer registered.
+    // See MainWindow.WarnIfUnmanagedInstall.
+    public bool HasSeenUnmanagedInstallNotice { get; set; }
     public bool IsVerboseLogging { get; set; } = false;
     // Automatic Backups\ snapshots (see TodoStore.BackupExistingFile) - originally fired on every
     // single save, which during active editing meant a new snapshot every ~700ms and only a

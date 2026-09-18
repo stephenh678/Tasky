@@ -76,7 +76,16 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
 $publishedExe = Join-Path $PublishDir 'Tasky.exe'
 if (-not (Test-Path -LiteralPath $publishedExe)) { throw "Publish produced no Tasky.exe." }
 
+# Assert, don't just report: $version names the installer and drives Inno's AppVersion and the
+# DisplayVersion shown in Apps & Features, while $publishedVersion is what the app actually reports
+# to the update check. If a Directory.Build.props override or a stale obj/ ever makes them diverge,
+# the release ships an installer whose name, registration and contents disagree - and the update
+# check would then offer the "new" version to a machine already running it.
 $publishedVersion = (Get-Item -LiteralPath $publishedExe).VersionInfo.FileVersion
+$normalized = ([version]$publishedVersion).ToString(3)
+if ($normalized -ne ([version]$version).ToString(3)) {
+    throw "Version mismatch: TodoApp.csproj says $version but the published Tasky.exe reports $publishedVersion."
+}
 Write-Host "  Published Tasky.exe $publishedVersion"
 
 if (-not (Test-Path -LiteralPath $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }

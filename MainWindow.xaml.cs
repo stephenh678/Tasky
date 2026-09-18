@@ -1226,8 +1226,35 @@ public partial class MainWindow : Window
     // this is the once-a-day silent check gated by Settings > "Automatically check for updates".
     // Failures here are logged, not shown - a background check nagging the user with an error
     // dialog over a flaky connection would be worse than just trying again tomorrow.
+    // A copy of Tasky running outside the folder the installer registered - in practice one that
+    // updated itself from the legacy zip before the installer existed - works fine but is invisible
+    // to Windows, and its next update would install a second copy elsewhere rather than replacing
+    // it. Said once, then never again: this is a nudge, not a nag, and a deliberately portable copy
+    // is a legitimate thing to run.
+    private void WarnIfUnmanagedInstall()
+    {
+        if (_viewModel.HasSeenUnmanagedInstallNotice) return;
+        if (!UpdateService.IsRunningUnmanagedInstall()) return;
+
+        _viewModel.HasSeenUnmanagedInstallNotice = true;
+        ThemedMessageBox.Show(
+            "This copy of Tasky isn't registered with Windows, so it won't appear in the Start Menu "
+            + "or in Settings > Apps." + Environment.NewLine + Environment.NewLine
+            + "Download the latest installer from the releases page and run it once to fix that - "
+            + "it'll upgrade this copy in place and keep all your tasks.",
+            "Tasky isn't installed", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private async Task CheckForUpdatesInBackgroundAsync()
     {
+        // Sweeps the ~50MB installer a previous update left staged - see
+        // UpdateService.CleanUpStaleStaging for why nothing else is in a position to do it.
+        // Awaited rather than fire-and-forget: it reads and may delete the same staging folder
+        // GetPendingStagedUpdate reads on the very next line. This whole method is already
+        // fire-and-forget from the caller, so awaiting here costs the UI nothing.
+        await Task.Run(UpdateService.CleanUpStaleStaging);
+        WarnIfUnmanagedInstall();
+
         var pending = UpdateService.GetPendingStagedUpdate();
         if (pending is not null)
         {

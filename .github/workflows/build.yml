@@ -31,8 +31,12 @@ jobs:
         # installer has - ISCC fails on a missing source file or a bad [Code] section.
         shell: pwsh
         run: |
-          choco install innosetup --no-progress -y
-          ./build-installer.ps1
+          # Pinned: Tasky.iss uses ArchitecturesAllowed=x64compatible, which needs Inno 6.3+, and an
+          # unpinned install lets the toolchain change under the build without anyone choosing it.
+          choco install innosetup --version=6.7.3 --no-progress -y
+          # -SkipZip: the legacy zip is a release artifact no CI step consumes, and building it
+          # adds ~73MB of Compress-Archive churn to every push. Releases run this without the flag.
+          ./build-installer.ps1 -SkipZip
 
   web:
     runs-on: ubuntu-latest

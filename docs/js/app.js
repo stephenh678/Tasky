@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=35';
-import * as drive from './drive.js?v=35';
+﻿import * as auth from './auth.js?v=36';
+import * as drive from './drive.js?v=36';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -29,14 +29,14 @@ import {
   AGENDA_GROUP_LABELS,
   isReminderDue,
   taskToICalendar,
-} from './model.js?v=35';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=35';
-import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=35';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=35';
-import { icon } from './icons.js?v=35';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=35';
-import { storage } from './storage.js?v=35';
-import { openDialog, trapFocus } from './dialog.js?v=35';
+} from './model.js?v=36';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=36';
+import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=36';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=36';
+import { icon } from './icons.js?v=36';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=36';
+import { storage } from './storage.js?v=36';
+import { openDialog, trapFocus } from './dialog.js?v=36';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');
@@ -690,6 +690,7 @@ async function boot() {
 
   const redirectResult = await auth.handleRedirectReturn();
   if (redirectResult.status === 'success') {
+    freshSignIn = true; // see PLACE_RESUME_MS - a real sign-in opens on the dashboard on a phone
     await onSignedIn();
     if (quickAddRequested) openQuickAddFromShortcut();
     armHistoryTrap();
@@ -1729,8 +1730,14 @@ async function restoreFromSnapshot(err) {
 // this device, and a task also gets a #task=<id> hash so the URL itself is a deep link that can
 // be shared or bookmarked (a hash never reaches the server or the OAuth redirect_uri).
 const PLACE_KEY = 'tasky-place';
+// On a phone the remembered place is only for picking up where an OS-killed PWA left off. Past
+// this long away (or right after a real sign-in) it's a fresh visit, which opens on the dashboard
+// rather than wherever the last session happened to end. `at` is refreshed whenever the app is
+// backgrounded (see the visibilitychange handler), so it means "last in the foreground".
+const PLACE_RESUME_MS = 30 * 60 * 1000;
+let freshSignIn = false;
 function savePlace() {
-  storage.set(PLACE_KEY, JSON.stringify({ section: currentSection, taskId: selectedTaskId, view: appEl.dataset.view }));
+  storage.set(PLACE_KEY, JSON.stringify({ section: currentSection, taskId: selectedTaskId, view: appEl.dataset.view, at: Date.now() }));
   const hash = selectedTaskId ? `#task=${encodeURIComponent(selectedTaskId)}` : '';
   if (location.hash !== hash) {
     history.replaceState(history.state, '', location.pathname + location.search + hash);
@@ -1772,6 +1779,26 @@ function restorePlace() {
     renderSidebar();
     renderList();
   }
+  const resumable = !freshSignIn && place?.at && Date.now() - place.at < PLACE_RESUME_MS;
+  freshSignIn = false;
+  // savePlace() writes #task= itself, so a reloaded tab still carries the last session's hash -
+  // only a hash that ISN'T the remembered task is someone actually following a link.
+  const deepLinked = hashId && hashId !== place?.taskId;
+  if (isSinglePaneLayout() && !deepLinked && !resumable) {
+    // The remembered section above still applies (it's what the Tasks tab opens), but an explicit
+    // #task= deep link is the only thing that outranks the dashboard on a fresh visit - including
+    // the very first launch on this phone, which used to open on Today (still the section its
+    // tab bar leads with, so that's what sits behind the dashboard).
+    if (!place) {
+      currentSection = { kind: 'today' };
+      renderSidebar();
+      renderList();
+    }
+    selectedTaskId = null;
+    showEmptyEditor();
+    showMobileView('editor');
+    return;
+  }
   if (task) {
     // A deep link to a task that isn't in the remembered section still has to be reachable -
     // fall back to the one section every non-trashed task belongs to.
@@ -1787,10 +1814,6 @@ function restorePlace() {
     showMobileView('list');
   } else if (place?.view === 'editor' && !place.taskId) {
     showMobileView('editor'); // the dashboard (editor pane's empty state)
-  } else if (!place && isSinglePaneLayout()) {
-    // First launch on this phone: open on Today rather than the Sections list - it's the
-    // highest-frequency destination and matches what the tab bar leads with.
-    selectSection({ kind: 'today' });
   } else {
     savePlace(); // drops a stale #task= hash for a task that no longer exists
   }
@@ -1903,6 +1926,9 @@ document.addEventListener('visibilitychange', () => {
   // The local copy first, unconditionally: a hidden PWA can be killed at any moment, and a
   // snapshot write is cheap, local and far more likely to complete than the Drive round-trip.
   if (document.visibilityState === 'hidden') {
+    // Stamps "last in the foreground" (see PLACE_RESUME_MS). Only ever refreshes an existing
+    // place: sign-out removes it right before a reload that fires this very event.
+    if (!appEl.classList.contains('hidden') && storage.get(PLACE_KEY)) savePlace();
     flushSnapshot();
     if (!dirty) return;
     clearTimeout(saveTimer);

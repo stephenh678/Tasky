@@ -24,13 +24,35 @@ public partial class App : Application
         };
     }
 
-    // Uninstall-Tasky.ps1 launches "Tasky.exe --cleanup-notifications" (and waits for it to exit)
-    // right before deleting the app's files, so the registry-based toast notification
-    // registration ToastNotificationService.Initialize() sets up on first run doesn't get left
-    // behind. Deliberately checked before base.OnStartup - StartupUri would otherwise create and
-    // show MainWindow (and its tray icon) for what's meant to be a silent, instant cleanup pass.
+    // The uninstaller (installer/Tasky.iss [UninstallRun]) runs
+    // "Tasky.exe --uninstall-cleanup [--remove-data]" and waits for it, while Tasky.exe still
+    // exists and before Inno deletes the program files. That removes the per-user state living
+    // outside the install folder - see UninstallCleanupService for why the app owns this rather
+    // than the installer.
+    //
+    // --cleanup-notifications is the narrower predecessor, kept because copies installed before
+    // the Inno installer existed still shipped a PowerShell uninstaller that calls it by name.
+    //
+    // Both are checked before base.OnStartup: StartupUri would otherwise create and show
+    // MainWindow (and its tray icon) for what's meant to be a silent, instant cleanup pass.
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (Array.IndexOf(e.Args, "--uninstall-cleanup") >= 0)
+        {
+            var removeData = Array.IndexOf(e.Args, "--remove-data") >= 0;
+            // Flush BEFORE the cleanup when the data folder is going: AppLogger writes into
+            // Documents\Tasky, so draining the queue afterwards would recreate that folder
+            // containing nothing but debug.log - exactly the litter this pass exists to remove.
+            // When the folder is being kept, flushing after is fine and keeps the record complete.
+            if (removeData) AppLogger.Flush();
+            UninstallCleanupService.CleanUp(removeData);
+            if (!removeData) AppLogger.Flush();
+            // Environment.Exit, not Shutdown(): Shutdown returns through OnExit, which flushes
+            // AppLogger again and would undo the ordering above.
+            Environment.Exit(0);
+            return;
+        }
+
         if (Array.IndexOf(e.Args, "--cleanup-notifications") >= 0)
         {
             try

@@ -28,3 +28,5 @@ client_secret*.json
 GoogleDriveToken/
 settings.json
 
+publish/
+installer-output/

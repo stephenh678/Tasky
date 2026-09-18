@@ -154,15 +154,25 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 The result lands in `publish\`. Despite `PublishSingleFile`, WPF's native rendering libraries
 (`D3DCompiler_47_cor3.dll`, `wpfgfx_cor3.dll`, `PresentationNative_cor3.dll`, `PenImc_cor3.dll`,
-`vcruntime140_cor3.dll`) can't be embedded and are published alongside `Tasky.exe` as separate
-files — **the whole `publish\` folder is the deliverable, not the exe by itself.** Zip the folder
-if you're distributing it; the exe won't launch on its own without those DLLs next to it. Also
-copy `Uninstall-Tasky.ps1` and `Uninstall Tasky.bat` from the repo root into the same folder before
-zipping — they're not part of the build output, but should ship in every release.
+`vcruntime140_cor3.dll`) can't be embedded and are published alongside `Tasky.exe`.
 
-`check-release-files.ps1` (run in CI) guards both halves of that: it publishes and fails the build
-if the output no longer matches the uninstaller's known-files list, or if either uninstaller file
-is missing. Run it locally before cutting a release.
+To build the actual release artifacts, use:
+
+```powershell
+.uild-installer.ps1
+```
+
+It reads the version from `TodoApp.csproj`, publishes, compiles `installer/Tasky.iss` with Inno
+Setup, and writes both release assets to `installer-output\`:
+
+| Asset | Purpose |
+|---|---|
+| `Tasky-Setup-<version>.exe` | What people download, and what the in-app updater runs to upgrade |
+| `Tasky-<version>-win-x64.zip` | Legacy. Copies of Tasky older than the installer look for a `*-win-x64.zip` asset **by name** and nothing else — drop it and every one of those installs silently stops finding updates forever. Remove it once nothing that old is still in the wild. |
+
+Both need uploading to the GitHub release tagged `v<version>`. Inno Setup 6 is the only extra
+prerequisite (`winget install --id JRSoftware.InnoSetup`); CI compiles the installer on every push
+so a broken script surfaces long before release day.
 
 ## Data storage
 
@@ -198,22 +208,34 @@ folder; attachments live in an `Attachments` folder the same way.
   never mix their attachments together
 - **Shutdown Protection** — forces a final sync on application close
 
-## Uninstalling
+## Installing, updating and uninstalling
 
-Tasky has no installer, so there's normally nothing to "uninstall" beyond deleting the folder —
-but it does keep state in a couple of other places (settings, Google Drive sign-in cache, task
-data). Run **`Uninstall Tasky.bat`** (ships alongside `Tasky.exe`) for a guided removal: it asks
-you to close Tasky first, shows exactly what it's about to remove, gives you the option to keep
-your existing `.tasky` files/backups/attachments, and finishes by deleting the application files
-(including the uninstaller itself). It requests administrator rights only if the app's folder
-actually needs them (e.g. installed under `Program Files`) — and only for that last step, so the
-settings, sign-in cache, startup entry and task data are always removed from *your* profile rather
-than an administrator's. It only ever deletes files it recognizes by name; anything else sharing
-the folder is listed and left alone. Pass `-DryRun` to see exactly what it would remove without
-deleting anything. Deleting the local Google Drive
-sign-in cache signs Tasky out on this computer but doesn't revoke access on Google's side — do
-that at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) if you want
-that too.
+Download **`Tasky-Setup-<version>.exe`** from the
+[latest release](https://github.com/stephenh678/Tasky/releases/latest) and run it. It installs
+per-user into `%LOCALAPPDATA%\Programs\Tasky`, so it never asks for administrator rights, and adds
+Start Menu and Desktop shortcuts plus an entry in **Settings > Apps**.
+
+That per-user location is a deliberate choice, not just convenience: the app replaces its own files
+when it updates, which a `Program Files` install would make impossible without elevating every
+single time.
+
+**Updating** is the same installer, run silently. **Help > Check for Updates** downloads
+`Tasky-Setup-<version>.exe` from the newest GitHub release and runs it with `/SILENT`, so an update
+goes through exactly the same code path as a fresh install - files replaced, shortcuts refreshed,
+and the version in Settings > Apps kept accurate. Running the downloaded installer by hand does the
+same thing; it upgrades in place rather than creating a second copy.
+
+**Uninstalling** goes through Settings > Apps > Tasky, or `unins000.exe` in the install folder. The
+uninstaller asks whether to delete your task data (default: **keep** it - the `.tasky` files,
+backups and attachments are the only irreplaceable thing there), then calls
+`Tasky.exe --uninstall-cleanup` to remove the per-user state that lives outside the install folder:
+settings, the Google Drive sign-in cache, the update staging cache, the "Start with Windows" entry
+and the toast-notification registration. That cleanup lives in the app
+(`Services/UninstallCleanupService.cs`) rather than in the installer, so a new location can't be
+added without the code that removes it sitting right there.
+
+Signing out locally does not revoke Tasky's access on Google's side - do that at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) if you want that too.
 
 ## Tasky Web
 

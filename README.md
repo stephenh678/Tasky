@@ -160,6 +160,10 @@ if you're distributing it; the exe won't launch on its own without those DLLs ne
 copy `Uninstall-Tasky.ps1` and `Uninstall Tasky.bat` from the repo root into the same folder before
 zipping — they're not part of the build output, but should ship in every release.
 
+`check-release-files.ps1` (run in CI) guards both halves of that: it publishes and fails the build
+if the output no longer matches the uninstaller's known-files list, or if either uninstaller file
+is missing. Run it locally before cutting a release.
+
 ## Data storage
 
 Tasky stores its data as a `.tasky` file (plain JSON under the hood) at
@@ -202,7 +206,11 @@ data). Run **`Uninstall Tasky.bat`** (ships alongside `Tasky.exe`) for a guided 
 you to close Tasky first, shows exactly what it's about to remove, gives you the option to keep
 your existing `.tasky` files/backups/attachments, and finishes by deleting the application files
 (including the uninstaller itself). It requests administrator rights only if the app's folder
-actually needs them (e.g. installed under `Program Files`). Deleting the local Google Drive
+actually needs them (e.g. installed under `Program Files`) — and only for that last step, so the
+settings, sign-in cache, startup entry and task data are always removed from *your* profile rather
+than an administrator's. It only ever deletes files it recognizes by name; anything else sharing
+the folder is listed and left alone. Pass `-DryRun` to see exactly what it would remove without
+deleting anything. Deleting the local Google Drive
 sign-in cache signs Tasky out on this computer but doesn't revoke access on Google's side — do
 that at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) if you want
 that too.

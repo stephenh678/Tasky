@@ -25,6 +25,14 @@ jobs:
       - name: Test
         run: dotnet test TodoApp.Tests/TodoApp.Tests.csproj --configuration Release
 
+      - name: Release file list matches the uninstaller
+        # Tasky has no installer and no release job - the zip is assembled by hand, and
+        # Uninstall-Tasky.ps1 deletes only files it recognizes by name. That list is a
+        # hand-maintained mirror of the publish output, so without this a new native DLL from some
+        # future dependency would just get left behind on every uninstall, silently.
+        shell: pwsh
+        run: ./check-release-files.ps1
+
   web:
     runs-on: ubuntu-latest
     steps:

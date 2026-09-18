@@ -25,6 +25,13 @@
          bundled into it, which Uninstall-Tasky.ps1's known-files list doesn't expect. -->
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
+    <!-- Symbols go INSIDE Tasky.dll (which PublishSingleFile then bundles into Tasky.exe) rather
+         than shipping a loose Tasky.pdb next to it. AppLogger.Error writes ex.StackTrace into
+         Documents\Tasky\debug.log, and without symbols those traces lose their line numbers - so
+         dropping them outright would make user-reported logs materially worse. Embedding keeps the
+         line numbers and removes a file from the release zip (and from Uninstall-Tasky.ps1's
+         known-files list) that has no purpose on a user's machine. -->
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <ItemGroup>

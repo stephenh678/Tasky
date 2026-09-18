@@ -43,6 +43,10 @@ public class TrayIconService : IDisposable, ITrayNotifier
 
     public Func<TrayMenuInfo>? MenuInfoProvider;
 
+    // Shown next to "Quick Add Task..." - the menu is rebuilt every time it opens, so just setting
+    // this is enough.
+    public string QuickAddHotkeyText { get; set; } = HotkeyGesture.Default;
+
     public void RaiseShowRequested() => ShowRequested?.Invoke();
 
     public TrayIconService()
@@ -85,7 +89,7 @@ public class TrayIconService : IDisposable, ITrayNotifier
         };
         _menu.Items.Add(showItem);
 
-        var quickAddItem = new ToolStripMenuItem("Quick Add Task... (Ctrl+Alt+T)", null, (_, _) => NewTaskRequested?.Invoke());
+        var quickAddItem = new ToolStripMenuItem($"Quick Add Task... ({QuickAddHotkeyText})", null, (_, _) => NewTaskRequested?.Invoke());
         _menu.Items.Add(quickAddItem);
 
         _menu.Items.Add(new ToolStripSeparator());

@@ -186,7 +186,11 @@ export function newTaskSyncRecord(taskId, timestamp = nowDotNet()) {
 
 // Mirrors MainViewModel.cs's NextDueDate switch exactly - ROADMAP.md #31's interval multiplies the
 // step (Weekly + interval 2 = every 2 weeks) instead of recurrence being fixed at "every 1".
-export function nextDueDate(from, rule, interval = 1) {
+//
+// anchorDay (Monthly/Yearly only) is the day-of-month the series belongs on: a month step clamps
+// to a short month's last day, and stepping again from that clamped date left a 31st-of-the-month
+// task on the 28th for good. Re-applying the anchor after each step puts it back.
+export function nextDueDate(from, rule, interval = 1, anchorDay = null) {
   const d = new Date(from);
   switch (rule) {
     case RecurrenceRule.Daily:
@@ -196,9 +200,9 @@ export function nextDueDate(from, rule, interval = 1) {
       d.setDate(d.getDate() + 7 * interval);
       return d;
     case RecurrenceRule.Monthly:
-      return addMonthsClamped(d, interval);
+      return onAnchorDay(addMonthsClamped(d, interval), anchorDay);
     case RecurrenceRule.Yearly:
-      return addMonthsClamped(d, 12 * interval);
+      return onAnchorDay(addMonthsClamped(d, 12 * interval), anchorDay);
     default:
       return d;
   }
@@ -214,6 +218,32 @@ function addMonthsClamped(date, months) {
   d.setMonth(d.getMonth() + months);
   d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
   return d;
+}
+
+function daysInMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+function onAnchorDay(date, anchorDay) {
+  const day = Number(anchorDay);
+  if (anchorDay == null || !Number.isInteger(day) || day < 1 || day > 31) return date;
+  const d = new Date(date);
+  d.setDate(Math.min(day, daysInMonth(d)));
+  return d;
+}
+
+// Mirrors MainViewModel.cs's EffectiveAnchorDay exactly: a stored RecurrenceAnchorDay only counts
+// while the due date is still that day clamped to its month; otherwise the due date's own day is
+// the series day. Read from the task's OWN due date, not recurrenceAnchor()'s clamped-to-today one.
+export function effectiveAnchorDay(dueDate, storedAnchorDay) {
+  if (!dueDate) return null;
+  const due = parseDotNetDate(dueDate);
+  const stored = Number(storedAnchorDay);
+  if (storedAnchorDay != null && Number.isInteger(stored) && stored >= 1 && stored <= 31
+    && due.getDate() === Math.min(stored, daysInMonth(due))) {
+    return stored;
+  }
+  return due.getDate();
 }
 
 // Mirrors MainViewModel.cs's RecurrenceAnchor exactly (ROADMAP.md #31): advancing straight from a
@@ -238,7 +268,13 @@ export function recurrenceAnchor(dueDate) {
 export function spawnNextOccurrence(completed) {
   const next = newTaskItem({ text: completed.Text });
   const base = recurrenceAnchor(completed.DueDate);
-  next.DueDate = formatDotNetDate(nextDueDate(base, completed.Recurrence, completed.RecurrenceInterval));
+  const isMonthBased = completed.Recurrence === RecurrenceRule.Monthly || completed.Recurrence === RecurrenceRule.Yearly;
+  const anchorDay = isMonthBased ? effectiveAnchorDay(completed.DueDate, completed.RecurrenceAnchorDay) : null;
+  next.DueDate = formatDotNetDate(nextDueDate(base, completed.Recurrence, completed.RecurrenceInterval, anchorDay));
+  // Omitted rather than written as null, matching desktop's WhenWritingNull.
+  if (anchorDay !== null) next.RecurrenceAnchorDay = anchorDay;
+  // Priority is as much part of "the same task again" as its tags - mirrors SpawnNextOccurrence.
+  next.Priority = completed.Priority ?? TaskPriority.None;
   next.Recurrence = completed.Recurrence;
   // Old data synced from before ROADMAP.md #31 has no RecurrenceInterval at all - default to 1
   // (the prior fixed behavior) rather than propagating `undefined` onto the spawned task.

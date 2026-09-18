@@ -136,7 +136,7 @@ public class ReminderSchedulerTests
         var task = Task(new DateTime(2026, 8, 20)); // well overdue
         var tray = new FakeTrayNotifier();
         var scheduler = new ReminderScheduler(() => new[] { task }, () => true, tray,
-            initialNotifiedIds: new[] { task.Id });
+            initialNotified: new[] { new NotifiedReminder(task.Id, task.DueDate) });
 
         // Would have notified (and bumped CallCount) if the persisted "already notified" set
         // hadn't been seeded in via the constructor.
@@ -152,7 +152,7 @@ public class ReminderSchedulerTests
         var task = Task(new DateTime(2026, 8, 20));
         List<Guid>? persisted = null;
         var scheduler = new ReminderScheduler(() => new[] { task }, () => true, new FakeTrayNotifier(),
-            persistNotified: ids => persisted = ids.ToList());
+            persistNotified: entries => persisted = entries.Select(e => e.TaskId).ToList());
 
         scheduler.CheckReminders();
 
@@ -166,7 +166,8 @@ public class ReminderSchedulerTests
         var task = Task(new DateTime(2026, 8, 20));
         List<Guid>? persisted = null;
         var scheduler = new ReminderScheduler(() => new[] { task }, () => true, new FakeTrayNotifier(),
-            initialNotifiedIds: new[] { task.Id }, persistNotified: ids => persisted = ids.ToList());
+            initialNotified: new[] { new NotifiedReminder(task.Id, task.DueDate) },
+            persistNotified: entries => persisted = entries.Select(e => e.TaskId).ToList());
 
         scheduler.ClearNotified();
 

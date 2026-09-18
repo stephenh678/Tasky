@@ -238,7 +238,7 @@
                   BorderBrush="{DynamicResource SecondaryBrush}" BorderThickness="0,0,0,1">
                 <MenuItem Header="_File" Template="{StaticResource MenuItemTopLevelHeaderTemplate}">
                     <MenuItem Header="_New Task" InputGestureText="Ctrl+N" Command="{Binding AddTaskCommand}"/>
-                    <MenuItem Header="_Quick Add..." InputGestureText="Ctrl+Alt+T" Click="QuickAdd_Click"/>
+                    <MenuItem Header="_Quick Add..." InputGestureText="{Binding QuickAddHotkey}" Click="QuickAdd_Click"/>
                     <MenuItem Header="_Delete Task" InputGestureText="Del" Command="{Binding DeleteSelectedCommand}"/>
                     <Separator/>
                     <MenuItem Header="_Export Selected Note..." InputGestureText="Ctrl+E" Click="ExportNote_Click"/>

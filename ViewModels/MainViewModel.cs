@@ -16,10 +16,10 @@ using TodoApp;
 
 namespace TodoApp.ViewModels;
 
-public class MainViewModel : INotifyPropertyChanged
+public partial class MainViewModel : INotifyPropertyChanged
 {
     private readonly TodoStore _store = new();
-    private readonly SettingsStore _settingsStore = new();
+    private readonly SettingsStore _settingsStore;
     private readonly TrayIconService _tray = new();
     private readonly GoogleDriveService _googleDrive = new();
     private readonly SyncCoordinator _sync;
@@ -76,6 +76,12 @@ public class MainViewModel : INotifyPropertyChanged
     private Task _pendingSaveTask = Task.CompletedTask;
     private int _saveGeneration;
     private bool _isRestoringBackup;
+    // Bumped whenever the open file changes (LoadFile, Save As). A Drive sync captures it when it
+    // starts and abandons itself if it no longer matches - see PerformGoogleDriveSyncAsync.
+    private int _fileSessionId;
+    // How many PerformGoogleDriveSyncAsync calls are currently awaiting - see IsSyncing's use there.
+    private int _syncCallsInFlight;
+    private readonly DispatcherTimer _saveRetryTimer;
     private bool _isExecutingUndo;
     private readonly DispatcherTimer _autoSyncTimer;
     private readonly DispatcherTimer _idleSyncTimer;
@@ -91,6 +97,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ListCollectionView FilteredTasksView { get; }
     public List<TaskItem> SelectedTasks { get; private set; } = new();
     public TrayIconService Tray => _tray;
+    internal string CurrentFilePath => _currentFilePath;
 
     public double? SavedWindowLeft => _settings.WindowLeft;
     public double? SavedWindowTop => _settings.WindowTop;
@@ -213,6 +220,10 @@ public class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _saveStatusText, value);
     }
 
+    // For the View layer to surface a one-off notice in the status area (SaveStatusText's setter
+    // stays private so only this class decides what save/sync states look like).
+    public void ShowStatusMessage(string message) => SaveStatusText = message;
+
     // ROADMAP.md #57: replaces the plain status text with a real progress bar while a Google
     // Drive sync is running. IsSyncing gates the bar's visibility (rather than inferring "syncing"
     // from SaveStatusText's wording, which is fragile against future copy changes);
@@ -276,239 +287,6 @@ public class MainViewModel : INotifyPropertyChanged
         private set => SetField(ref _selectedTaskDetail, value);
     }
 
-    public bool IsDarkTheme
-    {
-        get => _isDarkTheme;
-        set
-        {
-            // Deliberately not SetField here: SetField raises PropertyChanged before this method
-            // returns, and MainWindow reacts to that event by repainting the OS title bar based on
-            // ThemeService.IsDark - if that event fires before ThemeService.Apply below updates
-            // IsDark, the title bar reads the OLD value and ends up one step behind (dark mode
-            // shows a light title bar and vice versa). ThemeService.Apply must run first.
-            if (_isDarkTheme == value) return;
-            _isDarkTheme = value;
-            ThemeService.Apply(value ? "Dark" : "Light");
-            _settings.Theme = value ? "Dark" : "Light";
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public bool RemindersEnabled
-    {
-        get => _settings.RemindersEnabled;
-        set
-        {
-            if (_settings.RemindersEnabled == value) return;
-            _settings.RemindersEnabled = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public bool ShowDoneCheckbox
-    {
-        get => _settings.ShowDoneCheckbox;
-        set
-        {
-            if (_settings.ShowDoneCheckbox == value) return;
-            _settings.ShowDoneCheckbox = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    // Off by default: most tasks never need subtasks, so the editor stays uncluttered and the
-    // section is one click away via "Add subtasks". TaskDetailViewModel reads this through a
-    // callback rather than a snapshot, so the open task has to be told the answer changed.
-    public bool AlwaysShowSubtasks
-    {
-        get => _settings.AlwaysShowSubtasks;
-        set
-        {
-            if (_settings.AlwaysShowSubtasks == value) return;
-            _settings.AlwaysShowSubtasks = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-            SelectedTaskDetail?.NotifySubtasksVisibilityChanged();
-        }
-    }
-
-    // Only gates the once-a-day silent background check MainWindow runs after Loaded - Help >
-    // Check for Updates always works regardless of this setting, same relationship
-    // AutoBackupEnabled has to the manual Export/Import commands.
-    public bool CloseToTray
-    {
-        get => _settings.CloseToTray;
-        set
-        {
-            if (_settings.CloseToTray == value) return;
-            _settings.CloseToTray = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public bool HasSeenCloseToTrayNotice
-    {
-        get => _settings.HasSeenCloseToTrayNotice;
-        set
-        {
-            if (_settings.HasSeenCloseToTrayNotice == value) return;
-            _settings.HasSeenCloseToTrayNotice = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public bool HasSeenUnmanagedInstallNotice
-    {
-        get => _settings.HasSeenUnmanagedInstallNotice;
-        set
-        {
-            if (_settings.HasSeenUnmanagedInstallNotice == value) return;
-            _settings.HasSeenUnmanagedInstallNotice = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public bool AutoCheckForUpdates
-    {
-        get => _settings.AutoCheckForUpdates;
-        set
-        {
-            if (_settings.AutoCheckForUpdates == value) return;
-            _settings.AutoCheckForUpdates = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    // Not bound in any XAML - just gives MainWindow's post-Loaded background check somewhere to
-    // read/persist "did we already check today" without reaching into _settings directly.
-    public DateTime? LastUpdateCheckUtc
-    {
-        get => _settings.LastUpdateCheckUtc;
-        set
-        {
-            _settings.LastUpdateCheckUtc = value;
-            _settingsStore.Save(_settings);
-        }
-    }
-
-    // ROADMAP.md #135. AutoEmptyTrashIfNeeded() runs whenever this flips on (same as toggling the
-    // day count) so turning it on doesn't wait for the next launch/sync to actually prune anything.
-    public bool AutoEmptyTrashEnabled
-    {
-        get => _settings.AutoEmptyTrashEnabled;
-        set
-        {
-            if (_settings.AutoEmptyTrashEnabled == value) return;
-            _settings.AutoEmptyTrashEnabled = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-            if (value) AutoEmptyTrashIfNeeded();
-        }
-    }
-
-    // Mirrors Tasky Web's setting-auto-empty-trash-days <select> options exactly.
-    public int[] AutoEmptyTrashDayOptions { get; } = { 7, 14, 30, 60, 90 };
-
-    public int AutoEmptyTrashDays
-    {
-        get => _settings.AutoEmptyTrashDays;
-        set
-        {
-            var clamped = value < 1 ? 1 : value;
-            if (_settings.AutoEmptyTrashDays == clamped) return;
-            _settings.AutoEmptyTrashDays = clamped;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-            AutoEmptyTrashIfNeeded();
-        }
-    }
-
-    // ROADMAP.md #135. No _settings-backed field or SetField/OnPropertyChanged guard against
-    // redundant sets, unlike every other Settings-window toggle here - StartupService.IsEnabled
-    // reads the registry Run key itself as the only source of truth (see its own doc comment), so
-    // there's no cached local value to compare against or keep in sync.
-    public bool StartWithWindowsEnabled
-    {
-        get => StartupService.IsEnabled;
-        set => StartupService.SetEnabled(value);
-    }
-
-    public bool IsVerboseLogging
-    {
-        get => _settings.IsVerboseLogging;
-        set
-        {
-            if (_settings.IsVerboseLogging == value) return;
-            _settings.IsVerboseLogging = value;
-            AppLogger.IsVerbose = value;
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    // Mirrors TodoStore's own AutoBackup* properties - kept in sync on every set (not just once at
-    // startup) so a change made in the Settings window while the app is running takes effect on
-    // the very next save, not just after a restart. All three setters push through the same
-    // ApplyBackupSettingsToStore() the startup path already uses, rather than each one duplicating
-    // its own single-field copy to _store - one shared place for "how Settings reaches TodoStore".
-    public bool AutoBackupEnabled
-    {
-        get => _settings.AutoBackupEnabled;
-        set
-        {
-            if (_settings.AutoBackupEnabled == value) return;
-            _settings.AutoBackupEnabled = value;
-            ApplyBackupSettingsToStore();
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public int AutoBackupIntervalMinutes
-    {
-        get => _settings.AutoBackupIntervalMinutes;
-        set
-        {
-            if (_settings.AutoBackupIntervalMinutes == value) return;
-            _settings.AutoBackupIntervalMinutes = value;
-            ApplyBackupSettingsToStore();
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
-    public int AutoBackupRetentionDays
-    {
-        get => _settings.AutoBackupRetentionDays;
-        set
-        {
-            // A zero/negative value would mean "retain nothing" - every backup just made would
-            // immediately qualify for pruning on the very next save, which isn't a meaningful
-            // setting anyone would actually want, so floor it rather than accept it as entered.
-            var requested = value;
-            if (value < 1) value = 1;
-            if (_settings.AutoBackupRetentionDays == value)
-            {
-                // The clamp changed what was typed (e.g. "0" -> 1) even though the stored setting
-                // itself didn't move - still notify, or the TextBox keeps showing the un-clamped
-                // text the user typed instead of the value that's actually in effect.
-                if (requested != value) OnPropertyChanged();
-                return;
-            }
-            _settings.AutoBackupRetentionDays = value;
-            ApplyBackupSettingsToStore();
-            _settingsStore.Save(_settings);
-            OnPropertyChanged();
-        }
-    }
-
     public bool IsFocusMode
     {
         get => _isFocusMode;
@@ -553,17 +331,6 @@ public class MainViewModel : INotifyPropertyChanged
         : new GridLength(220);
 
     public bool IsSidebarShowingIconsOnly => IsFocusMode || IsSidebarCollapsed;
-
-    public bool HasSeenWelcomeTour
-    {
-        get => _hasSeenWelcomeTour;
-        set
-        {
-            if (!SetField(ref _hasSeenWelcomeTour, value)) return;
-            _settings.HasSeenWelcomeTour = value;
-            _settingsStore.Save(_settings);
-        }
-    }
 
     public SortOption CurrentSort
     {
@@ -688,8 +455,17 @@ public class MainViewModel : INotifyPropertyChanged
     public event Action? BulkSetDueDateRequested;
     public event Action? BulkAddTagRequested;
 
-    public MainViewModel()
+    public MainViewModel() : this(new SettingsStore())
     {
+    }
+
+    // Tests pass their own SettingsStore (a temp settings.json) and data file, so each one gets a
+    // ViewModel that shares nothing on disk with any other test running in parallel - even with
+    // TaskyPaths redirected, the default constructor's settings.json and default data file are
+    // still one shared pair, and LastFilePath written by one test became the file another opened.
+    internal MainViewModel(SettingsStore settingsStore, string? initialFilePath = null)
+    {
+        _settingsStore = settingsStore;
         _settings = _settingsStore.Load();
         if (_settingsStore.LastLoadWarning is { } loadWarning)
         {
@@ -723,11 +499,23 @@ public class MainViewModel : INotifyPropertyChanged
             UpdateTrayStatus();
         };
 
-        var initialPath = ResolveInitialFilePath();
+        var initialPath = initialFilePath ?? ResolveInitialFilePath();
         MediaPathResolver.SetDataFilePath(initialPath);
 
         _saveDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         _saveDebounceTimer.Tick += (_, _) => CommitSave();
+
+        // A failed save used to just say "will retry on next edit" - and if there was no next
+        // edit, it never did: the change lived only in memory, and closing the app awaited a save
+        // task that had already swallowed its failure and exited "cleanly". The usual cause
+        // (OneDrive/antivirus holding the file) clears within seconds, so keep trying on a timer
+        // until a save lands. See SaveAndReportAsync and LastSaveFailed.
+        _saveRetryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _saveRetryTimer.Tick += (_, _) =>
+        {
+            _saveRetryTimer.Stop();
+            Save();
+        };
 
         // ROADMAP #63: typing in the search box used to call FilteredTasksView.Refresh() (an
         // O(all tasks) predicate re-scan) on every keystroke, which stutters with a large list.
@@ -741,14 +529,15 @@ public class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(EmptyStateMessage));
         };
 
-        var initialNotifiedIds = _settings.NotifiedTaskIds
-            .Select(id => Guid.TryParse(id, out var g) ? g : (Guid?)null)
-            .Where(g => g.HasValue)
-            .Select(g => g!.Value);
+        var initialNotified = _settings.NotifiedTaskIds
+            .Select(NotifiedReminder.Parse)
+            .Where(entry => entry.HasValue)
+            .Select(entry => entry!.Value);
         _reminders = new ReminderScheduler(() => AllTasks, () => RemindersEnabled, _tray,
-            initialNotifiedIds, PersistNotifiedTaskIds);
+            initialNotified, PersistNotifiedTaskIds);
         _reminders.Start();
 
+        _tray.QuickAddHotkeyText = QuickAddHotkey;
         _tray.MenuInfoProvider = () =>
         {
             var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
@@ -893,15 +682,8 @@ public class MainViewModel : INotifyPropertyChanged
             var result = ThemedMessageBox.Show(message, "Delete Task", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
-            foreach (var task in targets)
-            {
-                DetachTask(task);
-                AllTasks.Remove(task);
-                RecordTaskDeletionTombstone(task);
-                CleanupTaskAttachments(task);
-            }
+            PermanentlyDelete(targets);
             SelectedTask = null;
-            OnTaskChanged();
         }, _ => SelectedTask is not null || SelectedTasks.Count > 0);
 
         TrashAllClosedCommand = new RelayCommand(_ =>
@@ -939,16 +721,30 @@ public class MainViewModel : INotifyPropertyChanged
                 "Empty Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
-            foreach (var task in trashed)
-            {
-                DetachTask(task);
-                AllTasks.Remove(task);
-                RecordTaskDeletionTombstone(task);
-                CleanupTaskAttachments(task);
-                if (SelectedTask == task) SelectedTask = null;
-            }
-            OnTaskChanged();
+            PermanentlyDelete(trashed);
         });
+    }
+
+    // The one way a task leaves for good - Delete, Bulk Delete, Empty Trash and the auto-empty
+    // sweep all used to carry their own copy of these steps, and every one of them has to get all
+    // of it right: a missed tombstone lets the next Drive merge bring the task straight back, a
+    // missed Detach leaks the handler, a missed cleanup orphans its attachments on disk.
+    // Attachments are cleaned up once for the whole batch (after every task is out of AllTasks)
+    // rather than once per task - same result, without rescanning every remaining task's RTF for
+    // each deleted one.
+    private void PermanentlyDelete(IReadOnlyCollection<TaskItem> tasks)
+    {
+        if (tasks.Count == 0) return;
+
+        foreach (var task in tasks)
+        {
+            DetachTask(task);
+            AllTasks.Remove(task);
+            RecordTaskDeletionTombstone(task);
+            if (SelectedTask == task) SelectedTask = null;
+        }
+        CleanupTaskAttachments(tasks);
+        OnTaskChanged();
     }
 
     public void ReorderTask(TaskItem sourceTask, TaskItem targetTask, bool insertAfter)
@@ -1050,17 +846,7 @@ public class MainViewModel : INotifyPropertyChanged
         if (!_settings.AutoEmptyTrashEnabled) return;
         var cutoff = DateTime.UtcNow.AddDays(-_settings.AutoEmptyTrashDays);
         var expired = AllTasks.Where(t => t.IsClosed && t.ModifiedAt < cutoff).ToList();
-        if (expired.Count == 0) return;
-
-        foreach (var task in expired)
-        {
-            DetachTask(task);
-            AllTasks.Remove(task);
-            RecordTaskDeletionTombstone(task);
-            CleanupTaskAttachments(task);
-            if (SelectedTask == task) SelectedTask = null;
-        }
-        OnTaskChanged();
+        PermanentlyDelete(expired);
     }
 
     // Sidebar scope switching, sort, quick filter, and layout toggles - commands that change
@@ -1210,705 +996,6 @@ public class MainViewModel : INotifyPropertyChanged
         });
     }
 
-    // New/Open/Save As/Restore Backup - commands that swap out which .tasky file is open or
-    // touch the file on disk directly, rather than mutating in-memory task state.
-    private void InitializeFileCommands()
-    {
-        NewFileCommand = new AsyncRelayCommand(async _ => await CreateNewLocalFileForSyncAsync());
-
-        OpenFileCommand = new RelayCommand(_ =>
-        {
-            var dialog = new OpenFileDialog
-            {
-                Title = "Open Tasky File",
-                Filter = "Tasky files (*.tasky)|*.tasky|JSON files (*.json)|*.json|All files (*.*)|*.*"
-            };
-            if (dialog.ShowDialog() != true) return;
-            LoadFile(dialog.FileName);
-
-            // Renaming a synced .tasky file outside the app (Explorer) then reopening it here
-            // looks, from the app's perspective, identical to opening a brand-new file - there's
-            // no reliable way to tell "this is file X under a new name" from "this really is a
-            // new file" by name alone. Rather than silently create a duplicate remote file on the
-            // next sync, nudge toward the explicit fix (Choose File) - but only once this device
-            // has actual sync history to plausibly be renaming *from*, so a first-time Drive user
-            // opening an old file doesn't get an unexplained warning.
-            if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated
-                && _settings.GoogleDriveFileIdsByFile.Count > 0
-                && !_settings.GoogleDriveFileIdsByFile.ContainsKey(Path.GetFileName(dialog.FileName).ToLowerInvariant()))
-            {
-                SaveStatusText = "This file isn't linked to Google Drive yet - syncing will create a new remote copy. If it's a renamed version of a file you already sync, use Google Drive → Choose File to link it instead.";
-            }
-        });
-
-        SaveFileAsCommand = new AsyncRelayCommand(async _ =>
-        {
-            FlushPendingSave();
-            var dialog = new SaveFileDialog
-            {
-                Title = "Save Tasky File As",
-                Filter = "Tasky files (*.tasky)|*.tasky",
-                FileName = Path.GetFileNameWithoutExtension(_currentFilePath) + ".tasky"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            var previousFilePath = _currentFilePath;
-            _currentFilePath = dialog.FileName;
-            MediaPathResolver.SetDataFilePath(_currentFilePath);
-            CopyReferencedMedia(previousFilePath, _currentFilePath);
-            // ROADMAP.md #124: SaveAsync awaited directly (this handler is already off the sync
-            // call stack once ShowDialog returns) instead of the blocking Save()/GetResult() bridge.
-            await _store.SaveAsync(_state, _currentFilePath);
-            OnPropertyChanged(nameof(WindowTitle));
-
-            _settings.LastFilePath = _currentFilePath;
-            _settingsStore.Save(_settings);
-        });
-
-        RestoreBackupCommand = new AsyncRelayCommand(async _ =>
-        {
-            _isRestoringBackup = true;
-            try
-            {
-                // Unlike the other FlushPendingSave() call sites, this one genuinely needs the disk
-                // write to have landed before RestoreBackup overwrites the file out from under it -
-                // await the real completion instead of just firing it off.
-                await FlushPendingSaveAsync();
-                var backups = _store.ListBackups(_currentFilePath);
-                if (backups.Count == 0)
-                {
-                    ThemedMessageBox.Show("No backups found for this file yet.", "Restore from Backup",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                var picker = new RestoreBackupWindow(backups) { Owner = Application.Current.MainWindow };
-                if (picker.ShowDialog() != true || picker.SelectedBackup is null) return;
-
-                var confirm = ThemedMessageBox.Show(
-                    $"Restore the backup from {picker.SelectedBackup.Timestamp:MMM d, yyyy 'at' h:mm:ss tt}?\n\n" +
-                    "Your current file will be backed up first, so this can be undone by restoring again.",
-                    "Restore from Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (confirm != MessageBoxResult.Yes) return;
-
-                _store.RestoreBackup(picker.SelectedBackup.FilePath, _currentFilePath);
-                LoadFile(_currentFilePath);
-                MarkAllTasksRestoredAndSave();
-            }
-            finally
-            {
-                _isRestoringBackup = false;
-            }
-        }, _ => !_isRestoringBackup);
-
-        // Export/Import Full Backup - a portable .zip of the data file plus every attachment it
-        // references, for moving everything to a new machine or just keeping an offline copy.
-        // Distinct from Save As (data only, no attachments) and Restore from Backup (data only,
-        // and only ever from this same machine's own Backups\ history).
-        ExportBackupCommand = new AsyncRelayCommand(async _ =>
-        {
-            await FlushPendingSaveAsync();
-            var dialog = new SaveFileDialog
-            {
-                Title = "Export Full Backup",
-                Filter = "Zip archive (*.zip)|*.zip",
-                FileName = $"Tasky Backup {DateTime.Now:yyyy-MM-dd}.zip"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            try
-            {
-                var (included, missing) = BackupService.Export(_currentFilePath, AllTasks, dialog.FileName);
-                var message = $"Exported {AllTasks.Count} task(s) and {included} attachment(s) to:\n{dialog.FileName}";
-                if (missing > 0)
-                    message += $"\n\n{missing} attachment(s) referenced by your tasks couldn't be found locally and were skipped.";
-                ThemedMessageBox.Show(message, "Export Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                App.LogException(ex);
-                ThemedMessageBox.Show($"Couldn't export: {ex.Message}", "Export Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        });
-
-        ExportCalendarCommand = new RelayCommand(_ =>
-        {
-            var dialog = new SaveFileDialog
-            {
-                Title = "Export Due Dates to Calendar",
-                Filter = "iCalendar file (*.ics)|*.ics",
-                FileName = $"Tasky Due Dates {DateTime.Now:yyyy-MM-dd}.ics"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            try
-            {
-                var count = ExportService.ExportToICalendar(AllTasks, dialog.FileName);
-                var message = count == 0
-                    ? "No open tasks have a due date set, so nothing was exported."
-                    : $"Exported {count} due date(s) to:\n{dialog.FileName}\n\nImport this file into Google Calendar, Outlook, or Apple Calendar.";
-                ThemedMessageBox.Show(message, "Export Due Dates to Calendar", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                App.LogException(ex);
-                ThemedMessageBox.Show($"Couldn't export: {ex.Message}", "Export Due Dates to Calendar", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        });
-
-        // ROADMAP.md #135: whole-list export, alongside the existing per-note "Export Selected
-        // Note..." (ExportNote_Click in MainWindow.xaml.cs). Doesn't need the live FlowDocument
-        // that per-note export reads from, so - unlike that one - this can be a plain command
-        // here instead of MainWindow.xaml.cs code-behind.
-        ExportAllTasksCommand = new RelayCommand(_ =>
-        {
-            var dialog = new SaveFileDialog
-            {
-                Title = "Export All Tasks",
-                Filter = "Markdown Document (*.md)|*.md",
-                FileName = $"Tasky Export {DateTime.Now:yyyy-MM-dd}.md"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            try
-            {
-                ExportService.ExportAllToMarkdown(AllTasks, dialog.FileName);
-                ThemedMessageBox.Show($"Exported all tasks to:\n{dialog.FileName}", "Export All Tasks", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                App.LogException(ex);
-                ThemedMessageBox.Show($"Couldn't export: {ex.Message}", "Export All Tasks", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        });
-
-        ImportBackupCommand = new AsyncRelayCommand(async _ =>
-        {
-            var dialog = new OpenFileDialog
-            {
-                Title = "Import Full Backup",
-                Filter = "Zip archive (*.zip)|*.zip"
-            };
-            if (dialog.ShowDialog() != true) return;
-
-            ExtractedBackupPackage package;
-            try
-            {
-                package = BackupService.ExtractToTemp(dialog.FileName);
-            }
-            catch (Exception ex)
-            {
-                ThemedMessageBox.Show($"Couldn't read this backup:\n{ex.Message}", "Import Full Backup",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-
-            using (package)
-            {
-                int backupTaskCount;
-                try
-                {
-                    // AllTasks is the CURRENTLY open file's tasks (the ones about to be replaced), not
-                    // the backup's - reading the extracted backup itself is the only way to show its
-                    // real count here, same as how the Drive sync merge peeks at a downloaded remote
-                    // file. Kept in this same try/catch since a corrupt backup can fail either step.
-                    // ROADMAP.md #124: awaited directly instead of the blocking Load()/GetResult() bridge - safe here since ImportBackupCommand's handler is already async.
-                    backupTaskCount = (await _store.LoadAsync(package.DataFilePath)).Tasks.Count;
-                }
-                catch (Exception ex)
-                {
-                    ThemedMessageBox.Show($"Couldn't read this backup:\n{ex.Message}", "Import Full Backup",
-                        MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-
-                var confirm = ThemedMessageBox.Show(
-                    $"This will replace your currently open task list with the backup's {backupTaskCount} " +
-                    $"task(s) and restore its {package.AttachmentFiles.Count} attachment(s).\n\n" +
-                    "Your current file will be backed up first, so this can be undone by restoring it from Restore from Backup.",
-                    "Import Full Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (confirm != MessageBoxResult.Yes) return;
-
-                _isRestoringBackup = true;
-                try
-                {
-                    await FlushPendingSaveAsync();
-                    BackupService.RestoreAttachments(package.AttachmentFiles);
-                    _store.RestoreBackup(package.DataFilePath, _currentFilePath);
-                    LoadFile(_currentFilePath);
-                    MarkAllTasksRestoredAndSave();
-
-                    ThemedMessageBox.Show($"Imported {package.AttachmentFiles.Count} attachment(s) and restored your tasks.",
-                        "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch (Exception ex)
-                {
-                    App.LogException(ex);
-                    ThemedMessageBox.Show($"Couldn't import: {ex.Message}", "Import Full Backup", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-                finally
-                {
-                    _isRestoringBackup = false;
-                }
-            }
-        }, _ => !_isRestoringBackup);
-
-        ClearDebugLogCommand = new RelayCommand(_ =>
-        {
-            var confirm = ThemedMessageBox.Show(
-                "Are you sure you want to clear the debug log file?\n\nExisting entries will be truncated and a fresh log will be started.",
-                "Clear Debug Log", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (confirm != MessageBoxResult.Yes) return;
-
-            AppLogger.ClearLogFile();
-            ThemedMessageBox.Show("Debug log file has been cleared.", "Debug Log", MessageBoxButton.OK, MessageBoxImage.Information);
-        });
-
-        OpenDebugLogCommand = new RelayCommand(_ =>
-        {
-            AppLogger.Info("MainViewModel", "User requested to open debug log file");
-            var result = AppLogger.OpenLogFile(out var error);
-            switch (result)
-            {
-                case AppLogger.OpenLogFileResult.NotCreatedYet:
-                    ThemedMessageBox.Show($"Log file not created yet:\n{AppLogger.LogFilePath}", "Debug Log",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                    break;
-                case AppLogger.OpenLogFileResult.Failed:
-                    ThemedMessageBox.Show($"Unable to open log file:\n{error}", "Debug Log",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    break;
-            }
-        });
-
-        GoogleDriveCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.GoogleDrive));
-
-        SyncGoogleDriveNowCommand = new AsyncRelayCommand(async _ => await PerformGoogleDriveSyncAsync());
-
-        SettingsCommand = new RelayCommand(_ => OpenSettingsWindow(SettingsSection.General));
-    }
-
-    // Applies loaded Settings to TodoStore once at startup - AutoBackupEnabled/IntervalMinutes/
-    // RetentionDays above keep them in sync on every subsequent change, but the initial load
-    // doesn't go through those property setters (nothing "changed" yet), so this covers that.
-    private void ApplyBackupSettingsToStore()
-    {
-        _store.AutoBackupEnabled = _settings.AutoBackupEnabled;
-        _store.AutoBackupIntervalMinutes = _settings.AutoBackupIntervalMinutes;
-        _store.AutoBackupRetentionDays = _settings.AutoBackupRetentionDays;
-    }
-
-    private void OpenSettingsWindow(SettingsSection initialSection)
-    {
-        var driveControl = new GoogleDriveSettingsControl(
-            _googleDrive, _settings, _settingsStore, () => PerformGoogleDriveSyncAsync(),
-            AttachExistingGoogleDriveFileAsync, CreateNewLocalFileForSyncAsync);
-
-        var window = new SettingsWindow(this, driveControl, initialSection)
-        {
-            Owner = Application.Current?.MainWindow
-        };
-        window.ShowDialog();
-        OnPropertyChanged(nameof(IsGoogleDriveConnected));
-        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
-    }
-
-    // Attaches to a file the user picked from their existing Google Drive files. Returns false
-    // only when the user explicitly backed out of picking a destination for a genuinely separate
-    // file - the caller uses that to know a sync shouldn't run right afterward.
-    private async Task<bool> AttachExistingGoogleDriveFileAsync(string remoteFileId, string remoteFileName)
-    {
-        await FlushPendingSaveAsync();
-
-        var currentFileName = Path.GetFileName(_currentFilePath);
-        if (string.Equals(currentFileName, remoteFileName, StringComparison.OrdinalIgnoreCase))
-        {
-            // The remote file you picked shares this device's current local filename - Tasky.tasky
-            // is every install's default, so this is the common case (attaching a second device to
-            // an existing synced file), not a rare collision. Treating it as "download a separate
-            // copy, ask where to put it" would either overwrite whatever's already open here or -
-            // if you picked a different destination - silently abandon it, since the app would
-            // switch to the new file and never look at the old one again. Just linking the ID here
-            // and letting the caller's normal sync pass run right after (as it always does) merges
-            // the remote content into what's already open instead, the same way any other sync
-            // would - no separate download-and-switch step needed since it's already the open file.
-            var fileKey = currentFileName.ToLowerInvariant();
-            _sync.MarkLegacyAttachmentsOwnerIfUnset(fileKey);
-            _settings.GoogleDriveFileIdsByFile[fileKey] = remoteFileId;
-            _settingsStore.Save(_settings);
-            return true;
-        }
-
-        // Different filename - this really is a separate file, so download it to its own local
-        // path and make it the active file.
-        var defaultDir = Path.GetDirectoryName(TodoStore.GetDefaultDataFilePath())
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
-        Directory.CreateDirectory(defaultDir);
-        var targetPath = Path.Combine(defaultDir, remoteFileName);
-
-        // Don't silently overwrite an unrelated local file that happens to share this name -
-        // let the user pick a different destination instead. A directory of the same name is
-        // just as much a collision as a file (Directory.CreateDirectory further up won't create
-        // "Documents\Tasky\Tasky.tasky" as a folder itself, but nothing rules out one already
-        // existing there from outside the app).
-        if (File.Exists(targetPath) || Directory.Exists(targetPath))
-        {
-            // The Save As dialog that follows is easy to misread as part of a normal download -
-            // explain up front why it's asking, since this only happens when the file being
-            // attached has nothing to do with whatever already has this name locally.
-            ThemedMessageBox.Show(
-                $"A local file named \"{remoteFileName}\" already exists that isn't related to the " +
-                "file you just selected. Choose a different name or location to save the downloaded " +
-                "copy so it doesn't overwrite that file.",
-                "Naming Conflict", MessageBoxButton.OK, MessageBoxImage.Information);
-
-            var dialog = new SaveFileDialog
-            {
-                Title = "Save Downloaded Tasky File As",
-                Filter = "Tasky files (*.tasky)|*.tasky",
-                FileName = remoteFileName,
-                InitialDirectory = defaultDir
-            };
-            if (dialog.ShowDialog() != true) return false;
-            targetPath = dialog.FileName;
-        }
-
-        var targetFileKey = Path.GetFileName(targetPath).ToLowerInvariant();
-        // This device might be attaching to the one file that already has real attachments
-        // sitting in the shared flat Drive layout (e.g. a fresh install picking up a
-        // long-established file) - if it has no legacy owner of its own yet, assume this could
-        // be it, so the download below actually finds them instead of coming up empty.
-        _sync.MarkLegacyAttachmentsOwnerIfUnset(targetFileKey);
-
-        await _googleDrive.DownloadFileAsync(remoteFileId, targetPath, downloadAttachments: true, _settings, _settingsStore);
-        LoadFile(targetPath);
-
-        _settings.GoogleDriveFileIdsByFile[targetFileKey] = remoteFileId;
-        _settingsStore.Save(_settings);
-        return true;
-    }
-
-    // Same New File flow as NewFileCommand, exposed for the Google Drive "Choose File" picker so
-    // choosing "Create New" there doesn't just silently reuse whatever file already happens to be
-    // open - it's an explicit choice, same as picking an existing remote file is.
-    private async Task<bool> CreateNewLocalFileForSyncAsync()
-    {
-        FlushPendingSave();
-        var dialog = new SaveFileDialog
-        {
-            Title = "New Tasky File",
-            Filter = "Tasky files (*.tasky)|*.tasky",
-            FileName = "Tasky.tasky"
-        };
-        if (dialog.ShowDialog() != true) return false;
-
-        // ROADMAP.md #124: awaited directly instead of the blocking Save()/GetResult() bridge.
-        await _store.SaveAsync(new AppState(), dialog.FileName);
-        LoadFile(dialog.FileName);
-        return true;
-    }
-
-    public async Task PerformGoogleDriveSyncAsync(bool isSilentOnExit = false)
-    {
-        IsSyncing = true;
-        SyncProgressPercent = 0;
-        try
-        {
-            await _sync.PerformSyncAsync(
-                _state,
-                _currentFilePath,
-                FlushPendingSaveAsync,
-                remoteState =>
-                {
-                    var result = MergeRemoteState(remoteState);
-                    RefreshTags();
-                    RefreshViews();
-                    FilteredTasksView.Refresh();
-                    return result;
-                },
-                status => SaveStatusText = status,
-                () => OpenSettingsWindow(SettingsSection.GoogleDrive),
-                isSilentOnExit,
-                percent => SyncProgressPercent = percent);
-
-            // Deliberately after PerformSyncAsync fully returns, not inside its merge callback
-            // above - AutoEmptyTrashIfNeeded's OnTaskChanged() calls Save(), which writes the same
-            // local file SyncCoordinator is still mid-writing/uploading at that point (and would
-            // clobber SaveStatusText's "Syncing..." with "Saving..." while that's still visible).
-            // Any pruning found here rides along on the next sync instead, same as any other edit.
-            AutoEmptyTrashIfNeeded();
-        }
-        finally
-        {
-            // Left visible at whatever percent it reached (100 on success) for a beat rather than
-            // snapped back to 0 - IsSyncing=false hides the bar entirely via its Visibility binding,
-            // so the exact leftover percent doesn't matter once that happens.
-            IsSyncing = false;
-        }
-
-        OnPropertyChanged(nameof(GoogleDriveStatusTooltip));
-        OnPropertyChanged(nameof(IsGoogleDriveConnected));
-    }
-
-    // Undo, and every Bulk* command driven by the task list's multi-selection (SelectedTasks)
-    // rather than the single SelectedTask.
-    private void InitializeBulkCommands()
-    {
-        UndoCommand = new RelayCommand(_ =>
-        {
-            if (_undoStack.Count == 0) return;
-            var (_, undo) = _undoStack.Last!.Value;
-            _undoStack.RemoveLast();
-            OnPropertyChanged(nameof(UndoMenuLabel));
-            undo();
-        }, _ => _undoStack.Count > 0);
-
-        BulkMarkDoneCommand = new RelayCommand(_ =>
-        {
-            var targets = SelectedTasks.Where(t => !t.IsDone).ToList();
-            if (targets.Count == 0) return;
-
-            var result = ThemedMessageBox.Show($"Mark {targets.Count} task(s) complete?",
-                "Mark Complete", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            foreach (var t in targets) t.IsDone = true;
-        }, _ => SelectedTasks.Count > 0);
-
-        BulkTrashCommand = new RelayCommand(_ =>
-        {
-            var targets = SelectedTasks.Where(t => !t.IsClosed).ToList();
-            if (targets.Count == 0) return;
-
-            var result = ThemedMessageBox.Show($"Move {targets.Count} task(s) to Trash?",
-                "Move to Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            foreach (var t in targets) t.IsClosed = true;
-            PushUndo($"Move {targets.Count} task(s) to Trash", () =>
-            {
-                foreach (var t in targets) t.IsClosed = false;
-            });
-        }, _ => SelectedTasks.Count > 0);
-
-        BulkRestoreCommand = new RelayCommand(_ =>
-        {
-            var targets = SelectedTasks.Where(t => t.IsClosed).ToList();
-            if (targets.Count == 0) return;
-
-            var result = ThemedMessageBox.Show($"Restore {targets.Count} task(s) from Trash?",
-                "Restore from Trash", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            foreach (var t in targets) t.IsClosed = false;
-            PushUndo($"Restore {targets.Count} task(s) from Trash", () =>
-            {
-                foreach (var t in targets) t.IsClosed = true;
-            });
-        }, _ => SelectedTasks.Count > 0);
-
-        BulkDeleteCommand = new RelayCommand(_ =>
-        {
-            var targets = SelectedTasks.ToList();
-            if (targets.Count == 0) return;
-
-            var result = ThemedMessageBox.Show($"Delete {targets.Count} task(s) permanently? This also removes their photos and attachments.",
-                "Delete Tasks", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            foreach (var task in targets)
-            {
-                DetachTask(task);
-                AllTasks.Remove(task);
-                RecordTaskDeletionTombstone(task);
-                CleanupTaskAttachments(task);
-                if (SelectedTask == task) SelectedTask = null;
-            }
-            OnTaskChanged();
-        }, _ => SelectedTasks.Count > 0);
-
-        BulkTogglePinCommand = new RelayCommand(_ =>
-        {
-            var targets = SelectedTasks.ToList();
-            if (targets.Count == 0) return;
-
-            var result = ThemedMessageBox.Show($"Toggle pin on {targets.Count} task(s)?",
-                "Toggle Pin", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            foreach (var t in targets) t.IsPinned = !t.IsPinned;
-            PushUndo($"Toggle pin on {targets.Count} task(s)", () =>
-            {
-                foreach (var t in targets) t.IsPinned = !t.IsPinned;
-            });
-        }, _ => SelectedTasks.Count > 0);
-
-        BulkSetDueDateCommand = new RelayCommand(_ => BulkSetDueDateRequested?.Invoke(), _ => SelectedTasks.Count > 0);
-        BulkAddTagCommand = new RelayCommand(_ => BulkAddTagRequested?.Invoke(), _ => SelectedTasks.Count > 0);
-    }
-
-    // Called from MainWindow.xaml.cs after BulkDueDatePromptWindow returns (BulkSetDueDateRequested
-    // triggers showing that dialog). date is null for "Clear Due Date," not "user cancelled" -
-    // cancelling never calls this at all. DueDate is a plain SetField-backed property (unlike
-    // Tags/Body below), so Task_PropertyChanged picks up the change and bumps ModifiedAt on its own -
-    // no manual touch needed, same as every other single-task due-date edit.
-    public void ApplyBulkDueDate(DateTime? date)
-    {
-        var targets = SelectedTasks.ToList();
-        if (targets.Count == 0) return;
-
-        var message = date is null
-            ? $"Clear the due date on {targets.Count} task(s)?"
-            : $"Set the due date to {date:M/d/yyyy} on {targets.Count} task(s)?";
-        var result = ThemedMessageBox.Show(message, "Set Due Date", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (result != MessageBoxResult.Yes) return;
-
-        // Snapshot each task's own prior due date (not just "clear back to null") since they didn't
-        // necessarily share one before the bulk edit - Task_PropertyChanged doesn't special-case
-        // DueDate the way it does IsDone, so this needs its own explicit PushUndo.
-        var previous = targets.Select(t => (Task: t, DueDate: t.DueDate)).ToList();
-        foreach (var t in targets) t.DueDate = date;
-
-        PushUndo($"Set due date on {targets.Count} task(s)", () =>
-        {
-            foreach (var (task, due) in previous) task.DueDate = due;
-        });
-    }
-
-    // Called from MainWindow.xaml.cs after BulkAddTagPromptWindow returns a tag (BulkAddTagRequested
-    // triggers showing that dialog). Mirrors TaskDetailViewModel.AddTagCommand exactly, including its
-    // own manual ModifiedAt bump - Tags is a plain ObservableCollection<string> with no SetField
-    // wrapper, so Add() never raises TaskItem.PropertyChanged and the sync merge would otherwise never
-    // see the new tag as an edit worth keeping.
-    public void ApplyBulkTag(string rawTag)
-    {
-        var tag = TagUtils.Sanitize(rawTag);
-        if (tag.Length == 0) return;
-        var targets = SelectedTasks.ToList();
-        if (targets.Count == 0) return;
-
-        var result = ThemedMessageBox.Show($"Add the \"{tag}\" tag to {targets.Count} task(s)?",
-            "Add Tag", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (result != MessageBoxResult.Yes) return;
-
-        // Only the tasks that didn't already carry this tag actually change - undo must revert
-        // exactly that subset, not every selected task, or it would strip a tag a task already had
-        // on its own before this bulk edit ever ran.
-        var added = new List<TaskItem>();
-        foreach (var t in targets)
-        {
-            if (t.Tags.Any(x => x.Equals(tag, StringComparison.OrdinalIgnoreCase))) continue;
-            t.Tags.Add(tag);
-            t.ModifiedAt = DateTime.UtcNow;
-            added.Add(t);
-        }
-        OnTaskChanged();
-
-        if (added.Count == 0) return;
-        PushUndo($"Add tag \"{tag}\" to {added.Count} task(s)", () =>
-        {
-            foreach (var t in added)
-            {
-                for (var i = t.Tags.Count - 1; i >= 0; i--)
-                    if (t.Tags[i].Equals(tag, StringComparison.OrdinalIgnoreCase))
-                        t.Tags.RemoveAt(i);
-                t.ModifiedAt = DateTime.UtcNow;
-            }
-            OnTaskChanged();
-        });
-    }
-
-    // Permanent delete has no undo path (unlike Move to Trash), so a tombstone recorded here
-    // never needs to be retracted. Without this, Google Drive's per-task merge would have no way
-    // to tell "a device deleted this task" apart from "a device just hasn't pulled this task
-    // down yet" - both look identical (missing from that device's list) without a record of which
-    // task IDs were actually deleted and when.
-    //
-    // A task can legitimately be tombstoned more than once in its lifetime - delete, then a later
-    // edit on another device revives it (an intentional part of the merge - see MergeRemoteState),
-    // then it gets deleted again. Update the existing tombstone's timestamp instead of appending a
-    // second one for the same TaskId: MergeRemoteState builds a Dictionary keyed by TaskId from
-    // this list, which throws on a duplicate key - a second entry wouldn't just pick the "wrong"
-    // timestamp, it would crash the sync outright, and keep crashing on every retry.
-    private void RecordTaskDeletionTombstone(TaskItem task)
-    {
-        var existing = _state.DeletedTasks.FirstOrDefault(r => r.TaskId == task.Id);
-        if (existing is not null)
-            existing.Timestamp = DateTime.UtcNow;
-        else
-            _state.DeletedTasks.Add(new TaskSyncRecord { TaskId = task.Id, Timestamp = DateTime.UtcNow });
-    }
-
-    // Belt-and-suspenders for data written before RecordTaskDeletionTombstone deduplicated on
-    // write (or any other source of a malformed file, e.g. hand-edited) - MergeRemoteState builds
-    // a Dictionary keyed by TaskId from this list, which throws on a duplicate key, so a file
-    // that already has one has to be cleaned up before it ever reaches that point. Keeps the
-    // latest timestamp per TaskId, applied to both local (on load) and remote (right after
-    // download) so neither side can be the one that crashes the merge.
-    //
-    // The decision logic itself (which tasks to add/update/remove, tombstone union) lives in
-    // TaskSyncMerge.ComputeMergePlan - a pure function with no dependency on AllTasks or WPF
-    // binding, so it's unit-testable without constructing a MainViewModel. This method is just
-    // the thin, UI-bound half: apply that plan to AllTasks/AttachTask/DetachTask/SelectedTask.
-    private (int Added, int Updated, int Removed, int Conflicted) MergeRemoteState(AppState remoteState)
-    {
-        var lastSyncTimeUtc = _settings.LastGoogleDriveSyncTime?.ToUniversalTime();
-        var plan = TaskSyncMerge.ComputeMergePlan(_state.Tasks, remoteState.Tasks, _state.DeletedTasks, remoteState.DeletedTasks, lastSyncTimeUtc);
-
-        foreach (var remoteTask in plan.TasksToAdd)
-        {
-            AllTasks.Add(remoteTask);
-            AttachTask(remoteTask);
-        }
-
-        foreach (var localTask in plan.TasksToRemove)
-        {
-            DetachTask(localTask);
-            AllTasks.Remove(localTask);
-            if (SelectedTask == localTask) SelectedTask = null;
-        }
-
-        // Detached first, since TaskItem's property setters trigger Task_PropertyChanged while
-        // attached, which would stamp ModifiedAt to "now" (clobbering the timestamp being restored
-        // here) and can spawn a recurring-task occurrence or push an undo entry - none of which
-        // belong in a sync merge.
-        foreach (var (localTask, remoteTask) in plan.TasksToUpdate)
-        {
-            DetachTask(localTask);
-            TaskSyncMerge.ApplyTaskFields(localTask, remoteTask);
-            AttachTask(localTask);
-        }
-
-        // ROADMAP.md #119: surfaced instead of the losing edit just disappearing - see
-        // TaskSyncMerge.CreateConflictedCopy. Added like any other new task (undo doesn't apply to
-        // a sync merge, same as TasksToAdd above).
-        foreach (var conflictedCopy in plan.ConflictedCopiesToAdd)
-        {
-            AllTasks.Add(conflictedCopy);
-            AttachTask(conflictedCopy);
-        }
-
-        _state.DeletedTasks.AddRange(plan.TombstonesToAdd);
-
-        // After the field updates above, so remote's arrangement wins over any SortOrder
-        // ApplyTaskFields just copied. Safe to run on attached tasks: Task_PropertyChanged returns
-        // early for SortOrder, so this can't stamp ModifiedAt on the whole list.
-        _state.TasksOrderModifiedAt = TaskSyncMerge.MergeTaskOrder(
-            AllTasks, remoteState.Tasks, _state.TasksOrderModifiedAt, remoteState.TasksOrderModifiedAt);
-
-        var (mergedViews, mergedDeletedViewIds) = SavedViewSyncMerge.Merge(
-            _state.SavedViews, remoteState.SavedViews, _state.DeletedSavedViewIds, remoteState.DeletedSavedViewIds);
-        _state.SavedViews = mergedViews;
-        _state.DeletedSavedViewIds = mergedDeletedViewIds;
-
-        return (plan.TasksToAdd.Count, plan.TasksToUpdate.Count, plan.TasksToRemove.Count, plan.ConflictedCopiesToAdd.Count);
-    }
-
-    private void CleanupTaskAttachments(TaskItem deletedTask)
-    {
-        CleanupTaskAttachments(new[] { deletedTask });
-    }
-
     private void CleanupTaskAttachments(IEnumerable<TaskItem> deletedTasks)
     {
         try
@@ -1976,40 +1063,6 @@ public class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             AppLogger.Error("MainViewModel", "Failed to cleanup task attachments", ex);
-        }
-    }
-
-    // Attachments/InlineImages live next to the data file (MediaPathResolver.DirectoryFor), so a
-    // Save As into a different folder has to bring along the files its tasks reference - otherwise
-    // every image and file card in the new copy points at a folder that doesn't have them.
-    private void CopyReferencedMedia(string fromDataFile, string toDataFile)
-    {
-        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var task in AllTasks)
-            ExtractTaskMediaFilenames(task, referenced);
-        if (referenced.Count == 0) return;
-
-        foreach (var dirName in new[] { "Attachments", "InlineImages" })
-        {
-            var fromDir = MediaPathResolver.DirectoryFor(fromDataFile, dirName);
-            var toDir = MediaPathResolver.DirectoryFor(toDataFile, dirName);
-            if (string.Equals(fromDir, toDir, StringComparison.OrdinalIgnoreCase)) continue;
-
-            foreach (var fileName in referenced)
-            {
-                var source = Path.Combine(fromDir, fileName);
-                var destination = Path.Combine(toDir, fileName);
-                if (!File.Exists(source) || File.Exists(destination)) continue;
-                try
-                {
-                    Directory.CreateDirectory(toDir);
-                    File.Copy(source, destination);
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Warn("MainViewModel", $"Save As: couldn't copy '{source}' to '{destination}': {ex.Message}");
-                }
-            }
         }
     }
 
@@ -2095,208 +1148,12 @@ public class MainViewModel : INotifyPropertyChanged
     // for the next 15-minute polling tick.
     public void SnoozeTaskById(Guid taskId, TimeSpan duration) => _reminders.SnoozeTaskById(taskId, duration);
 
-    private void PersistNotifiedTaskIds(IEnumerable<Guid> ids)
-    {
-        _settings.NotifiedTaskIds = ids.Select(id => id.ToString()).ToList();
-        _settingsStore.Save(_settings);
-    }
-
-    public void SaveWindowState(double left, double top, double width, double height, bool maximized)
-    {
-        _settings.WindowLeft = left;
-        _settings.WindowTop = top;
-        _settings.WindowWidth = width;
-        _settings.WindowHeight = height;
-        _settings.WindowMaximized = maximized;
-        if (SelectedTask is { } task) _settings.LastSelectedTaskId = task.Id.ToString();
-        _settingsStore.Save(_settings);
-    }
-
     public void Shutdown() => _tray.Dispose();
 
     public void UpdateSelectedTasks(IEnumerable<TaskItem> tasks)
     {
         SelectedTasks = tasks.ToList();
         OnPropertyChanged(nameof(SelectedTasks));
-    }
-
-    private List<TaskItem> TargetTasks()
-    {
-        if (SelectedTasks.Count > 1) return SelectedTasks.ToList();
-        return SelectedTask is not null ? new List<TaskItem> { SelectedTask } : new List<TaskItem>();
-    }
-
-    private void PushUndo(string description, Action undo)
-    {
-        _undoStack.AddLast((description, undo));
-        if (_undoStack.Count > MaxUndoDepth)
-            _undoStack.RemoveFirst();
-        OnPropertyChanged(nameof(UndoMenuLabel));
-    }
-
-    // ROADMAP.md #31: interval multiplies the step (Weekly + interval 2 = every 2 weeks) instead of
-    // recurrence being fixed at "every 1". Mirrors docs/js/model.js's nextDueDate exactly.
-    internal static DateTime NextDueDate(DateTime from, RecurrenceRule rule, int interval) => rule switch
-    {
-        RecurrenceRule.Daily => from.AddDays(interval),
-        RecurrenceRule.Weekly => from.AddDays(7 * interval),
-        RecurrenceRule.Monthly => from.AddMonths(interval),
-        RecurrenceRule.Yearly => from.AddYears(interval),
-        _ => from
-    };
-
-    // Completing a recurring task doesn't just close it out - it spawns the next occurrence
-    // (title, due date advanced by the rule/interval, tags) so the series continues. The completed
-    // instance still moves into Closed as normal.
-    private TaskItem SpawnNextOccurrence(TaskItem completed)
-    {
-        var next = new TaskItem
-        {
-            Text = completed.Text,
-            DueDate = NextDueDate(RecurrenceAnchor(completed.DueDate), completed.Recurrence, completed.RecurrenceInterval),
-            Recurrence = completed.Recurrence,
-            RecurrenceInterval = completed.RecurrenceInterval,
-            Tags = new ObservableCollection<string>(completed.Tags)
-        };
-        AllTasks.Add(next);
-        AttachTask(next);
-        return next;
-    }
-
-    // ROADMAP.md #31: advancing straight from a stale DueDate meant completing a long-overdue
-    // recurring task (e.g. a daily task overdue by 2 weeks) spawned a next occurrence that was
-    // still overdue, rather than one due tomorrow. Clamp the anchor date to today when the task
-    // was already overdue, but keep its time-of-day (e.g. a "@5pm" reminder stays at 5pm) - only
-    // the date component was stale, not the time. Mirrors docs/js/model.js's recurrenceAnchor
-    // exactly.
-    internal static DateTime RecurrenceAnchor(DateTime? dueDate)
-    {
-        var anchor = dueDate ?? DateTime.Today;
-        return anchor.Date < DateTime.Today ? DateTime.Today.Add(anchor.TimeOfDay) : anchor;
-    }
-
-    // Determines which file to open on startup: the last file the user had open, otherwise the
-    // default Documents location (a missing file there just means a fresh, blank AppState - see
-    // TodoStore.Load). The one-time migration off the old fixed AppData location happened long
-    // enough ago in this app's life that keeping it live was actively harmful: it meant a
-    // deliberately-deleted default file would silently come back populated with whatever stale
-    // data happened to still be sitting in that old AppData location, instead of actually
-    // starting fresh.
-    private string ResolveInitialFilePath()
-    {
-        if (_settings.LastFilePath is { } last && File.Exists(last))
-            return last;
-
-        return TodoStore.GetDefaultDataFilePath();
-    }
-
-    private void LoadFile(string path, bool restoreSelection = false)
-    {
-        AppLogger.Info("MainViewModel", $"LoadFile: Loading file '{path}' (restoreSelection={restoreSelection})");
-        FlushPendingSave();
-
-        foreach (var task in AllTasks)
-            DetachTask(task);
-        AllTasks.Clear();
-        _undoStack.Clear();
-        _reminders.ClearNotified();
-        OnPropertyChanged(nameof(UndoMenuLabel));
-
-        _currentFilePath = path;
-        MediaPathResolver.SetDataFilePath(path);
-
-        // _state is never reassigned (see its declaration) - AllTasks and FilteredTasksView both
-        // wrap _state.Tasks by reference, so opening a different file means repopulating that
-        // same collection in place from a freshly-loaded AppState, not swapping _state itself out
-        // for a new one (which would leave FilteredTasksView pointed at the old, now-orphaned
-        // collection).
-        //
-        // Deliberately still the blocking Load(), not LoadAsync (ROADMAP.md #124's other call
-        // sites - SaveFileAsCommand, CreateNewLocalFileForSync, ImportBackupCommand - now await the
-        // async path). LoadFile itself is called from six places including the constructor's
-        // synchronous startup path (line ~502), which can't await without either going fully
-        // fire-and-forget there (a visible empty-window flash on launch) or a larger restructure -
-        // same "high-blast-radius, left for a dedicated pass" call the #15 FileSessionManager
-        // extraction made about this exact method.
-        var loaded = _store.Load(path);
-        foreach (var task in loaded.Tasks)
-        {
-            AllTasks.Add(task);
-            AttachTask(task);
-        }
-
-        // DeletedTasks isn't bound to any UI collection (unlike Tasks/AllTasks), so a plain
-        // reassignment is safe here - but it still has to happen, or a tombstone written to disk
-        // by a previous session stays invisible to Google Drive's merge (which only ever
-        // consults the in-memory _state.DeletedTasks), letting a deleted task get silently
-        // resurrected on the next sync.
-        _state.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(loaded.DeletedTasks);
-
-        // Same reasoning for saved Views: without this they vanish from the sidebar on every
-        // launch, the next save writes the empty in-memory list over what's on disk, and opening a
-        // different file carries the previous file's views into it.
-        _state.SavedViews = loaded.SavedViews ?? new();
-        _state.DeletedSavedViewIds = loaded.DeletedSavedViewIds ?? new();
-
-        AppLogger.Info("MainViewModel", $"LoadFile: Loaded {loaded.Tasks.Count} tasks into AllTasks");
-        _state.TasksOrderModifiedAt = loaded.TasksOrderModifiedAt;
-        // Pre-SortOrder data (and files written by a Tasky Web build older than the one that learned
-        // to stamp SortOrder) arrive all-zero - lay down a sequential order so a first drag has
-        // something to move within. Deliberately does NOT stamp TasksOrderModifiedAt: this is a
-        // local backfill of an arbitrary order, not a user's arrangement, and letting it win a merge
-        // would overwrite a real ordering made on another device.
-        if (AllTasks.Count > 0 && AllTasks.All(t => t.SortOrder == 0))
-        {
-            for (int i = 0; i < AllTasks.Count; i++)
-            {
-                AllTasks[i].SortOrder = i;
-            }
-        }
-
-        SelectedTask = null;
-        SelectedSidebarItem = _allItem;
-        AutoEmptyTrashIfNeeded();
-        RefreshTags();
-        RefreshViews();
-        FilteredTasksView.Refresh();
-        OnPropertyChanged(nameof(WindowTitle));
-
-        _settings.LastFilePath = path;
-        _settingsStore.Save(_settings);
-
-        if (restoreSelection && _settings.LastSelectedTaskId is { } lastId && Guid.TryParse(lastId, out var guid))
-        {
-            var match = AllTasks.FirstOrDefault(t => t.Id == guid);
-            if (match is not null) SelectedTask = match;
-        }
-    }
-
-    // Shared by RestoreBackupCommand and ImportBackupCommand, called right after LoadFile reloads
-    // a backup's tasks - they carry whatever ModifiedAt they had at backup time, almost always
-    // older than what's since accumulated on remote. Left alone, the very next Drive sync's
-    // last-write-wins merge (MergeRemoteState) would treat the restored copy as the stale side
-    // and silently overwrite it right back with the pre-restore remote state, defeating the
-    // restore the user just confirmed. Each task gets a distinct tick offset off the same restore
-    // moment rather than one identical DateTime.Now for all of them, so "sort by Modified" doesn't
-    // collapse into an arbitrary tie for every task until each is edited again.
-    //
-    // Known, deliberate tradeoff: this also makes a restored task win against a remote TOMBSTONE,
-    // not just a remote edit - MergeRemoteState's local-only-task removal only fires when
-    // localTask.ModifiedAt <= the tombstone's deletedAt, which can never be true once ModifiedAt
-    // is bumped to "now". So if a task was deleted on another device sometime after this backup's
-    // snapshot was taken but before this restore, restoring will resurrect it on the next sync.
-    // Fixing that properly means teaching MergeRemoteState to tell "beat a stale edit" apart from
-    // "beat a newer deletion" for a restored task - real surgery on the shared merge algorithm for
-    // a narrow edge case (needs both an old backup restore AND a genuine cross-device delete of
-    // that exact task in the gap between snapshot and restore). Left as-is on purpose rather than
-    // risking that code for this. Don't "fix" this reactively without re-reading this comment.
-    private void MarkAllTasksRestoredAndSave()
-    {
-        var restoredAt = DateTime.UtcNow;
-        var offset = 0;
-        foreach (var task in AllTasks)
-            task.ModifiedAt = restoredAt.AddTicks(offset++);
-        RequestDebouncedSave();
     }
 
     private bool FilterTask(object o)
@@ -2425,39 +1282,6 @@ public class MainViewModel : INotifyPropertyChanged
         RequestDebouncedSave();
     }
 
-    private void RequestDebouncedSave()
-    {
-        SaveStatusText = "Saving…";
-        _saveDebounceTimer.Stop();
-        _saveDebounceTimer.Start();
-    }
-
-    private void CommitSave()
-    {
-        _saveDebounceTimer.Stop();
-        OnTaskChanged();
-    }
-
-    // Call before anything that would otherwise lose the last few seconds of debounced typing:
-    // switching tasks, switching files, or closing the app. This only guarantees the pending edit
-    // has been HANDED OFF to a save (in-memory state is already current the instant CommitSave
-    // runs) - it does not wait for that save to land on disk. That's fine for callers that only
-    // care about in-memory state (e.g. switching the selected task); callers that need the disk
-    // write itself to have finished (restoring a backup, closing the app) should use
-    // FlushPendingSaveAsync instead.
-    public void FlushPendingSave()
-    {
-        if (_saveDebounceTimer.IsEnabled)
-            CommitSave();
-    }
-
-    public async Task FlushPendingSaveAsync()
-    {
-        if (_saveDebounceTimer.IsEnabled)
-            CommitSave();
-        await _pendingSaveTask;
-    }
-
     public void UpdateTrayStatus()
     {
         var open = AllTasks.Count(t => !t.IsDone && !t.IsClosed);
@@ -2488,6 +1312,7 @@ public class MainViewModel : INotifyPropertyChanged
         }));
         FilteredTasksView.Refresh();
         UpdateTrayStatus();
+        _reminders.Reschedule();
     }
 
     // Diffs TagItems in place instead of Clear()-then-rebuild. Clear() raises a Reset
@@ -2631,52 +1456,6 @@ public class MainViewModel : INotifyPropertyChanged
 
     public IEnumerable<string> GetAllTagNames()
         => AllTasks.SelectMany(t => t.Tags).Distinct(StringComparer.OrdinalIgnoreCase);
-
-    // The hot path: nearly every task edit (typing, checking a box, trashing, tagging...) routes
-    // through here via OnTaskChanged. Runs off the UI thread instead of blocking on disk IO -
-    // _pendingSaveTask is tracked so FlushPendingSaveAsync (restoring a backup, closing the app)
-    // can still wait for a real completion when it actually matters.
-    private void Save()
-    {
-        SaveStatusText = "Saving…";
-        var generation = ++_saveGeneration;
-        _pendingSaveTask = SaveAndReportAsync(generation);
-    }
-
-    // generation guards against two problems that come from Save() firing from multiple
-    // overlapping call sites (the debounce timer AND every immediate property change): an older,
-    // slower save finishing after a newer one started must not stamp "Saved" over a still-pending
-    // edit's "Saving…" - and a failure must actually surface instead of leaving the status stuck
-    // on "Saving…" forever with the edit silently unwritten.
-    private async Task SaveAndReportAsync(int generation)
-    {
-        try
-        {
-            await _store.SaveAsync(_state, _currentFilePath);
-            if (generation == _saveGeneration)
-                SaveStatusText = "Saved";
-
-            ScheduleGoogleDriveAutoSync();
-        }
-        catch (Exception ex)
-        {
-            App.LogException(ex);
-            if (generation == _saveGeneration)
-                SaveStatusText = "Save failed - will retry on next edit";
-        }
-    }
-
-    private void ScheduleGoogleDriveAutoSync()
-    {
-        if (_settings.IsGoogleDriveEnabled && _googleDrive.IsAuthenticated)
-        {
-            Application.Current?.Dispatcher.Invoke(() =>
-            {
-                _autoSyncTimer.Stop();
-                _autoSyncTimer.Start();
-            });
-        }
-    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

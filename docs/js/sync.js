@@ -1,8 +1,8 @@
-﻿// Port of MainViewModel.cs's per-task 3-way merge (MergeRemoteState / ApplyTaskFields /
+// Port of MainViewModel.cs's per-task 3-way merge (MergeRemoteState / ApplyTaskFields /
 // DeduplicateTombstones), kept behaviorally identical so a file synced by the web app merges the
 // same way a desktop client merging that same file would. See the C# comments for the full
 // rationale; kept brief here to avoid drifting out of sync with the original as comments.
-import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=36';
+import { parseDotNetDate, newGuid, nowDotNet } from './model.js?v=37';
 
 // ROADMAP.md #140: DeletedTasks used to grow unbounded on both platforms - every permanent delete
 // added a record that got merged and re-uploaded forever. Tombstones older than RETENTION_MS are
@@ -55,6 +55,8 @@ function applyTaskFields(target, source) {
   target.DueDate = source.DueDate;
   target.Recurrence = source.Recurrence;
   target.RecurrenceInterval = source.RecurrenceInterval ?? 1;
+  if (source.RecurrenceAnchorDay == null) delete target.RecurrenceAnchorDay;
+  else target.RecurrenceAnchorDay = source.RecurrenceAnchorDay;
   target.Priority = source.Priority;
   // A remote task missing Tags/Body entirely (an old pre-migration desktop file, or a
   // hand-edited/partially-written one) used to throw here, mid-merge, after some other tasks in
@@ -132,8 +134,20 @@ export function mergeRemoteState(localState, remoteState, lastSyncTime = null) {
   for (const [id, remoteTask] of remoteById) {
     const localTask = localById.get(id);
     if (!localTask) continue;
-    if (parseDotNetDate(remoteTask.ModifiedAt) <= parseDotNetDate(localTask.ModifiedAt)) continue;
-    if (lastSyncTime && parseDotNetDate(localTask.ModifiedAt) > lastSyncTime) {
+    const remoteModified = parseDotNetDate(remoteTask.ModifiedAt);
+    const localModified = parseDotNetDate(localTask.ModifiedAt);
+    if (remoteModified.getTime() === localModified.getTime()) continue;
+    if (remoteModified < localModified) {
+      // Local wins and simply uploads - unless remote ALSO changed since the last sync, in which
+      // case that upload is about to erase another device's edit. Mirrors the same branch in
+      // TaskSyncMerge.ComputeMergePlan; not counted in updated/updatedIds (local is unchanged).
+      if (lastSyncTime && remoteModified > lastSyncTime) {
+        newConflictedCopies.push(createConflictedCopy(remoteTask));
+        conflicted++;
+      }
+      continue;
+    }
+    if (lastSyncTime && localModified > lastSyncTime) {
       newConflictedCopies.push(createConflictedCopy(localTask));
       conflicted++;
     }

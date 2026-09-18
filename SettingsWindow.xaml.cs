@@ -20,6 +20,22 @@ public partial class SettingsWindow : Window
     private static readonly Regex DigitsOnly = new(@"^\d+$", RegexOptions.Compiled);
     private readonly MainViewModel _viewModel;
 
+    // The shortcut box captures a key COMBINATION rather than taking typed text - the keys being
+    // pressed are the value. Esc/Tab are left alone so the box can still be escaped from and
+    // tabbed past; a combination HotkeyGesture rejects (no Ctrl/Alt/Win) is just ignored.
+    private void QuickAddHotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.Escape or Key.Tab || HotkeyGesture.IsModifierKey(key)) return;
+
+        e.Handled = true;
+        var gesture = new HotkeyGesture(Keyboard.Modifiers, key);
+        if (gesture.IsValid) _viewModel.QuickAddHotkey = gesture.ToString();
+    }
+
+    private void ResetQuickAddHotkey_Click(object sender, RoutedEventArgs e)
+        => _viewModel.QuickAddHotkey = HotkeyGesture.Default;
+
     public SettingsWindow(MainViewModel viewModel, GoogleDriveSettingsControl driveControl, SettingsSection initialSection)
     {
         InitializeComponent();

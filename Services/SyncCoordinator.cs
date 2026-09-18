@@ -61,9 +61,23 @@ public class SyncCoordinator
         Action<string> reportStatus,
         Action promptForAuthentication,
         bool isSilentOnExit = false,
-        Action<int>? reportProgress = null)
+        Action<int>? reportProgress = null,
+        Func<bool>? isFileSessionCurrent = null)
     {
         void Progress(int percent) => reportProgress?.Invoke(percent);
+
+        // `state` is MainViewModel's one long-lived AppState, repopulated IN PLACE when a different
+        // file is opened - so if the user opens file B while this pass is awaiting the network for
+        // file A, every later use of `state` here would be B's tasks: A's remote content merged
+        // into B, then saved to A's path and uploaded as A. Checked after each await that precedes
+        // a read of `state`; a stale pass just stops (the newly opened file syncs on its own next
+        // trigger). Optional so tests and any caller without a file-switching UI can omit it.
+        bool AbandonIfFileChanged()
+        {
+            if (isFileSessionCurrent is null || isFileSessionCurrent()) return false;
+            AppLogger.Info("SyncCoordinator", $"A different file was opened mid-sync - abandoning this pass for '{currentFilePath}'.");
+            return true;
+        }
 
         if (!_googleDrive.IsAuthenticated)
         {
@@ -90,9 +104,20 @@ public class SyncCoordinator
 
             Progress(0);
             reportStatus("Syncing with Google Drive...");
+
+            // The moment the state that gets uploaded was captured - the last instant at which
+            // "local" and "what this pass puts on Drive" are known to agree. ComputeMergePlan uses
+            // it to decide whether LOCAL changed since the two sides last agreed.
+            // LastGoogleDriveSyncTime alone (stamped when the pass ENDS) got that wrong for any edit
+            // made while a pass was running: not part of the upload, yet dated before the stamp, so
+            // a later remote-wins merge saw it as "unchanged since last sync" and overwrote it with
+            // no conflicted copy. Starts here (before the flush) and is moved up to each post-merge
+            // save below, which is where the uploaded snapshot is really taken.
+            var localBaselineUtc = DateTime.UtcNow;
             await flushPendingSaveAsync();
             Progress(10);
             var conflictedThisSync = 0;
+            var mergedWithRemote = false;
 
             // Cache the remote file ID per local filename, not globally - a device can have more
             // than one .tasky file open over its lifetime (New/Open/Save As), and each one syncs
@@ -141,6 +166,7 @@ public class SyncCoordinator
             // real edit triggers a save - flushPendingSaveAsync only flushes an edit that's
             // already pending, so it's a no-op here and UploadFileAsync would otherwise throw
             // FileNotFoundException trying to read a file that only ever existed in memory.
+            if (AbandonIfFileChanged()) return;
             if (!File.Exists(currentFilePath))
                 await _store.SaveAsync(state, currentFilePath);
 
@@ -162,25 +188,39 @@ public class SyncCoordinator
                 var tempPath = Path.Combine(Path.GetTempPath(), $"tasky_remote_{Guid.NewGuid():N}.tasky");
                 try
                 {
-                    await _googleDrive.DownloadFileAsync(remoteId, tempPath, downloadAttachments: false);
-                    var remoteState = await _store.LoadAsync(tempPath);
-                    remoteState.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(remoteState.DeletedTasks);
-                    var (added, updated, removed, conflicted) = applyMergePlan(remoteState);
-                    conflictedThisSync = conflicted;
-                    AppLogger.Info("SyncCoordinator", $"Google Drive merge: +{added} task(s), ~{updated} updated, -{removed} removed" +
-                        (conflicted > 0 ? $", {conflicted} conflicted cop{(conflicted == 1 ? "y" : "ies")} kept." : "."));
+                    // Drive has no conditional ("If-Match") upload, so download -> merge -> upload
+                    // is a read-modify-write with nothing stopping another device uploading in the
+                    // middle - its edits would then be overwritten by our upload without ever
+                    // having been merged. Re-reading the head revision right before uploading and
+                    // merging again if it moved shrinks that window from "the whole pass" to the
+                    // moment between this check and the upload itself. Bounded, so two devices
+                    // syncing in lockstep can't keep each other looping.
+                    const int maxMergeRounds = 3;
+                    for (var round = 1; round <= maxMergeRounds; round++)
+                    {
+                        var revisionAtDownload = await _googleDrive.GetHeadRevisionIdAsync(remoteId);
+                        await _googleDrive.DownloadFileAsync(remoteId, tempPath, downloadAttachments: false);
+                        var remoteState = await _store.LoadAsync(tempPath);
+                        remoteState.DeletedTasks = TaskSyncMerge.DeduplicateTombstones(remoteState.DeletedTasks);
+                        if (AbandonIfFileChanged()) return;
+                        var (added, updated, removed, conflicted) = applyMergePlan(remoteState);
+                        conflictedThisSync += conflicted;
+                        AppLogger.Info("SyncCoordinator", $"Google Drive merge: +{added} task(s), ~{updated} updated, -{removed} removed" +
+                            (conflicted > 0 ? $", {conflicted} conflicted cop{(conflicted == 1 ? "y" : "ies")} kept." : "."));
 
-                    Progress(55);
-                    await _store.SaveAsync(state, currentFilePath);
-                    Progress(65);
+                        Progress(55);
+                        // SaveAsync snapshots `state` synchronously as it's called - this is the
+                        // exact content the upload below carries.
+                        localBaselineUtc = DateTime.UtcNow;
+                        await _store.SaveAsync(state, currentFilePath);
+                        Progress(65);
 
-                    // The merge above just pulled in any new/updated Body blocks by JSON alone -
-                    // a photo or file added elsewhere (Tasky Web included) has its FileName
-                    // reference now, but not yet the actual bytes. Cheap to call every sync (see
-                    // SyncAttachmentsDownAsync's own doc comment), so no need to gate this on
-                    // whether the merge actually added anything.
-                    await _googleDrive.SyncAttachmentsDownAsync(currentFilePath, _settings, _settingsStore);
-                    Progress(80);
+                        var revisionNow = await _googleDrive.GetHeadRevisionIdAsync(remoteId);
+                        if (revisionNow == revisionAtDownload) break;
+                        AppLogger.Info("SyncCoordinator", $"Remote file changed during the merge (round {round}/{maxMergeRounds}) - merging the newer copy before uploading.");
+                        if (AbandonIfFileChanged()) return;
+                    }
+                    mergedWithRemote = true;
                 }
                 catch (InvalidDataException ex)
                 {
@@ -211,9 +251,20 @@ public class SyncCoordinator
 
             // Upload the merged (or, on a first-ever sync anywhere, simply local) result.
             var newRemoteId = await _googleDrive.UploadFileAsync(currentFilePath, remoteId, _settings, _settingsStore);
+            Progress(85);
+
+            // The merge pulled in any new/updated Body blocks by JSON alone - a photo or file added
+            // elsewhere (Tasky Web included) has its FileName reference now, but not yet the actual
+            // bytes. Deliberately AFTER the upload: this can take minutes for large attachments,
+            // and sitting between the download and the upload (where it used to be) it was by far
+            // the widest part of the lost-update window described above. Cheap when nothing's new
+            // (see SyncAttachmentsDownAsync), so not gated on what the merge actually added.
+            if (mergedWithRemote)
+                await _googleDrive.SyncAttachmentsDownAsync(currentFilePath, _settings, _settingsStore);
             Progress(95);
             _settings.GoogleDriveFileIdsByFile[fileKey] = newRemoteId;
             _settings.LastGoogleDriveSyncTime = DateTime.Now;
+            _settings.LastGoogleDriveSyncLocalBaselineUtc = localBaselineUtc;
             _settingsStore.Save(_settings);
             Progress(100);
 

@@ -32,22 +32,34 @@ public static class TaskSyncMerge
     // device that's simply behind doesn't resurrect it) - and a task edited on only one side since
     // they last agreed is always safe to adopt. The one thing this still can't fully reconcile is
     // the same task edited on both sides in the same window - that's genuine field-level merging
-    // (CRDT territory), out of scope here, so remote's edit still wins the original task ID, but
-    // (unlike before - see ROADMAP.md #119) local's about-to-be-overwritten edit is kept too, as a
-    // separate "(conflicted copy)" task, via ConflictedCopiesToAdd - nothing just vanishes.
+    // (CRDT territory), out of scope here, so the NEWER edit wins the original task ID, but
+    // (unlike before - see ROADMAP.md #119) the losing edit is kept too, as a separate
+    // "(conflicted copy)" task, via ConflictedCopiesToAdd - nothing just vanishes. That holds in
+    // BOTH directions: it used to cover only "remote is newer, local also changed", so when local
+    // was the newer of two competing edits, remote's edit was overwritten by the next upload with
+    // no copy and no trace.
     //
     // lastSyncTime (device-local, converted to UTC by the caller - see MainViewModel) is what
     // distinguishes a genuine conflict from an ordinary stale-device update: if local hasn't
     // touched a task since the two sides last agreed, remote's newer edit is just new information,
     // not a competing edit. Null (never synced before) means there's no baseline to compare
     // against, so nothing this call sees can count as a conflict yet.
+    //
+    // Two baselines, because "changed since we last agreed" has a different cutoff per side.
+    // lastSyncTimeUtc is when the last pass FINISHED - the right cutoff for REMOTE: everything
+    // this device itself uploaded is dated before it, so its own upload can never look like
+    // someone else's competing edit. localChangedSinceUtc is when that pass captured what it
+    // uploaded - the right cutoff for LOCAL: an edit made while the upload was still running
+    // wasn't part of it, so it must still count as changed. Defaults to lastSyncTimeUtc.
     public static TaskMergePlan ComputeMergePlan(
         IEnumerable<TaskItem> localTasks,
         IEnumerable<TaskItem> remoteTasks,
         IEnumerable<TaskSyncRecord> localTombstones,
         IEnumerable<TaskSyncRecord> remoteTombstones,
-        DateTime? lastSyncTimeUtc = null)
+        DateTime? lastSyncTimeUtc = null,
+        DateTime? localChangedSinceUtc = null)
     {
+        localChangedSinceUtc ??= lastSyncTimeUtc;
         var localById = localTasks.ToDictionary(t => t.Id);
         var remoteById = remoteTasks.ToDictionary(t => t.Id);
         var localTombstonesById = localTombstones.ToDictionary(r => r.TaskId, r => r.Timestamp);
@@ -86,9 +98,19 @@ public static class TaskSyncMerge
         foreach (var (id, remoteTask) in remoteById)
         {
             if (!localById.TryGetValue(id, out var localTask)) continue;
-            if (remoteTask.ModifiedAt <= localTask.ModifiedAt) continue;
+            if (remoteTask.ModifiedAt == localTask.ModifiedAt) continue;
 
-            if (lastSyncTimeUtc.HasValue && localTask.ModifiedAt > lastSyncTimeUtc.Value)
+            if (remoteTask.ModifiedAt < localTask.ModifiedAt)
+            {
+                // Local wins and simply uploads - unless remote ALSO changed since the last sync,
+                // in which case that upload is about to erase another device's edit. No toUpdate
+                // entry: local's fields already are the winner's.
+                if (lastSyncTimeUtc.HasValue && remoteTask.ModifiedAt > lastSyncTimeUtc.Value)
+                    conflictedCopies.Add(CreateConflictedCopy(remoteTask));
+                continue;
+            }
+
+            if (localChangedSinceUtc.HasValue && localTask.ModifiedAt > localChangedSinceUtc.Value)
                 conflictedCopies.Add(CreateConflictedCopy(localTask));
 
             toUpdate.Add((localTask, remoteTask));
@@ -134,6 +156,7 @@ public static class TaskSyncMerge
         target.DueDate = source.DueDate;
         target.Recurrence = source.Recurrence;
         target.RecurrenceInterval = source.RecurrenceInterval;
+        target.RecurrenceAnchorDay = source.RecurrenceAnchorDay;
         target.Priority = source.Priority;
 
         target.Tags.Clear();

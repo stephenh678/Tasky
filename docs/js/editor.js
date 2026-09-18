@@ -15,11 +15,11 @@ import {
   extractInlineFileNames,
   xamlToHtml,
   htmlToXaml,
-} from './model.js?v=36';
-import { icon } from './icons.js?v=36';
-import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=36';
-import { storage } from './storage.js?v=36';
-import { openDialog, trapFocus } from './dialog.js?v=36';
+} from './model.js?v=37';
+import { icon } from './icons.js?v=37';
+import { downloadAttachmentBlob, uploadAttachmentBlob, deleteAttachmentBlob } from './drive.js?v=37';
+import { storage } from './storage.js?v=37';
+import { openDialog, trapFocus } from './dialog.js?v=37';
 
 // Touch devices get the Web Share sheet for files (an <a download> is unreliable inside an iOS
 // standalone PWA) and a "Take Photo" entry; mouse-and-keyboard browsers keep plain downloads.

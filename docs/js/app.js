@@ -1,5 +1,5 @@
-﻿import * as auth from './auth.js?v=36';
-import * as drive from './drive.js?v=36';
+﻿import * as auth from './auth.js?v=37';
+import * as drive from './drive.js?v=37';
 import {
   NoteBlockType,
   RecurrenceRule,
@@ -29,14 +29,14 @@ import {
   AGENDA_GROUP_LABELS,
   isReminderDue,
   taskToICalendar,
-} from './model.js?v=36';
-import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=36';
-import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=36';
-import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=36';
-import { icon } from './icons.js?v=36';
-import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=36';
-import { storage } from './storage.js?v=36';
-import { openDialog, trapFocus } from './dialog.js?v=36';
+} from './model.js?v=37';
+import { deduplicateTombstones, mergeRemoteState, mergeSavedViews, reconcileLocalSnapshot } from './sync.js?v=37';
+import { readSnapshot, writeSnapshot, clearSnapshot, GUEST_SNAPSHOT_KEY } from './snapshot.js?v=37';
+import { renderEditableBody, waitForPendingUploads, deleteAttachmentFiles, handlePhotoPick, handleFilePick } from './editor.js?v=37';
+import { icon } from './icons.js?v=37';
+import { DEFAULT_DATA_FILE_NAME, DESKTOP_VERSION } from './config.js?v=37';
+import { storage } from './storage.js?v=37';
+import { openDialog, trapFocus } from './dialog.js?v=37';
 
 const el = (id) => document.getElementById(id);
 const signinScreen = el('signin-screen');

@@ -24,9 +24,8 @@ public static class AppLogger
     {
         try
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Tasky");
-            Directory.CreateDirectory(dir);
-            _logFilePath = Path.Combine(dir, "debug.log");
+            Directory.CreateDirectory(TaskyPaths.DocumentsRoot);
+            _logFilePath = TaskyPaths.DebugLogFilePath;
         }
         catch
         {
@@ -98,7 +97,7 @@ public static class AppLogger
 
     private static void Log(string level, string category, string message)
     {
-        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{level}] [{category,-16}] {message}";
+        var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] [{category,-16}] {message}";
         System.Diagnostics.Debug.WriteLine(line);
         Trace.WriteLine(line);
         WriteRaw(line + Environment.NewLine);

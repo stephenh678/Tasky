@@ -472,7 +472,7 @@ public class EnhancedFeaturesTests
     [Fact]
     public void MainViewModel_ReorderTask_MovesTaskAndSetsSortOrder()
     {
-        var vm = new MainViewModel();
+        var vm = TestViewModels.Create(TestViewModels.NewDirectory());
         vm.AllTasks.Clear();
 
         var taskA = new TaskItem { Text = "A", SortOrder = 0 };
@@ -509,7 +509,7 @@ public class EnhancedFeaturesTests
     [Fact]
     public void MainViewModel_ReorderTask_AutoPinsAndUnpinsAcrossBoundary()
     {
-        var vm = new MainViewModel();
+        var vm = TestViewModels.Create(TestViewModels.NewDirectory());
         vm.AllTasks.Clear();
 
         var pinned = new TaskItem { Text = "Pinned", IsPinned = true, SortOrder = 0 };

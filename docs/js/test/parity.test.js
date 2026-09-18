@@ -26,6 +26,8 @@ import {
   nextDueDate,
   recurrenceAnchor,
   spawnNextOccurrence,
+  effectiveAnchorDay,
+  TaskPriority,
   RecurrenceRule,
   NoteBlockType,
   newNoteBlock,
@@ -288,6 +290,36 @@ describe('mergeRemoteState', () => {
     const copy = local.Tasks.find((t) => t.Id !== 'id-1');
     assert.ok(copy, 'conflicted copy should have a distinct Id');
     assert.equal(copy.Text, 'local edit (conflicted copy)');
+  });
+
+  // The mirror case, which used to lose data silently: local is the NEWER of two competing
+  // edits, so it wins and uploads - straight over an edit another device made since the last sync.
+  // Matches SyncConflictSymmetryTests.LocalNewer_AndRemoteAlsoChangedSinceLastSync_* in C#.
+  test('local newer but remote also edited since last sync: remote edit kept as a conflicted copy', () => {
+    const lastSync = new Date(2026, 2, 1);
+    const localTask = taskWithId('id-1', formatDotNetDate(new Date(2026, 2, 1, 2)), 'local edit');
+    const remoteTask = taskWithId('id-1', formatDotNetDate(new Date(2026, 2, 1, 1)), 'remote edit');
+    const local = { Tasks: [localTask], DeletedTasks: [] };
+
+    const result = mergeRemoteState(local, { Tasks: [remoteTask], DeletedTasks: [] }, lastSync);
+
+    assert.equal(result.updated, 0); // local keeps the original task ID, untouched
+    assert.deepEqual(result.updatedIds, []);
+    assert.equal(result.conflicted, 1);
+    assert.equal(local.Tasks.find((t) => t.Id === 'id-1').Text, 'local edit');
+    assert.equal(local.Tasks.find((t) => t.Id !== 'id-1').Text, 'remote edit (conflicted copy)');
+  });
+
+  test('local newer and remote unchanged since last sync: ordinary upload, no copy', () => {
+    const lastSync = new Date(2026, 2, 1);
+    const localTask = taskWithId('id-1', formatDotNetDate(new Date(2026, 2, 1, 2)), 'local edit');
+    const remoteTask = taskWithId('id-1', formatDotNetDate(new Date(2026, 1, 28)), 'stale remote');
+    const local = { Tasks: [localTask], DeletedTasks: [] };
+
+    const result = mergeRemoteState(local, { Tasks: [remoteTask], DeletedTasks: [] }, lastSync);
+
+    assert.equal(result.conflicted, 0);
+    assert.equal(local.Tasks.length, 1);
   });
 
   test('local unchanged since last sync: no conflicted copy', () => {
@@ -1354,5 +1386,61 @@ describe('taskToICalendar', () => {
   });
   test('no due date, no event', () => {
     assert.equal(taskToICalendar(newTaskItem({ text: 'x' }), stamp), null);
+  });
+});
+
+// --- Month-day anchoring (mirrors RecurrenceAnchorDayTests in AssessmentFixesTests.cs) ---------
+
+describe('nextDueDate with an anchor day', () => {
+  test('monthly on the 31st returns to the 31st after a short month', () => {
+    const feb = nextDueDate(new Date(2026, 0, 31, 17, 0), RecurrenceRule.Monthly, 1, 31);
+    const mar = nextDueDate(feb, RecurrenceRule.Monthly, 1, 31);
+    const apr = nextDueDate(mar, RecurrenceRule.Monthly, 1, 31);
+    assert.deepEqual(feb, new Date(2026, 1, 28, 17, 0));
+    assert.deepEqual(mar, new Date(2026, 2, 31, 17, 0));
+    assert.deepEqual(apr, new Date(2026, 3, 30, 17, 0));
+  });
+
+  test('yearly on Feb 29 returns to the 29th in the next leap year', () => {
+    const d2029 = nextDueDate(new Date(2028, 1, 29), RecurrenceRule.Yearly, 1, 29);
+    assert.deepEqual(d2029, new Date(2029, 1, 28));
+    assert.deepEqual(nextDueDate(d2029, RecurrenceRule.Yearly, 3, 29), new Date(2032, 1, 29));
+  });
+
+  test('no anchor, or a non-month rule, behaves exactly as before', () => {
+    assert.deepEqual(nextDueDate(new Date(2026, 0, 31), RecurrenceRule.Monthly, 1), new Date(2026, 1, 28));
+    assert.deepEqual(nextDueDate(new Date(2026, 0, 1), RecurrenceRule.Weekly, 1, 31), new Date(2026, 0, 8));
+  });
+});
+
+describe('effectiveAnchorDay', () => {
+  test('trusts a stored anchor only while the due date still matches it', () => {
+    assert.equal(effectiveAnchorDay(formatDotNetDate(new Date(2026, 1, 28)), 31), 31); // clamped occurrence
+    assert.equal(effectiveAnchorDay(formatDotNetDate(new Date(2026, 2, 31)), 31), 31);
+    assert.equal(effectiveAnchorDay(formatDotNetDate(new Date(2026, 1, 10)), 31), 10); // user moved it
+    assert.equal(effectiveAnchorDay(formatDotNetDate(new Date(2026, 1, 15)), undefined), 15);
+    assert.equal(effectiveAnchorDay(null, 31), null);
+  });
+});
+
+describe('spawnNextOccurrence carries priority and the anchor day', () => {
+  test('monthly task on the 31st', () => {
+    const completed = newTaskItem({ text: 'Pay rent' });
+    completed.Recurrence = RecurrenceRule.Monthly;
+    completed.Priority = TaskPriority.High;
+    completed.DueDate = formatDotNetDate(new Date(new Date().getFullYear() + 1, 0, 31, 9, 0));
+
+    const next = spawnNextOccurrence(completed);
+
+    assert.equal(next.Priority, TaskPriority.High);
+    assert.equal(next.RecurrenceAnchorDay, 31);
+    assert.equal(parseDotNetDate(next.DueDate).getMonth(), 1);
+  });
+
+  test('a weekly task gets no anchor day at all', () => {
+    const completed = newTaskItem({ text: 'Standup' });
+    completed.Recurrence = RecurrenceRule.Weekly;
+    completed.DueDate = formatDotNetDate(new Date(new Date().getFullYear() + 1, 0, 5, 9, 0));
+    assert.equal('RecurrenceAnchorDay' in spawnNextOccurrence(completed), false);
   });
 });

@@ -52,74 +52,17 @@ public class TodoStore
     public int AutoBackupIntervalMinutes { get; set; } = 1440;
     public int AutoBackupRetentionDays { get; set; } = 30;
 
-    public static string GetDefaultDataFilePath()
-    {
-        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        return Path.Combine(documents, "Tasky", "Tasky.tasky");
-    }
+    public static string GetDefaultDataFilePath() => TaskyPaths.DefaultDataFilePath;
 
     /// <summary>
     /// Loads application state from the specified file path.
     /// </summary>
     /// <param name="path">The file path to load from</param>
     /// <returns>The loaded application state or a new AppState if file doesn't exist</returns>
-    public AppState Load(string path)
-    {
-        var state = File.Exists(path) ? ReadFromDisk(path) : new AppState();
-
-        var migrated = false;
-        foreach (var task in state.Tasks)
-            migrated |= MigrateToBody(task);
-
-        if (migrated)
-            Save(state, path);
-
-        return state;
-    }
-
-    // A locked/inaccessible file (most commonly OneDrive transiently locking the data file
-    // mid-sync, since the default path lives inside a synced Documents folder) is retried a few
-    // times rather than immediately falling back to a blank AppState the way a corrupt-JSON file
-    // does - unlike bad JSON, a transient lock is likely to clear on its own, and silently
-    // starting blank risks a later autosave overwriting the real, still-intact file with
-    // nothing. If it's still inaccessible after retries, the IOException/UnauthorizedAccessException
-    // is left to propagate - callers decide what "couldn't open the file at all" means for them.
-    private static AppState ReadFromDisk(string path)
-    {
-        const int maxAttempts = 3;
-        const int retryDelayMs = 300;
-        
-        AppLogger.Debug("TodoStore", $"ReadFromDisk: Reading '{path}' (File size: {new FileInfo(path).Length} bytes)");
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                var json = File.ReadAllText(path);
-                var state = JsonSerializer.Deserialize<AppState>(json) ?? new AppState();
-                AppLogger.Info("TodoStore", $"ReadFromDisk: Successfully parsed {state.Tasks.Count} tasks from '{path}'");
-                return state;
-            }
-            catch (JsonException ex)
-            {
-                AppLogger.Error("TodoStore", $"Corrupted JSON in '{path}'", ex);
-                throw new InvalidDataException("The task data file appears to be corrupted and cannot be loaded as valid JSON.", ex);
-            }
-            catch (IOException ex) when (attempt < maxAttempts)
-            {
-                AppLogger.Warn("TodoStore", $"Transient lock reading '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
-                Thread.Sleep(retryDelayMs);
-            }
-            catch (UnauthorizedAccessException ex) when (attempt < maxAttempts)
-            {
-                AppLogger.Warn("TodoStore", $"Access denied reading '{path}' (Attempt {attempt}/{maxAttempts}): {ex.Message}");
-                Thread.Sleep(retryDelayMs);
-            }
-        }
-
-        AppLogger.Error("TodoStore", $"Failed to access file '{path}' after {maxAttempts} attempts");
-        throw new IOException($"Could not access file '{path}' after {maxAttempts} attempts.");
-    }
+    // Blocks on LoadAsync via Task.Run for the same reason Save() below does (see its comment) -
+    // this used to be a second, hand-synchronised copy of LoadAsync + ReadFromDiskAsync, and the
+    // two had already started to drift (different logging, only one reporting the migration).
+    public AppState Load(string path) => Task.Run(() => LoadAsync(path)).GetAwaiter().GetResult();
 
     /// <summary>
     /// Asynchronously loads application state from the specified file path.
@@ -142,6 +85,13 @@ public class TodoStore
         return state;
     }
 
+    // A locked/inaccessible file (most commonly OneDrive transiently locking the data file
+    // mid-sync, since the default path lives inside a synced Documents folder) is retried a few
+    // times rather than immediately falling back to a blank AppState the way a corrupt-JSON file
+    // does - unlike bad JSON, a transient lock is likely to clear on its own, and silently
+    // starting blank risks a later autosave overwriting the real, still-intact file with
+    // nothing. If it's still inaccessible after retries, the IOException/UnauthorizedAccessException
+    // is left to propagate - callers decide what "couldn't open the file at all" means for them.
     private static async Task<AppState> ReadFromDiskAsync(string path)
     {
         const int maxAttempts = 3;
@@ -382,7 +332,26 @@ public class TodoStore
         // interval gate below would otherwise skip it.
         if (File.Exists(dataFilePath))
             BackupExistingFile(dataFilePath, force: true);
-        File.Copy(backupFilePath, dataFilePath, overwrite: true);
+
+        // Same temp-then-replace as SaveAsync, and for the same reason: File.Copy with overwrite
+        // truncates the destination first, so a crash, a full disk or a lock halfway through left
+        // the live data file half-written - during the one operation someone reaches for because
+        // something has already gone wrong.
+        var tempPath = dataFilePath + ".restore.tmp";
+        try
+        {
+            File.Copy(backupFilePath, tempPath, overwrite: true);
+            // File.Copy carries the backup's old timestamp over; the restored file is new as of now.
+            File.SetLastWriteTimeUtc(tempPath, DateTime.UtcNow);
+            if (File.Exists(dataFilePath))
+                File.Replace(tempPath, dataFilePath, null);
+            else
+                File.Move(tempPath, dataFilePath);
+        }
+        finally
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch (IOException) { }
+        }
     }
 
     // A generous ceiling independent of AutoBackupRetentionDays - age-based retention alone has no

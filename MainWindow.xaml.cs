@@ -21,11 +21,10 @@ namespace TodoApp;
 public partial class MainWindow : Window
 {
     private const int HotkeyId = 9000;
-    private const uint ModControl = 0x0002;
-    private const uint ModAlt = 0x0001;
     private const int WmHotkey = 0x0312;
+    private static readonly TimeSpan ExitSyncTimeout = TimeSpan.FromSeconds(20);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
     [DllImport("user32.dll")]
@@ -242,13 +241,39 @@ public partial class MainWindow : Window
                 App.LogException(ex);
             }
 
-            // 2. Force Google Drive sync on app exit if connected
+            // The flush above retries a failed save once more - if the latest edits STILL aren't on
+            // disk (file locked, folder gone, disk full), exiting now loses them for good. This
+            // used to sail straight through: the failure was swallowed inside the save task, so
+            // awaiting it looked like success. Give the user the choice instead.
+            if (_viewModel.LastSaveFailed)
+            {
+                var answer = ThemedMessageBox.Show(
+                    $"Tasky couldn't save your latest changes:\n{_viewModel.LastSaveError}\n\n" +
+                    "If you exit now, those changes will be lost. Exit anyway?",
+                    "Unsaved Changes", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes)
+                {
+                    _flushInProgress = false;
+                    _isExplicitExit = false;
+                    Show();
+                    Activate();
+                    return;
+                }
+            }
+
+            // 2. Force Google Drive sync on app exit if connected. Bounded: the window is already
+            // hidden, so an exit sync stuck on a dead connection (each Drive call can sit for its
+            // full 100-second HTTP timeout) left an invisible Tasky.exe holding the data file and
+            // the single-instance lock for minutes. Everything is already saved locally at this
+            // point - whatever didn't upload goes on the next launch's startup sync.
             try
             {
                 if (_viewModel.IsGoogleDriveConnected)
                 {
                     AppLogger.Info("MainWindow", "Forcing Google Drive sync on application shutdown...");
-                    await _viewModel.PerformGoogleDriveSyncAsync(isSilentOnExit: true);
+                    var exitSync = _viewModel.PerformGoogleDriveSyncAsync(isSilentOnExit: true);
+                    if (await Task.WhenAny(exitSync, Task.Delay(ExitSyncTimeout)) != exitSync)
+                        AppLogger.Warn("MainWindow", $"Exit sync didn't finish within {ExitSyncTimeout.TotalSeconds:0}s - exiting without it.");
                 }
             }
             catch (Exception ex)
@@ -308,13 +333,31 @@ public partial class MainWindow : Window
         base.OnSourceInitialized(e);
         _hwndSource = (HwndSource)PresentationSource.FromVisual(this)!;
         _hwndSource.AddHook(WndProc);
-        RegisterHotKey(_hwndSource.Handle, HotkeyId, ModControl | ModAlt, (uint)KeyInterop.VirtualKeyFromKey(Key.T));
+        RegisterQuickAddHotkey();
+        _viewModel.QuickAddHotkeyChanged += RegisterQuickAddHotkey;
+    }
+
+    // (Re)registers the global quick-add hotkey from Settings. The result used to be ignored: if
+    // another app already owned the combination, quick-add from anywhere silently never worked,
+    // with nothing in the log or the UI to explain why - and, the combination being hard-coded,
+    // no way to fix it. Now it says so, and Settings > General lets the user pick another.
+    private void RegisterQuickAddHotkey()
+    {
+        if (_hwndSource is null) return;
+        UnregisterHotKey(_hwndSource.Handle, HotkeyId);
+
+        var gesture = HotkeyGesture.ParseOrDefault(_viewModel.QuickAddHotkey);
+        if (RegisterHotKey(_hwndSource.Handle, HotkeyId, gesture.Win32Modifiers, gesture.VirtualKey)) return;
+
+        AppLogger.Warn("MainWindow", $"Couldn't register the {gesture} quick-add hotkey (Win32 error {Marshal.GetLastWin32Error()}) - another app is probably using it.");
+        _viewModel.ShowStatusMessage($"{gesture} is in use by another app - pick a different quick-add shortcut in Settings, or use the tray icon.");
     }
 
     protected override void OnClosed(EventArgs e)
     {
         if (_hwndSource is not null)
         {
+            _viewModel.QuickAddHotkeyChanged -= RegisterQuickAddHotkey;
             UnregisterHotKey(_hwndSource.Handle, HotkeyId);
             _hwndSource.RemoveHook(WndProc);
         }

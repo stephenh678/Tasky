@@ -90,6 +90,14 @@ Include:
 
 ## Performance & Testing
 
+- **Never let a test reach real user data.** Default paths come from `Services/TaskyPaths.cs`, and
+  `TodoApp.Tests/TestEnvironment.cs` redirects them to a temp folder for the whole test run. New
+  code that needs a per-user folder should go through `TaskyPaths` rather than calling
+  `Environment.GetFolderPath` itself, and tests that need a `MainViewModel` should use
+  `TestViewModels.Create(directory)` so they don't share a settings or data file with other tests.
+- Anything changed in `Services/TaskSyncMerge.cs`, `Services/QuickEntryParser.cs` or the recurrence
+  math has a twin in `docs/js/` - change both, and run `node --test docs/js/test/parity.test.js`.
+
 - Profile changes with large task counts (1000+)
 - Test with network drives (OneDrive, SharePoint)
 - Verify autosave doesn't block UI

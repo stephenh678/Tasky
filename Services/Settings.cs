@@ -24,6 +24,9 @@ public class Settings
     public double WindowHeight { get; set; } = 740;
     public bool WindowMaximized { get; set; }
     public bool CloseToTray { get; set; } = true;
+    // The global quick-add hotkey, as HotkeyGesture text. Configurable because a global hotkey
+    // can only belong to one app at a time - see MainWindow.RegisterQuickAddHotkey.
+    public string QuickAddHotkey { get; set; } = HotkeyGesture.Default;
     public bool HasSeenCloseToTrayNotice { get; set; } = false;
 
     // One-shot: shown to a copy of Tasky running outside the folder the installer registered.
@@ -61,6 +64,11 @@ public class Settings
     public string? GoogleDriveClientSecret { get; set; }
     public string? GoogleDriveClientSecretProtected { get; set; }
     public DateTime? LastGoogleDriveSyncTime { get; set; }
+    // When the content of the last successful upload was captured (UTC) - earlier than
+    // LastGoogleDriveSyncTime by however long the upload took. See SyncCoordinator.PerformSyncAsync
+    // and TaskSyncMerge.ComputeMergePlan's localChangedSinceUtc. Null on installs that last synced
+    // before this existed; the merge falls back to LastGoogleDriveSyncTime then.
+    public DateTime? LastGoogleDriveSyncLocalBaselineUtc { get; set; }
     // Superseded by LastSyncedMediaFilesByFile - every file's attachments used to be diffed
     // against this one shared list, so two different .tasky files' attachments could be
     // mistaken for each other's. Kept only for the one-time migration below.
